@@ -1,0 +1,17 @@
+export enum LeadStatus {
+  NEW = 'NEW',
+  QUALIFYING = 'QUALIFYING',
+  QUALIFIED = 'QUALIFIED',
+  NURTURING = 'NURTURING',
+  CONVERTED = 'CONVERTED',
+  LOST = 'LOST',
+}
+
+export enum InteractionType {
+  EMAIL = 'EMAIL',
+  CALL = 'CALL',
+  MEETING = 'MEETING',
+  MESSAGE = 'MESSAGE',
+  FORM_SUBMIT = 'FORM_SUBMIT',
+  PAGE_VIEW = 'PAGE_VIEW',
+}

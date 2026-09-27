@@ -1,9 +1,18 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { HealthModule } from './health/health.module';
+import { AppController } from './app.controller.js';
+import { AppService } from './app.service.js';
+import { HealthModule } from './health/health.module.js';
+import { UsersModule } from './modules/users/users.module.js';
+import { LeadsModule } from './modules/leads/leads.module.js';
+import { LeadIntelligenceModule } from './modules/lead-intelligence/lead-intelligence.module.js';
+import { FollowUpModule } from './modules/follow-up/follow-up.module.js';
+import { CustomersModule } from './modules/customers/customers.module.js';
+import { WorkflowModule } from './modules/workflow/workflow.module.js';
+import { ReviewModule } from './modules/review/review.module.js';
+import { NotificationsModule } from './modules/notifications/notifications.module.js';
+import { AuditModule } from './modules/audit/audit.module.js';
 
 @Module({
   imports: [
@@ -26,6 +35,15 @@ import { HealthModule } from './health/health.module';
       }),
     }),
     HealthModule,
+    UsersModule,
+    LeadsModule,
+    LeadIntelligenceModule,
+    FollowUpModule,
+    CustomersModule,
+    WorkflowModule,
+    ReviewModule,
+    NotificationsModule,
+    AuditModule,
   ],
   controllers: [AppController],
   providers: [AppService],
