@@ -1,0 +1,601 @@
+@startuml AI CRM Automation System - Class Diagram
+title AI CRM Automation System - Class Diagram
+
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+skinparam shadowing false
+
+' ============================================================
+' ENUMS
+' ============================================================
+
+enum UserRole {
+    ADMIN
+    SALES
+}
+
+enum UserStatus {
+    ACTIVE
+    INACTIVE
+    LOCKED
+}
+
+enum LeadStatus {
+    NEW
+    QUALIFYING
+    QUALIFIED
+    NURTURING
+    CONVERTED
+    LOST
+}
+
+enum QualificationStatus {
+    QUALIFIED
+    DISQUALIFIED
+    NEEDS_REVIEW
+}
+
+enum LeadIntent {
+    HIGH
+    MEDIUM
+    LOW
+    UNKNOWN
+}
+
+enum EnrichmentStatus {
+    PENDING
+    SUCCESS
+    FAILED
+    PARTIAL
+}
+
+enum ScoreLabel {
+    HOT
+    WARM
+    COLD
+}
+
+enum FollowUpSequenceStatus {
+    DRAFT
+    ACTIVE
+    PAUSED
+    COMPLETED
+    ARCHIVED
+}
+
+enum EnrollmentStatus {
+    ACTIVE
+    PAUSED
+    COMPLETED
+    CANCELLED
+}
+
+enum ExecutionStatus {
+    PENDING
+    RUNNING
+    SUCCESS
+    FAILED
+    SKIPPED
+}
+
+enum ReviewStatus {
+    PENDING
+    IN_REVIEW
+    RESOLVED
+}
+
+enum ReviewDecision {
+    APPROVE
+    REJECT
+}
+
+enum SegmentAssignmentType {
+    MANUAL
+    RULE
+    AI
+}
+
+enum WorkflowStatus {
+    PENDING
+    RUNNING
+    SUCCESS
+    FAILED
+    CANCELLED
+}
+
+' ============================================================
+' CORE DOMAIN
+' ============================================================
+
+package "Core Domain" {
+
+    class User {
+        - id : UUID
+        - name : String
+        - email : String
+        - passwordHash : String
+        - role : UserRole
+        - status : UserStatus
+        - lastLoginAt : DateTime
+        - createdAt : DateTime
+        - updatedAt : DateTime
+
+        + authenticate(password : String) : Boolean
+        + updateProfile() : void
+        + changeStatus(status : UserStatus) : void
+    }
+
+
+    class LeadSource {
+        - id : UUID
+        - name : String
+        - description : String
+        - isActive : Boolean
+        - createdAt : DateTime
+        - updatedAt : DateTime
+
+        + activate() : void
+        + deactivate() : void
+    }
+
+
+    class Lead {
+        - id : UUID
+        - firstName : String
+        - lastName : String
+        - email : String
+        - phone : String
+        - companyName : String
+        - companyWebsite : String
+        - jobTitle : String
+        - companySize : Integer
+        - industry : String
+        - status : LeadStatus
+        - notes : String
+        - createdAt : DateTime
+        - updatedAt : DateTime
+
+        + create() : void
+        + updateProfile() : void
+        + startQualification() : void
+        + addQualification() : void
+        + addScore() : void
+        + addInteraction() : void
+        + startFollowUp() : void
+        + convertToCustomer() : Customer
+        + markQualified() : void
+        + markLost() : void
+    }
+
+
+    class Interaction {
+        - id : UUID
+        - type : String
+        - channel : String
+        - subject : String
+        - content : String
+        - metadata : JSON
+        - occurredAt : DateTime
+        - createdAt : DateTime
+
+        + record() : void
+    }
+
+
+    class Customer {
+        - id : UUID
+        - name : String
+        - email : String
+        - phone : String
+        - companyName : String
+        - companyWebsite : String
+        - jobTitle : String
+        - companySize : Integer
+        - industry : String
+        - status : String
+        - notes : String
+        - createdAt : DateTime
+        - updatedAt : DateTime
+
+        + createFromLead(lead : Lead) : Customer
+        + updateProfile() : void
+        + assignSegment(segment : Segment) : void
+        + removeSegment(segment : Segment) : void
+    }
+
+
+    class Segment {
+        - id : UUID
+        - name : String
+        - description : String
+        - criteria : JSON
+        - isActive : Boolean
+        - createdAt : DateTime
+        - updatedAt : DateTime
+
+        + evaluate(customer : Customer) : Boolean
+        + activate() : void
+        + deactivate() : void
+    }
+}
+
+' ============================================================
+' AI DOMAIN
+' ============================================================
+
+package "AI Domain" {
+
+    class LeadQualification {
+        - id : UUID
+        - requestId : UUID
+        - status : QualificationStatus
+        - intent : LeadIntent
+        - confidence : Decimal
+        - reason : String
+        - nextAction : String
+        - modelProvider : String
+        - modelName : String
+        - modelVersion : String
+        - inputSnapshot : JSON
+        - outputSnapshot : JSON
+        - createdAt : DateTime
+
+        + isHighConfidence() : Boolean
+        + requiresHumanReview() : Boolean
+    }
+
+
+    class LeadEnrichment {
+        - id : UUID
+        - provider : String
+        - externalRequestId : String
+        - status : EnrichmentStatus
+        - companyName : String
+        - companyWebsite : String
+        - companyIndustry : String
+        - companySize : Integer
+        - contactJobTitle : String
+        - contactLinkedInUrl : String
+        - rawResponse : JSON
+        - errorMessage : String
+        - enrichedAt : DateTime
+        - createdAt : DateTime
+
+        + isSuccessful() : Boolean
+        + isPartial() : Boolean
+    }
+
+
+    class LeadScore {
+        - id : UUID
+        - score : Decimal
+        - label : ScoreLabel
+        - reason : String
+        - modelProvider : String
+        - modelName : String
+        - modelVersion : String
+        - scoringFeatures : JSON
+        - inputSnapshot : JSON
+        - outputSnapshot : JSON
+        - createdAt : DateTime
+
+        + isHot() : Boolean
+        + isWarm() : Boolean
+        + isCold() : Boolean
+    }
+}
+
+' ============================================================
+' FOLLOW UP DOMAIN
+' ============================================================
+
+package "Follow-up Domain" {
+
+    class FollowUpSequence {
+        - id : UUID
+        - name : String
+        - description : String
+        - status : FollowUpSequenceStatus
+        - createdAt : DateTime
+        - updatedAt : DateTime
+
+        + addStep(step : FollowUpStep) : void
+        + removeStep(step : FollowUpStep) : void
+        + activate() : void
+        + pause() : void
+    }
+
+
+    class FollowUpStep {
+        - id : UUID
+        - stepOrder : Integer
+        - delayMinutes : Integer
+        - channel : String
+        - actionType : String
+        - subjectTemplate : String
+        - contentTemplate : String
+        - conditions : JSON
+        - metadata : JSON
+        - isActive : Boolean
+
+        + activate() : void
+        + deactivate() : void
+        + execute() : void
+    }
+
+
+    class FollowUpEnrollment {
+        - id : UUID
+        - status : EnrollmentStatus
+        - startedAt : DateTime
+        - pausedAt : DateTime
+        - completedAt : DateTime
+        - cancelledAt : DateTime
+        - cancellationReason : String
+        - createdAt : DateTime
+        - updatedAt : DateTime
+
+        + start() : void
+        + pause() : void
+        + resume() : void
+        + complete() : void
+        + cancel(reason : String) : void
+    }
+
+
+    class FollowUpExecution {
+        - id : UUID
+        - status : ExecutionStatus
+        - scheduledAt : DateTime
+        - startedAt : DateTime
+        - completedAt : DateTime
+        - providerMessageId : String
+        - requestPayload : JSON
+        - responsePayload : JSON
+        - errorMessage : String
+        - retryCount : Integer
+
+        + execute() : void
+        + retry() : void
+        + markFailed() : void
+        + markSuccess() : void
+    }
+}
+
+' ============================================================
+' HUMAN REVIEW / WORKFLOW
+' ============================================================
+
+package "Governance & Workflow" {
+
+    class ReviewTask {
+        - id : UUID
+        - status : ReviewStatus
+        - reason : String
+        - decision : ReviewDecision
+        - comment : String
+        - createdAt : DateTime
+        - startedAt : DateTime
+        - resolvedAt : DateTime
+
+        + assignTo(user : User) : void
+        + startReview() : void
+        + approve(comment : String) : void
+        + reject(comment : String) : void
+        + resolve() : void
+    }
+
+
+    class WorkflowRun {
+        - id : UUID
+        - workflowName : String
+        - n8nExecutionId : String
+        - status : WorkflowStatus
+        - inputPayload : JSON
+        - outputPayload : JSON
+        - errorMessage : String
+        - startedAt : DateTime
+        - finishedAt : DateTime
+        - createdAt : DateTime
+
+        + start() : void
+        + complete() : void
+        + fail(error : String) : void
+        + cancel() : void
+    }
+
+
+    class Notification {
+        - id : UUID
+        - type : String
+        - title : String
+        - content : String
+        - isRead : Boolean
+        - createdAt : DateTime
+        - readAt : DateTime
+
+        + send() : void
+        + markAsRead() : void
+    }
+}
+
+' ============================================================
+' APPLICATION SERVICES
+' ============================================================
+
+package "Application Services" {
+
+    class LeadService {
+        + createLead(dto) : Lead
+        + getLead(id : UUID) : Lead
+        + updateLead(id : UUID, dto) : Lead
+        + assignLead(id : UUID, userId : UUID) : void
+        + convertLead(id : UUID) : Customer
+    }
+
+
+    class QualificationService {
+        + requestQualification(leadId : UUID) : void
+        + saveResult(leadId : UUID, result) : LeadQualification
+        + determineReview(result) : Boolean
+    }
+
+
+    class EnrichmentService {
+        + requestEnrichment(leadId : UUID) : void
+        + saveResult(leadId : UUID, result) : LeadEnrichment
+    }
+
+
+    class ScoringService {
+        + requestScoring(leadId : UUID) : void
+        + calculateScore(leadId : UUID) : LeadScore
+        + determineLabel(score : Decimal) : ScoreLabel
+    }
+
+
+    class FollowUpService {
+        + enroll(leadId : UUID, sequenceId : UUID) : FollowUpEnrollment
+        + executeStep(enrollmentId : UUID) : FollowUpExecution
+        + cancel(enrollmentId : UUID) : void
+    }
+
+
+    class ReviewService {
+        + createTask(leadId : UUID, reason : String) : ReviewTask
+        + approve(taskId : UUID, comment : String) : void
+        + reject(taskId : UUID, comment : String) : void
+    }
+
+
+    class SegmentationService {
+        + runSegmentation(customerId : UUID) : void
+        + evaluate(customer : Customer, segment : Segment) : Boolean
+        + assign(customer : Customer, segment : Segment) : void
+    }
+
+
+    class WorkflowService {
+        + publishEvent(eventType : String, payload) : void
+        + recordRun(run : WorkflowRun) : void
+        + handleFailure(runId : UUID) : void
+    }
+}
+
+' ============================================================
+' INTEGRATION SERVICES
+' ============================================================
+
+package "Integration" {
+
+    class AIService {
+        + qualify(input) : LeadQualification
+        + enrich(input) : LeadEnrichment
+        + score(input) : LeadScore
+        + segment(input) : Segment
+    }
+
+
+    class N8nService {
+        + triggerWorkflow(event) : void
+        + getExecutionStatus(id : String) : WorkflowStatus
+    }
+
+
+    class MessageQueueService {
+        + publish(eventType : String, payload) : void
+        + consume(queue : String) : void
+    }
+
+
+    class ExternalDataService {
+        + enrichLead(data) : JSON
+    }
+
+
+    class CommunicationService {
+        + sendEmail(to : String, content : String) : String
+        + sendMessage(to : String, content : String) : String
+    }
+}
+
+' ============================================================
+' DOMAIN RELATIONSHIPS
+' ============================================================
+
+User "1" --> "0..*" Lead : owns
+LeadSource "1" --> "0..*" Lead : source
+
+Lead "1" *-- "0..*" Interaction
+Lead "1" *-- "0..*" LeadQualification
+Lead "1" *-- "0..*" LeadEnrichment
+Lead "1" *-- "0..*" LeadScore
+
+Lead "0..*" --> "0..1" Customer : converts_to
+
+Customer "0..*" -- "0..*" Segment : assigned_to
+
+FollowUpSequence "1" *-- "1..*" FollowUpStep
+Lead "1" --> "0..*" FollowUpEnrollment
+FollowUpSequence "1" --> "0..*" FollowUpEnrollment
+
+FollowUpEnrollment "1" --> "1" FollowUpStep : current_step
+FollowUpEnrollment "1" *-- "0..*" FollowUpExecution
+FollowUpStep "1" --> "0..*" FollowUpExecution
+
+Lead "1" --> "0..*" ReviewTask
+User "1" --> "0..*" ReviewTask : assigned_to
+
+Lead "1" --> "0..*" WorkflowRun
+Customer "1" --> "0..*" WorkflowRun
+
+User "1" --> "0..*" Notification
+ReviewTask "0..1" --> "0..*" Notification
+
+' ============================================================
+' SERVICE DEPENDENCIES
+' ============================================================
+
+LeadService ..> Lead
+LeadService ..> Customer
+
+QualificationService ..> Lead
+QualificationService ..> LeadQualification
+QualificationService ..> ReviewTask
+
+EnrichmentService ..> Lead
+EnrichmentService ..> LeadEnrichment
+
+ScoringService ..> Lead
+ScoringService ..> LeadScore
+ScoringService ..> Interaction
+
+FollowUpService ..> FollowUpSequence
+FollowUpService ..> FollowUpEnrollment
+FollowUpService ..> FollowUpExecution
+
+ReviewService ..> ReviewTask
+ReviewService ..> Notification
+
+SegmentationService ..> Customer
+SegmentationService ..> Segment
+
+WorkflowService ..> WorkflowRun
+WorkflowService ..> MessageQueueService
+
+QualificationService ..> N8nService
+EnrichmentService ..> N8nService
+ScoringService ..> N8nService
+FollowUpService ..> N8nService
+SegmentationService ..> N8nService
+
+QualificationService ..> AIService
+ScoringService ..> AIService
+SegmentationService ..> AIService
+
+EnrichmentService ..> ExternalDataService
+FollowUpService ..> CommunicationService
+
+N8nService ..> MessageQueueService
+
+@enduml

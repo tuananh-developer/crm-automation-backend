@@ -1,5 +1,5 @@
-@startuml
-title AI CRM Automation System - ERD V2
+@startuml AI CRM Automation System - ERD V3
+title AI CRM Automation System - ERD V3
 
 ' ============================================================
 ' GLOBAL SETTINGS
@@ -23,6 +23,7 @@ skinparam package {
     BorderColor #64748B
     FontColor #0F172A
 }
+
 
 ' ============================================================
 ' DOMAIN VALUE NOTES
@@ -87,8 +88,6 @@ EXECUTION_STATUS
 REVIEW_STATUS
 - PENDING
 - IN_REVIEW
-- APPROVED
-- REJECTED
 - RESOLVED
 
 REVIEW_DECISION
@@ -107,7 +106,9 @@ WORKFLOW_STATUS
 - SUCCESS
 - FAILED
 - CANCELLED
+
 end note
+
 
 ' ============================================================
 ' 1. IDENTITY & ACCESS
@@ -132,6 +133,7 @@ package "1. Identity & Access" {
         * updated_at : TIMESTAMPTZ
     }
 }
+
 
 ' ============================================================
 ' 2. LEAD MANAGEMENT
@@ -209,6 +211,7 @@ package "2. Lead Management" {
     }
 }
 
+
 ' ============================================================
 ' 3. AI LEAD INTELLIGENCE
 ' ============================================================
@@ -221,6 +224,7 @@ package "3. AI Lead Intelligence" {
         --
 
         * lead_id : UUID <<FK>>
+        workflow_run_id : UUID <<FK, NULL>>
 
         * status : VARCHAR(30)
 
@@ -246,6 +250,7 @@ package "3. AI Lead Intelligence" {
         --
 
         * lead_id : UUID <<FK>>
+        workflow_run_id : UUID <<FK, NULL>>
 
         * provider : VARCHAR(100)
         external_request_id : VARCHAR(255)
@@ -274,6 +279,7 @@ package "3. AI Lead Intelligence" {
         --
 
         * lead_id : UUID <<FK>>
+        workflow_run_id : UUID <<FK, NULL>>
 
         * score : NUMERIC(5,2)
         * label : VARCHAR(30)
@@ -291,6 +297,7 @@ package "3. AI Lead Intelligence" {
         * created_at : TIMESTAMPTZ
     }
 }
+
 
 ' ============================================================
 ' 4. FOLLOW-UP AUTOMATION
@@ -324,13 +331,12 @@ package "4. Follow-up Automation" {
         * sequence_id : UUID <<FK>>
 
         * step_order : INTEGER
-
-        delay_minutes : INTEGER
+        * delay_minutes : INTEGER
 
         * channel : VARCHAR(50)
         * action_type : VARCHAR(50)
 
-        subject_template : VARCHAR(255)
+        subject_template : TEXT
         content_template : TEXT
 
         conditions : JSONB
@@ -395,6 +401,7 @@ package "4. Follow-up Automation" {
         * updated_at : TIMESTAMPTZ
     }
 }
+
 
 ' ============================================================
 ' 5. CUSTOMER MANAGEMENT
@@ -466,6 +473,7 @@ package "5. Customer Management" {
     }
 }
 
+
 ' ============================================================
 ' 6. WORKFLOW / HUMAN REVIEW / OBSERVABILITY
 ' ============================================================
@@ -513,7 +521,6 @@ package "6. Workflow & Governance" {
         * status : VARCHAR(30)
 
         reason : TEXT
-
         decision : VARCHAR(30)
         review_comment : TEXT
 
@@ -532,8 +539,8 @@ package "6. Workflow & Governance" {
         * user_id : UUID <<FK>>
 
         * type : VARCHAR(50)
-
         * title : VARCHAR(255)
+
         content : TEXT
 
         lead_id : UUID <<FK, NULL>>
@@ -571,55 +578,72 @@ package "6. Workflow & Governance" {
     }
 }
 
+
 ' ============================================================
 ' RELATIONSHIPS
 ' ============================================================
 
-' -------------------------
+
+' ------------------------------------------------------------
 ' USERS / LEADS / SOURCES
-' -------------------------
+' ------------------------------------------------------------
 
-users ||--o{ leads : "owns"
+' owner_id is nullable
+users |o--o{ leads : "owns"
 
+' source_id is mandatory
 lead_sources ||--o{ leads : "source"
 
 users |o--o{ interactions : "creates"
 
 leads ||--o{ interactions : "has"
 
-' -------------------------
-' LEAD -> CUSTOMER CONVERSION
-' -------------------------
 
-customers ||--o{ leads : "converted_to"
+' ------------------------------------------------------------
+' LEAD -> CUSTOMER CONVERSION
+' ------------------------------------------------------------
+
+' converted_customer_id is nullable
+customers |o--o{ leads : "converted_to"
 
 users |o--o{ leads : "converted_by"
 
-users |o--o{ customers : "creates"
+' created_by is mandatory
+users ||--o{ customers : "creates"
 
 users |o--o{ customers : "updates"
 
-' -------------------------
+
+' ------------------------------------------------------------
 ' AI QUALIFICATION
-' -------------------------
+' ------------------------------------------------------------
 
 leads ||--o{ lead_qualifications : "has history"
 
-' -------------------------
+workflow_runs |o--o{ lead_qualifications : "tracks"
+
+
+' ------------------------------------------------------------
 ' AI ENRICHMENT
-' -------------------------
+' ------------------------------------------------------------
 
 leads ||--o{ lead_enrichments : "has history"
 
-' -------------------------
+workflow_runs |o--o{ lead_enrichments : "tracks"
+
+
+' ------------------------------------------------------------
 ' AI SCORING
-' -------------------------
+' ------------------------------------------------------------
 
 leads ||--o{ lead_scores : "has history"
 
-' -------------------------
+workflow_runs |o--o{ lead_scores : "tracks"
+
+
+' ------------------------------------------------------------
 ' FOLLOW-UP DEFINITION
-' -------------------------
+' ------------------------------------------------------------
 
 users ||--o{ follow_up_sequences : "creates"
 
@@ -627,9 +651,10 @@ users |o--o{ follow_up_sequences : "updates"
 
 follow_up_sequences ||--o{ follow_up_steps : "contains"
 
-' -------------------------
+
+' ------------------------------------------------------------
 ' FOLLOW-UP RUNTIME
-' -------------------------
+' ------------------------------------------------------------
 
 leads ||--o{ follow_up_enrollments : "enrolled"
 
@@ -643,9 +668,10 @@ follow_up_enrollments ||--o{ follow_up_executions : "produces"
 
 follow_up_steps ||--o{ follow_up_executions : "executes"
 
-' -------------------------
+
+' ------------------------------------------------------------
 ' CUSTOMER SEGMENTATION
-' -------------------------
+' ------------------------------------------------------------
 
 users ||--o{ segments : "creates"
 
@@ -657,9 +683,10 @@ segments ||--o{ customer_segments : "contains"
 
 users |o--o{ customer_segments : "assigns"
 
-' -------------------------
+
+' ------------------------------------------------------------
 ' WORKFLOW
-' -------------------------
+' ------------------------------------------------------------
 
 leads |o--o{ workflow_runs : "triggers"
 
@@ -667,9 +694,10 @@ customers |o--o{ workflow_runs : "triggers"
 
 users |o--o{ workflow_runs : "triggered by"
 
-' -------------------------
+
+' ------------------------------------------------------------
 ' HUMAN REVIEW
-' -------------------------
+' ------------------------------------------------------------
 
 leads ||--o{ review_tasks : "requires review"
 
@@ -677,9 +705,10 @@ workflow_runs |o--o{ review_tasks : "creates"
 
 users |o--o{ review_tasks : "assigned to"
 
-' -------------------------
+
+' ------------------------------------------------------------
 ' NOTIFICATIONS
-' -------------------------
+' ------------------------------------------------------------
 
 users ||--o{ notifications : "receives"
 
@@ -689,11 +718,13 @@ customers |o--o{ notifications : "about"
 
 review_tasks |o--o{ notifications : "generates"
 
-' -------------------------
+
+' ------------------------------------------------------------
 ' AUDIT
-' -------------------------
+' ------------------------------------------------------------
 
 users |o--o{ audit_logs : "performs"
+
 
 ' ============================================================
 ' CONSTRAINT / INDEX NOTES
@@ -745,6 +776,7 @@ Never overwrite old AI results.
 INDEX:
 - lead_id
 - created_at DESC
+- workflow_run_id
 
 confidence:
 0.0000 -> 1.0000
@@ -755,6 +787,7 @@ Store:
 - version
 - input
 - output
+- workflow trace
 end note
 
 
@@ -767,6 +800,7 @@ Structured data:
 - company_size
 - website
 - contact_job_title
+- linkedin_url
 
 raw_response:
 JSONB
@@ -774,6 +808,7 @@ JSONB
 INDEX:
 - lead_id
 - created_at DESC
+- workflow_run_id
 end note
 
 
@@ -792,6 +827,7 @@ scores.
 INDEX:
 - lead_id
 - created_at DESC
+- workflow_run_id
 end note
 
 
@@ -934,6 +970,10 @@ Assignment can come from:
 MANUAL
 RULE
 AI
+
+Current-state assignment:
+one row per
+Customer + Segment.
 end note
 
 
@@ -951,6 +991,9 @@ CRM stores:
 - input/output
 - error
 - execution reference
+
+n8n_execution_id:
+reference to n8n execution.
 end note
 
 
@@ -967,7 +1010,13 @@ PENDING
   ↓
 IN_REVIEW
   ↓
-APPROVED / REJECTED / RESOLVED
+RESOLVED
+
+Decision is stored separately:
+
+APPROVE
+REJECT
+MODIFY
 
 Keeps:
 - reason
@@ -1007,6 +1056,7 @@ For critical business operations:
 - Follow-up changes
 
 Polymorphic target:
+
 entity_type + entity_id
 end note
 
@@ -1016,6 +1066,7 @@ end note
 ' ============================================================
 
 note as TRACEABILITY
+
 USE CASE -> MAIN DATA
 
 UC01 Create Lead
@@ -1037,6 +1088,7 @@ UC04 AI Lead Scoring
   -> LEADS
   -> LEAD_SCORES
   -> INTERACTIONS
+  -> WORKFLOW_RUNS
 
 UC05 Enroll Follow-up
   -> FOLLOW_UP_SEQUENCES
@@ -1061,6 +1113,8 @@ UC09 Customer Segmentation
   -> CUSTOMERS
   -> SEGMENTS
   -> CUSTOMER_SEGMENTS
+
 end note
+
 
 @enduml
