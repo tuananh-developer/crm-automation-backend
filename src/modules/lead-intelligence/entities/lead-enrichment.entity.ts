@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { EnrichmentStatus } from '../enums/lead-intelligence.enum.js';
 import type { Lead } from '../../leads/entities/lead.entity.js';
+import type { WorkflowRun } from '../../workflow/entities/workflow-run.entity.js';
 
 @Entity('lead_enrichments')
 @Index('IDX_lead_enrichments_lead_id_created_at', ['leadId', 'createdAt'])
@@ -18,6 +19,9 @@ export class LeadEnrichment {
 
   @Column({ name: 'lead_id', type: 'uuid' })
   leadId!: string;
+
+  @Column({ name: 'workflow_run_id', type: 'uuid', nullable: true })
+  workflowRunId!: string | null;
 
   @Column({ name: 'provider', type: 'varchar', length: 100 })
   provider!: string;
@@ -95,4 +99,8 @@ export class LeadEnrichment {
   @ManyToOne('Lead', 'enrichments', { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'lead_id' })
   lead?: Lead;
+
+  @ManyToOne('WorkflowRun', { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'workflow_run_id' })
+  workflowRun?: WorkflowRun | null;
 }

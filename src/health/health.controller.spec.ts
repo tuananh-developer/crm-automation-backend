@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { HealthController } from './health.controller';
+import { beforeEach, describe, it } from 'node:test';
 
-describe('HealthController', () => {
+void describe('HealthController', () => {
   let controller: HealthController;
 
   beforeEach(async () => {
@@ -12,7 +13,7 @@ describe('HealthController', () => {
     controller = module.get<HealthController>(HealthController);
   });
 
-  it('should be defined', () => {
+  void it('should be defined', () => {
     expect(controller).toBeDefined();
   });
 });
