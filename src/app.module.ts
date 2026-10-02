@@ -13,6 +13,7 @@ import { WorkflowModule } from './modules/workflow/workflow.module.js';
 import { ReviewModule } from './modules/review/review.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
+import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AuditModule } from './modules/audit/audit.module.js';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    RabbitMQModule,
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

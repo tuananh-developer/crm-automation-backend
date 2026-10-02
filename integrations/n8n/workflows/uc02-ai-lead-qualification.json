@@ -1,0 +1,178 @@
+{
+  "name": "UC02 - AI Lead Qualification Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "queue": "crm_automation_queue",
+        "options": {
+          "arguments": {}
+        }
+      },
+      "id": "1",
+      "name": "RabbitMQ Trigger",
+      "type": "n8n-nodes-base.rabbitmqTrigger",
+      "typeVersion": 1,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.data ? $json.data.leadId : '' }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "2",
+      "name": "Validate Event",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [380, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://crm_backend:3000') + '/api/v1/leads/' + $json.data.leadId }}",
+        "method": "GET",
+        "options": {}
+      },
+      "id": "3",
+      "name": "Get Lead from NestJS API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [580, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $input.first().json;\nconst triggerData = $('RabbitMQ Trigger').first().json.data || {};\n\nconst prompt = `\nYou are an expert B2B Lead Qualification AI. Evaluate the following lead:\n\nName: ${lead.firstName} ${lead.lastName || ''}\nEmail: ${lead.email}\nCompany: ${lead.companyName || 'Not specified'}\nWebsite: ${lead.companyWebsite || 'Not specified'}\nJob Title: ${lead.jobTitle || 'Not specified'}\nIndustry: ${lead.industry || 'Not specified'}\nCompany Size: ${lead.companySize || 'Not specified'}\nNotes: ${lead.notes || 'None'}\n\nDecision Rule:\n- Confidence score must be between 0.00 and 1.00.\n- If confidence >= 0.80, status can be QUALIFIED or DISQUALIFIED.\n- If confidence < 0.80 or data is highly ambiguous, status should be NEEDS_REVIEW with reviewRequired=true.\n\nRespond ONLY with a valid JSON object in this exact schema:\n{\n  \"qualification\": \"QUALIFIED\" | \"DISQUALIFIED\" | \"NEEDS_REVIEW\",\n  \"confidence\": 0.85,\n  \"intent\": \"Brief intent summary\",\n  \"reason\": \"Detailed explanation\",\n  \"nextAction\": \"Recommended next sales step\",\n  \"reviewRequired\": false\n}\n`;\n\nreturn [{\n  json: {\n    leadId: lead.id,\n    workflowRunId: triggerData.workflowRunId || null,\n    leadSnapshot: lead,\n    prompt\n  }\n}];"
+      },
+      "id": "4",
+      "name": "Prepare AI Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 280]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o\",\n  \"temperature\": 0.2,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an enterprise CRM Lead Qualification Engine. Return only structured JSON.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify($json.prompt) }}\n    }\n  ]\n}"
+      },
+      "id": "5",
+      "name": "AI / LLM Qualification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [980, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst prep = $('Prepare AI Input').first().json;\n\nlet aiOutput;\ntry {\n  const content = response.choices?.[0]?.message?.content || '{}';\n  aiOutput = JSON.parse(content);\n} catch (err) {\n  aiOutput = {\n    qualification: 'NEEDS_REVIEW',\n    confidence: 0.5,\n    intent: 'Failed to parse AI output',\n    reason: 'Raw response format invalid',\n    nextAction: 'Manual review required',\n    reviewRequired: true\n  };\n}\n\nconst confidence = typeof aiOutput.confidence === 'number' ? aiOutput.confidence : 0.5;\nconst reviewRequired = confidence < 0.80 || aiOutput.qualification === 'NEEDS_REVIEW' || aiOutput.reviewRequired === true;\n\nreturn [{\n  json: {\n    leadId: prep.leadId,\n    workflowRunId: prep.workflowRunId,\n    status: aiOutput.qualification || 'NEEDS_REVIEW',\n    intent: aiOutput.intent || null,\n    confidence: Math.min(1, Math.max(0, confidence)),\n    reason: aiOutput.reason || null,\n    nextAction: aiOutput.nextAction || null,\n    reviewRequired,\n    modelProvider: 'openai',\n    modelName: 'gpt-4o',\n    modelVersion: '2024-08-06',\n    inputSnapshot: prep.leadSnapshot,\n    outputSnapshot: aiOutput\n  }\n}];"
+      },
+      "id": "6",
+      "name": "Validate Structured Output & Confidence Rule",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 280]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://crm_backend:3000') + '/api/v1/lead-intelligence/qualification/callback' }}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "7",
+      "name": "Callback NestJS API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1380, 280]
+    }
+  ],
+  "connections": {
+    "RabbitMQ Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Event": {
+      "main": [
+        [
+          {
+            "node": "Get Lead from NestJS API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Lead from NestJS API": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Input": {
+      "main": [
+        [
+          {
+            "node": "AI / LLM Qualification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI / LLM Qualification": {
+      "main": [
+        [
+          {
+            "node": "Validate Structured Output & Confidence Rule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Structured Output & Confidence Rule": {
+      "main": [
+        [
+          {
+            "node": "Callback NestJS API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
