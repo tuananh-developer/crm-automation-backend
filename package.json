@@ -19,8 +19,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-e2e.json",
     "prepare": "husky",
-    "migration:run": "ts-node -r tsconfig-paths/register -e 'require(\"./src/data-source\").AppDataSource.initialize().then(ds => ds.runMigrations()).then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); })'",
-    "migration:revert": "ts-node -r tsconfig-paths/register -e 'require(\"./src/data-source\").AppDataSource.initialize().then(ds => ds.undoLastMigration()).then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); })'",
+    "migration:run": "pnpm build && node --env-file=.env -e 'import(\"./dist/data-source.js\").then(async ({ AppDataSource }) => { await AppDataSource.initialize(); const m = await AppDataSource.runMigrations(); console.log(\"Migrations executed:\", m.length); await AppDataSource.destroy(); process.exit(0); }).catch(e => { console.error(e); process.exit(1); })'",
+    "migration:revert": "pnpm build && node --env-file=.env -e 'import(\"./dist/data-source.js\").then(async ({ AppDataSource }) => { await AppDataSource.initialize(); await AppDataSource.undoLastMigration(); console.log(\"Last migration reverted\"); await AppDataSource.destroy(); process.exit(0); }).catch(e => { console.error(e); process.exit(1); })'",
     "migration:generate": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:generate -d src/data-source.ts",
     "migration:create": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:create",
     "migration:show": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/data-source.ts"
