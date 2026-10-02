@@ -1,0 +1,35 @@
+@startuml UC08 - Convert Lead to Customer - Activity Diagram
+title UC08 - Convert Lead to Customer - Activity Diagram
+
+start
+
+:1. Sales mở Qualified Lead;
+
+:2. Xem Qualification Result;
+
+:3. Xem Lead Score;
+
+:4. Chọn Convert to Customer;
+
+:5. Frontend gửi Conversion Request;
+
+:6. Backend kiểm tra Lead Status;
+
+:7. Kiểm tra Customer trùng;
+
+if (Customer đã tồn tại?) then (Yes)
+    :8. Sử dụng Customer hiện có;
+else (No)
+    :8. Tạo Customer mới;
+endif
+
+:9. Liên kết Lead với Customer;
+
+:10. Cập nhật Lead = CONVERTED;
+
+:11. Ghi Conversion Audit Log;
+
+:12. Trả Customer Information về Frontend;
+
+stop
+@enduml

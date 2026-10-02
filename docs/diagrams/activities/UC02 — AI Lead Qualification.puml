@@ -1,0 +1,35 @@
+@startuml UC02 - AI Lead Qualification - Activity Diagram
+title UC02 - AI Lead Qualification - Activity Diagram
+
+start
+
+:1. Sales chọn Lead cần Qualification;
+
+:2. Gửi yêu cầu AI Qualification;
+
+:3. Backend kiểm tra Lead;
+
+:4. Tạo Qualification Request;
+
+:5. Publish event lead.qualification.requested;
+
+:6. n8n nhận message từ RabbitMQ;
+
+:7. n8n lấy Lead data từ Backend API;
+
+:8. n8n chuẩn hóa dữ liệu AI Input;
+
+:9. AI/LLM phân tích Lead;
+
+:10. n8n validate AI Output;
+
+if (Confidence >= 0.80?) then (Yes)
+    :11. Gửi Qualification Result về Backend;
+else (No)
+    :11. Tạo Human Review Task;
+endif
+
+:12. Backend lưu kết quả và cập nhật Lead;
+
+stop
+@enduml

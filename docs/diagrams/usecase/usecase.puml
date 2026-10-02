@@ -1,0 +1,72 @@
+@startuml
+title AI CRM Automation System - Use Case Diagram
+
+left to right direction
+
+skinparam packageStyle rectangle
+skinparam actorStyle awesome
+
+actor "Sales User" as Sales
+actor "Admin" as Admin
+actor "Automation Engine\n(n8n)" as N8N
+actor "AI / LLM Service" as AI
+actor "External Service" as External
+
+rectangle "AI CRM Automation System" {
+
+    usecase "UC01\nCreate Lead" as UC01
+    usecase "UC02\nAI Lead Qualification" as UC02
+    usecase "UC03\nAI Lead Enrichment" as UC03
+    usecase "UC04\nAI Lead Scoring" as UC04
+
+    usecase "UC05\nEnroll Follow-up" as UC05
+    usecase "UC06\nExecute Follow-up" as UC06
+
+    usecase "UC07\nHuman Review" as UC07
+
+    usecase "UC08\nConvert Lead\n→ Customer" as UC08
+
+    usecase "UC09\nCustomer Segmentation" as UC09
+
+    usecase "Manage Users" as UC10
+    usecase "View Dashboard" as UC11
+}
+
+' Sales User
+Sales --> UC01
+Sales --> UC05
+Sales --> UC07
+Sales --> UC08
+Sales --> UC09
+Sales --> UC11
+
+' Admin
+Admin --> UC10
+Admin --> UC11
+
+' Automation
+N8N --> UC02
+N8N --> UC03
+N8N --> UC04
+N8N --> UC06
+N8N --> UC09
+
+' AI
+AI --> UC02
+AI --> UC03
+AI --> UC04
+AI --> UC09
+
+' External services
+External --> UC03
+External --> UC06
+
+' Relationships
+UC02 ..> UC07 : <<extend>>\nlow confidence
+UC04 ..> UC07 : <<extend>>\nlow confidence
+
+UC05 ..> UC06 : <<include>>
+UC08 ..> UC04 : <<precondition>>
+UC09 ..> UC08 : <<may follow>>
+
+@enduml

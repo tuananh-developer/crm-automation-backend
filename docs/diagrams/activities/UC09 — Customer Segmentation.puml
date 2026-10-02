@@ -1,0 +1,35 @@
+@startuml UC09 - Customer Segmentation - Activity Diagram
+title UC09 - Customer Segmentation - Activity Diagram
+
+start
+
+:1. Sales mở Customer Segmentation;
+
+:2. Chọn Segment hoặc Run Segmentation;
+
+:3. Backend lấy Customers;
+
+:4. Lấy Segment Criteria;
+
+:5. Lấy Customer Profile;
+
+:6. Lấy Behavioral Signals;
+
+:7. Chuẩn hóa Segmentation Input;
+
+:8. Rule Engine / AI đánh giá Customer;
+
+:9. Validate Segmentation Result;
+
+if (Customer thuộc Segment?) then (Yes)
+    :10. Tạo hoặc cập nhật CustomerSegment;
+else (No)
+    :10. Gỡ Assignment nếu cần;
+endif
+
+:11. Ghi Assignment Reason;
+
+:12. Cập nhật Dashboard và trả kết quả;
+
+stop
+@enduml

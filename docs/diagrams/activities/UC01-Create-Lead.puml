@@ -1,0 +1,39 @@
+@startuml UC01 - Create Lead - Activity Diagram
+title UC01 - Create Lead - Activity Diagram
+
+start
+
+:1. Sales đăng nhập hệ thống;
+
+:2. Mở chức năng Lead Management;
+
+:3. Chọn Create Lead;
+
+:4. Nhập thông tin Lead;
+
+:5. Chọn Lead Source và Owner;
+
+:6. Frontend validate dữ liệu;
+
+:7. Gửi request tạo Lead;
+
+:8. Backend kiểm tra dữ liệu;
+
+if (Dữ liệu hợp lệ?) then (Yes)
+    :9. Kiểm tra Lead trùng;
+else (No)
+    :12. Trả lỗi validation;
+    stop
+endif
+
+if (Lead đã tồn tại?) then (Yes)
+    :10. Trả lỗi duplicate Lead;
+    stop
+else (No)
+    :11. Lưu Lead vào PostgreSQL;
+endif
+
+:12. Trả Lead mới cho Frontend;
+
+stop
+@enduml

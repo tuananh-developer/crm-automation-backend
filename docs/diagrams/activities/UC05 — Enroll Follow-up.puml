@@ -1,0 +1,36 @@
+@startuml UC05 - Enroll Lead in Follow-up - Activity Diagram
+title UC05 - Enroll Lead in Follow-up - Activity Diagram
+
+start
+
+:1. Sales mở Lead Detail;
+
+:2. Kiểm tra Lead Score;
+
+:3. Chọn Start Follow-up;
+
+:4. Hệ thống hiển thị Follow-up Sequences;
+
+:5. Sales chọn Sequence;
+
+:6. Frontend gửi Enrollment Request;
+
+:7. Backend kiểm tra Lead;
+
+:8. Backend kiểm tra Sequence;
+
+if (Lead được phép tham gia?) then (Yes)
+    :9. Tạo Follow-up Enrollment;
+else (No)
+    :9. Trả lỗi Enrollment;
+    stop
+endif
+
+:10. Xác định Step đầu tiên;
+
+:11. Tạo Workflow Event;
+
+:12. Hiển thị Enrollment ACTIVE;
+
+stop
+@enduml

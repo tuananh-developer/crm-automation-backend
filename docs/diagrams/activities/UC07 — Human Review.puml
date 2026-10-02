@@ -1,0 +1,35 @@
+@startuml UC07 - Human Review - Activity Diagram
+title UC07 - Human Review - Activity Diagram
+
+start
+
+:1. AI hoàn thành Qualification/Scoring;
+
+:2. System kiểm tra Confidence;
+
+:3. Phát hiện kết quả cần Human Review;
+
+:4. Tạo Review Task;
+
+:5. Gửi Notification cho Sales;
+
+:6. Sales mở Review Task;
+
+:7. Xem Lead Information;
+
+:8. Xem AI Result và Reason;
+
+:9. Xem Enrichment/Interaction nếu cần;
+
+:10. Sales chọn Approve / Reject;
+
+if (Approve?) then (Yes)
+    :11. Cập nhật Lead theo quyết định;
+else (No)
+    :11. Cập nhật Lead thành trạng thái phù hợp;
+endif
+
+:12. Ghi Audit Log và kết thúc Review;
+
+stop
+@enduml

@@ -1,0 +1,35 @@
+@startuml UC03 - AI Lead Enrichment - Activity Diagram
+title UC03 - AI Lead Enrichment - Activity Diagram
+
+start
+
+:1. Sales mở Lead Detail;
+
+:2. Chọn Enrich Lead;
+
+:3. Frontend gửi request;
+
+:4. Backend kiểm tra Lead;
+
+:5. Tạo Enrichment Request;
+
+:6. Publish enrichment event;
+
+:7. n8n nhận event;
+
+:8. n8n chuẩn hóa email/domain;
+
+:9. n8n gọi External API;
+
+if (API thành công?) then (Yes)
+    :10. Chuẩn hóa dữ liệu nhận được;
+else (No)
+    :10. Retry hoặc đánh dấu FAILED;
+endif
+
+:11. Gửi Enrichment Result về Backend;
+
+:12. Backend lưu kết quả và cập nhật Lead;
+
+stop
+@enduml

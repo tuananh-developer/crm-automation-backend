@@ -1,0 +1,39 @@
+@startuml UC06 - Execute Follow-up - Activity Diagram
+title UC06 - Execute Follow-up - Activity Diagram
+
+start
+
+:1. n8n nhận Follow-up Event;
+
+:2. Lấy Enrollment;
+
+:3. Xác định Current Step;
+
+:4. Kiểm tra Step Conditions;
+
+:5. Kiểm tra Scheduled Time;
+
+:6. Tạo nội dung Follow-up;
+
+:7. Gửi Email/Message;
+
+if (Gửi thành công?) then (Yes)
+    :8. Ghi nhận Successful Execution;
+else (No)
+    :8. Retry Execution;
+endif
+
+:9. Gửi Execution Result về Backend;
+
+:10. Backend lưu FollowUpExecution;
+
+if (Còn Step tiếp theo?) then (Yes)
+    :11. Tạo Schedule cho Step tiếp theo;
+else (No)
+    :11. Đánh dấu Enrollment COMPLETED;
+endif
+
+:12. Ghi Workflow Execution Log;
+
+stop
+@enduml
