@@ -1,0 +1,35 @@
+@startuml  UC04 - AI Lead Scoring - Activity Diagram
+title UC04 - AI Lead Scoring - Activity Diagram
+
+start
+
+:1. System nhận yêu cầu Scoring;
+
+:2. Lấy thông tin Lead;
+
+:3. Lấy Qualification mới nhất;
+
+:4. Lấy Enrichment mới nhất;
+
+:5. Lấy Interaction History;
+
+:6. Tổng hợp Scoring Features;
+
+:7. Publish scoring event;
+
+:8. n8n nhận event;
+
+:9. AI/LLM tính Lead Score;
+
+:10. Validate Score Output;
+
+if (Score hợp lệ?) then (Yes)
+    :11. Gửi Score Result về Backend;
+else (No)
+    :11. Retry hoặc đánh dấu Failed;
+endif
+
+:12. Lưu Score và cập nhật trạng thái Lead;
+
+stop
+@enduml
