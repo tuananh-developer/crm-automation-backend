@@ -1,0 +1,23 @@
+@startuml UC06 - Execute Follow-up - Sequence Diagram
+title UC06 - Execute Follow-up - Sequence Diagram
+
+participant "RabbitMQ" as MQ
+participant "n8n" as N8N
+participant "NestJS API" as API
+participant "Communication Service" as COMM
+database "PostgreSQL" as DB
+
+MQ -> N8N : 1. Deliver followup.started
+N8N -> API : 2. Get Enrollment
+API -> DB : 3. Query Enrollment
+DB --> API : 4. Return Enrollment
+N8N -> API : 5. Get Current Step
+API -> DB : 6. Query Step
+DB --> API : 7. Return Step
+N8N -> COMM : 8. Send Email / Message
+COMM --> N8N : 9. Return delivery result
+N8N -> API : 10. Submit execution result
+API -> DB : 11. Save FollowUpExecution
+API --> N8N : 12. Return processing result
+
+@enduml

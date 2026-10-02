@@ -1,0 +1,29 @@
+@startuml UC08 - Convert Lead to Customer - Sequence Diagram
+title UC08 - Convert Lead to Customer - Sequence Diagram
+
+actor "Sales User" as Sales
+participant "Next.js" as FE
+participant "NestJS API" as API
+database "PostgreSQL" as DB
+participant "RabbitMQ" as MQ
+
+Sales -> FE : 1. Select Convert Lead
+FE -> API : 2. POST conversion request
+API -> DB : 3. Get Lead
+DB --> API : 4. Return Lead
+API -> DB : 5. Check existing Customer
+DB --> API : 6. Return Customer result
+
+alt Customer not exists
+    API -> DB : 7. Create Customer
+else Customer exists
+    API -> DB : 7. Use existing Customer
+end
+
+API -> DB : 8. Link Lead to Customer
+API -> DB : 9. Update Lead = CONVERTED
+API -> DB : 10. Save Audit Log
+API -> MQ : 11. Publish lead.converted
+API --> FE : 12. Return Customer
+
+@enduml

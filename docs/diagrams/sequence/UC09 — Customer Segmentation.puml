@@ -1,0 +1,25 @@
+@startuml UC09 - Customer Segmentation - Sequence Diagram
+title UC09 - Customer Segmentation - Sequence Diagram
+
+actor "Sales User" as Sales
+participant "Next.js" as FE
+participant "NestJS API" as API
+database "PostgreSQL" as DB
+participant "RabbitMQ" as MQ
+participant "n8n" as N8N
+participant "AI / Rule Engine" as AI
+
+Sales -> FE : 1. Start Segmentation
+FE -> API : 2. POST segmentation request
+API -> DB : 3. Get Customers
+DB --> API : 4. Return Customer data
+API -> DB : 5. Get Segment Criteria
+DB --> API : 6. Return Criteria
+API -> MQ : 7. Publish segmentation event
+MQ -> N8N : 8. Deliver event
+N8N -> AI : 9. Evaluate Customer
+AI --> N8N : 10. Return Segment result
+N8N -> API : 11. Submit assignment result
+API -> DB : 12. Save CustomerSegment
+
+@enduml

@@ -1,0 +1,25 @@
+@startuml UC03 - AI Lead Enrichment - Sequence Diagram
+title UC03 - AI Lead Enrichment - Sequence Diagram
+
+actor "Sales User" as Sales
+participant "Next.js" as FE
+participant "NestJS API" as API
+participant "RabbitMQ" as MQ
+participant "n8n" as N8N
+participant "External API" as EXT
+database "PostgreSQL" as DB
+
+Sales -> FE : 1. Request Lead Enrichment
+FE -> API : 2. POST /leads/:id/enrich
+API -> DB : 3. Validate Lead
+DB --> API : 4. Lead data
+API -> MQ : 5. Publish enrichment event
+MQ -> N8N : 6. Deliver message
+N8N -> API : 7. Get Lead information
+API --> N8N : 8. Return Lead data
+N8N -> EXT : 9. Request external enrichment
+EXT --> N8N : 10. Return company/contact data
+N8N -> API : 11. POST enrichment result
+API -> DB : 12. Save enrichment result
+
+@enduml

@@ -1,0 +1,30 @@
+@startuml UC02 - AI Lead Qualification - Sequence Diagram
+title UC02 - AI Lead Qualification - Sequence Diagram
+
+actor "Sales User" as Sales
+participant "Next.js" as FE
+participant "NestJS API" as API
+participant "RabbitMQ" as MQ
+participant "n8n" as N8N
+participant "AI / LLM" as AI
+database "PostgreSQL" as DB
+
+Sales -> FE : 1. Request AI Qualification
+FE -> API : 2. POST qualification request
+API -> DB : 3. Validate Lead
+DB --> API : 4. Lead information
+API -> MQ : 5. Publish lead.qualification.requested
+MQ -> N8N : 6. Deliver message
+N8N -> API : 7. GET /leads/:id
+API -> DB : 8. Query Lead
+DB --> API : 9. Return Lead
+N8N -> AI : 10. Analyze Lead
+AI --> N8N : 11. Return structured qualification
+
+alt High confidence
+    N8N -> API : 12. POST qualification result
+else Low confidence
+    N8N -> API : 12. POST review-required result
+end
+
+@enduml

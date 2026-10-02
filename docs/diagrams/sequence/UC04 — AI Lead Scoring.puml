@@ -1,0 +1,24 @@
+@startuml UC04 - AI Lead Scoring - Sequence Diagram
+title UC04 - AI Lead Scoring - Sequence Diagram
+
+participant "Scheduler / System" as SYS
+participant "NestJS API" as API
+participant "PostgreSQL" as DB
+participant "RabbitMQ" as MQ
+participant "n8n" as N8N
+participant "AI / LLM" as AI
+
+SYS -> API : 1. Request Lead Scoring
+API -> DB : 2. Get Lead
+DB --> API : 3. Lead data
+API -> DB : 4. Get Qualification
+DB --> API : 5. Qualification data
+API -> DB : 6. Get Enrichment
+DB --> API : 7. Enrichment data
+API -> DB : 8. Get Interactions
+DB --> API : 9. Interaction history
+API -> MQ : 10. Publish scoring event
+MQ -> N8N : 11. Deliver scoring event
+N8N -> AI : 12. Calculate Lead Score
+
+@enduml

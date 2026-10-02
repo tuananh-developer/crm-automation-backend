@@ -1,0 +1,28 @@
+@startuml UC01 - Create Lead - Sequence Diagram
+title UC01 - Create Lead - Sequence Diagram
+
+actor "Sales User" as Sales
+participant "Next.js" as FE
+participant "NestJS API" as API
+database "PostgreSQL" as DB
+
+Sales -> FE : 1. Open Create Lead
+FE -> Sales : 2. Display Lead Form
+Sales -> FE : 3. Submit Lead Data
+FE -> API : 4. POST /api/v1/leads
+API -> API : 5. Validate DTO
+API -> DB : 6. Check duplicate email
+DB --> API : 7. Return duplicate result
+
+alt Lead exists
+    API --> FE : 8. 409 Conflict
+    FE --> Sales : 9. Display duplicate error
+else Lead does not exist
+    API -> DB : 8. INSERT Lead
+    DB --> API : 9. Lead created
+    API --> FE : 10. Return created Lead
+    FE --> Sales : 11. Display success
+    FE --> Sales : 12. Redirect to Lead Detail
+end
+
+@enduml

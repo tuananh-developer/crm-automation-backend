@@ -1,0 +1,23 @@
+@startuml UC07 - Human Review - Sequence Diagram
+title UC07 - Human Review - Sequence Diagram
+
+participant "n8n" as N8N
+participant "NestJS API" as API
+database "PostgreSQL" as DB
+participant "Next.js" as FE
+actor "Sales User" as Sales
+
+N8N -> API : 1. Submit low-confidence result
+API -> DB : 2. Create ReviewTask
+DB --> API : 3. ReviewTask created
+API -> DB : 4. Create Notification
+DB --> API : 5. Notification saved
+API --> FE : 6. Review available
+Sales -> FE : 7. Open Review Task
+FE -> API : 8. Get Review Task
+API -> DB : 9. Get Task and Lead
+DB --> API : 10. Return Review data
+Sales -> FE : 11. Approve / Reject
+FE -> API : 12. Resolve Review Task
+
+@enduml

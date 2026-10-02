@@ -1,0 +1,23 @@
+@startuml UC05 - Enroll Follow-up - Sequence Diagram
+title UC05 - Enroll Follow-up - Sequence Diagram
+
+actor "Sales User" as Sales
+participant "Next.js" as FE
+participant "NestJS API" as API
+database "PostgreSQL" as DB
+participant "RabbitMQ" as MQ
+
+Sales -> FE : 1. Open Lead Detail
+FE -> API : 2. Get Lead
+API -> DB : 3. Query Lead
+DB --> API : 4. Return Lead
+FE -> Sales : 5. Display Lead Score
+Sales -> FE : 6. Select Follow-up Sequence
+FE -> API : 7. POST enrollment
+API -> DB : 8. Validate Sequence
+DB --> API : 9. Return Sequence
+API -> DB : 10. Create Enrollment
+API -> MQ : 11. Publish followup.started
+API --> FE : 12. Return ACTIVE Enrollment
+
+@enduml
