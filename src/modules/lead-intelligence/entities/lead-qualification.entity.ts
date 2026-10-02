@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { QualificationStatus } from '../enums/lead-intelligence.enum.js';
 import type { Lead } from '../../leads/entities/lead.entity.js';
+import type { WorkflowRun } from '../../workflow/entities/workflow-run.entity.js';
 
 @Entity('lead_qualifications')
 @Index('IDX_lead_qualifications_lead_id_created_at', ['leadId', 'createdAt'])
@@ -69,7 +70,14 @@ export class LeadQualification {
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
+  @Column({ name: 'workflow_run_id', type: 'uuid', nullable: true })
+  workflowRunId!: string | null;
+
   @ManyToOne('Lead', 'qualifications', { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'lead_id' })
   lead?: Lead;
+
+  @ManyToOne('WorkflowRun', { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'workflow_run_id' })
+  workflowRun?: WorkflowRun | null;
 }

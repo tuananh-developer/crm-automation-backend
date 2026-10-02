@@ -30,9 +30,8 @@ export class FollowUpStep {
     name: 'delay_minutes',
     type: 'integer',
     default: 0,
-    nullable: true,
   })
-  delayMinutes!: number | null;
+  delayMinutes!: number;
 
   @Column({ name: 'channel', type: 'varchar', length: 50 })
   channel!: string;
@@ -40,12 +39,7 @@ export class FollowUpStep {
   @Column({ name: 'action_type', type: 'varchar', length: 50 })
   actionType!: string;
 
-  @Column({
-    name: 'subject_template',
-    type: 'varchar',
-    length: 255,
-    nullable: true,
-  })
+  @Column({ name: 'subject_template', type: 'text', nullable: true })
   subjectTemplate!: string | null;
 
   @Column({ name: 'content_template', type: 'text', nullable: true })

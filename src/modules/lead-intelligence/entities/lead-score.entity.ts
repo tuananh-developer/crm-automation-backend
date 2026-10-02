@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { ScoreLabel } from '../enums/lead-intelligence.enum.js';
 import type { Lead } from '../../leads/entities/lead.entity.js';
+import type { WorkflowRun } from '../../workflow/entities/workflow-run.entity.js';
 
 @Entity('lead_scores')
 @Index('IDX_lead_scores_lead_id_created_at', ['leadId', 'createdAt'])
@@ -18,6 +19,9 @@ export class LeadScore {
 
   @Column({ name: 'lead_id', type: 'uuid' })
   leadId!: string;
+
+  @Column({ name: 'workflow_run_id', type: 'uuid', nullable: true })
+  workflowRunId!: string | null;
 
   @Column({ name: 'score', type: 'numeric', precision: 5, scale: 2 })
   score!: number;
@@ -66,4 +70,8 @@ export class LeadScore {
   @ManyToOne('Lead', 'scores', { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'lead_id' })
   lead?: Lead;
+
+  @ManyToOne('WorkflowRun', { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'workflow_run_id' })
+  workflowRun?: WorkflowRun | null;
 }
