@@ -6,18 +6,31 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Lead } from './entities/lead.entity.js';
 import { LeadSource } from './entities/lead-source.entity.js';
 import { User } from '../users/entities/user.entity.js';
+import { Customer } from '../customers/entities/customer.entity.js';
+import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import { LeadStatus } from './enums/lead.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
 import {
+  ConvertLeadDto,
   CreateLeadDto,
   CreateLeadSourceDto,
   QueryLeadDto,
   UpdateLeadDto,
 } from './dto/index.js';
+
+export type CustomerMatchSource = 'EMAIL' | 'PHONE';
+
+export interface ConvertLeadResult {
+  lead: Lead;
+  customer: Customer;
+  customerCreated: boolean;
+  matchedBy: CustomerMatchSource | null;
+  message: string;
+}
 
 @Injectable()
 export class LeadsService {
@@ -30,6 +43,11 @@ export class LeadsService {
     private readonly leadSourcesRepository: Repository<LeadSource>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    @InjectRepository(Customer)
+    private readonly customersRepository: Repository<Customer>,
+    @InjectRepository(AuditLog)
+    private readonly auditLogRepository: Repository<AuditLog>,
+    private readonly dataSource: DataSource,
     private readonly rabbitmqService: RabbitMQService,
   ) {}
 
@@ -251,6 +269,204 @@ export class LeadsService {
       success: true,
       message: `Lead '${id}' has been removed successfully`,
     };
+  }
+
+  // --- Lead Conversion (UC08) ---
+
+  async convert(id: string, dto: ConvertLeadDto): Promise<ConvertLeadResult> {
+    const user = await this.usersRepository.findOne({
+      where: { id: dto.userId },
+    });
+    if (!user) {
+      throw new NotFoundException(`User with ID '${dto.userId}' not found`);
+    }
+
+    const result = await this.dataSource.transaction(async (manager) => {
+      const leadRepository = manager.getRepository(Lead);
+      const customerRepository = manager.getRepository(Customer);
+      const auditLogRepository = manager.getRepository(AuditLog);
+
+      const lead = await leadRepository.findOne({ where: { id } });
+      if (!lead) {
+        throw new NotFoundException(`Lead with ID '${id}' not found`);
+      }
+
+      if (
+        lead.status === LeadStatus.CONVERTED ||
+        lead.convertedCustomerId !== null
+      ) {
+        throw new ConflictException(
+          `Lead with ID '${id}' has already been converted to customer '${lead.convertedCustomerId}'`,
+        );
+      }
+
+      if (lead.status !== LeadStatus.QUALIFIED) {
+        throw new BadRequestException(
+          `Only ${LeadStatus.QUALIFIED} leads can be converted. Lead '${id}' is currently '${lead.status}'`,
+        );
+      }
+
+      const normalizedEmail = lead.email.trim().toLowerCase();
+
+      // Serialize concurrent conversions of leads sharing the same email so a
+      // single customer row is created instead of duplicates.
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `customer-email:${normalizedEmail}`,
+      ]);
+
+      const duplicate = await this.findDuplicateCustomer(
+        customerRepository,
+        lead,
+      );
+
+      let customer = duplicate.customer;
+      let customerCreated = false;
+
+      if (customer) {
+        this.logger.log(
+          `Reusing existing customer ${customer.id} for lead ${lead.id} (matched by ${duplicate.matchedBy})`,
+        );
+      } else {
+        customer = await customerRepository.save(
+          customerRepository.create({
+            name: this.buildCustomerName(lead),
+            email: normalizedEmail,
+            phone: lead.phone,
+            companyName: lead.companyName,
+            companyWebsite: lead.companyWebsite,
+            jobTitle: lead.jobTitle,
+            companySize: lead.companySize,
+            industry: lead.industry,
+            status: null,
+            createdBy: user.id,
+            updatedBy: null,
+            notes: lead.notes,
+          }),
+        );
+        customerCreated = true;
+      }
+
+      const oldValue = {
+        status: lead.status,
+        convertedCustomerId: lead.convertedCustomerId,
+        convertedBy: lead.convertedBy,
+        convertedAt: lead.convertedAt,
+      };
+
+      lead.convertedCustomerId = customer.id;
+      lead.status = LeadStatus.CONVERTED;
+      lead.convertedBy = user.id;
+      lead.convertedAt = new Date();
+
+      const savedLead = await leadRepository.save(lead);
+
+      await auditLogRepository.save(
+        auditLogRepository.create({
+          userId: user.id,
+          action: 'LEAD_CONVERTED',
+          entityType: 'Lead',
+          entityId: lead.id,
+          oldValue,
+          newValue: {
+            status: savedLead.status,
+            convertedCustomerId: savedLead.convertedCustomerId,
+            convertedBy: savedLead.convertedBy,
+            convertedAt: savedLead.convertedAt,
+          },
+          metadata: {
+            customerId: customer.id,
+            customerCreated,
+            matchedBy: duplicate.matchedBy,
+            customerName: customer.name,
+            customerEmail: customer.email,
+            leadEmail: lead.email,
+            leadName: this.buildCustomerName(lead),
+          },
+          ipAddress: null,
+          userAgent: null,
+        }),
+      );
+
+      return {
+        lead: savedLead,
+        customer,
+        customerCreated,
+        matchedBy: duplicate.matchedBy,
+      };
+    });
+
+    this.logger.log(
+      `Converted lead ${id} to customer ${result.customer.id} (customer created: ${result.customerCreated})`,
+    );
+
+    return {
+      ...result,
+      message: result.customerCreated
+        ? `Lead '${id}' has been converted to new customer '${result.customer.id}'`
+        : `Lead '${id}' has been converted to existing customer '${result.customer.id}'`,
+    };
+  }
+
+  private async findDuplicateCustomer(
+    customerRepository: Repository<Customer>,
+    lead: Lead,
+  ): Promise<{
+    customer: Customer | null;
+    matchedBy: CustomerMatchSource | null;
+  }> {
+    const normalizedEmail = lead.email.trim().toLowerCase();
+
+    const byEmail = await customerRepository.find({
+      where: { email: normalizedEmail },
+      order: { createdAt: 'ASC' },
+      take: 2,
+    });
+    this.assertNoAmbiguousDuplicates(byEmail, `email '${normalizedEmail}'`);
+
+    if (byEmail.length === 1) {
+      return { customer: byEmail[0], matchedBy: 'EMAIL' };
+    }
+
+    const phone = lead.phone?.trim();
+    if (phone) {
+      const byPhone = await customerRepository.find({
+        where: { phone },
+        order: { createdAt: 'ASC' },
+        take: 2,
+      });
+      this.assertNoAmbiguousDuplicates(byPhone, `phone '${phone}'`);
+
+      if (byPhone.length === 1) {
+        return { customer: byPhone[0], matchedBy: 'PHONE' };
+      }
+    }
+
+    return { customer: null, matchedBy: null };
+  }
+
+  private assertNoAmbiguousDuplicates(
+    customers: Customer[],
+    criteria: string,
+  ): void {
+    if (customers.length > 1) {
+      throw new ConflictException(
+        `Duplicate customer data detected for ${criteria} (IDs: ${customers
+          .map((customer) => customer.id)
+          .join(
+            ', ',
+          )}). Resolve duplicate customers before converting the lead`,
+      );
+    }
+  }
+
+  private buildCustomerName(lead: Lead): string {
+    const fullName = [lead.firstName, lead.lastName]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+
+    return fullName || lead.email.trim();
   }
 
   // --- Lead Sources Management ---
