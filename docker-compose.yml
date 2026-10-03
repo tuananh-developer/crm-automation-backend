@@ -9,16 +9,18 @@ services:
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_DB: ${DB_NAME:-crm_backend}
+      N8N_DB_NAME: ${N8N_DB_NAME:-crm_db}
 
     ports:
       - '${DB_PORT:-5432}:5432'
 
     volumes:
       - pgdata:/var/lib/postgresql
+      - ./docker/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
 
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER} -d ${DB_NAME}']
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER} -d ${DB_NAME:-crm_backend}']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -58,7 +60,7 @@ services:
       - TZ=Asia/Ho_Chi_Minh
 
       - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_DATABASE=${DB_NAME}
+      - DB_POSTGRESDB_DATABASE=${N8N_DB_NAME:-crm_db}
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_USER=${DB_USER}
