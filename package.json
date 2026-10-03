@@ -23,7 +23,9 @@
     "migration:revert": "pnpm build && node --env-file=.env -e 'import(\"./dist/data-source.js\").then(async ({ AppDataSource }) => { await AppDataSource.initialize(); await AppDataSource.undoLastMigration(); console.log(\"Last migration reverted\"); await AppDataSource.destroy(); process.exit(0); }).catch(e => { console.error(e); process.exit(1); })'",
     "migration:generate": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:generate -d src/data-source.ts",
     "migration:create": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:create",
-    "migration:show": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/data-source.ts"
+    "migration:show": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/data-source.ts",
+    "seed": "pnpm build && node --env-file=.env dist/database/seeds/seed.js",
+    "seed:fresh": "pnpm build && node --env-file=.env dist/database/seeds/seed.js --fresh"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.3",
@@ -52,7 +54,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",
     "@eslint/js": "^10.0.1",
-    "@nestjs/cli": "^12.0.3",
+    "@nestjs/cli": "^10.4.9",
     "@nestjs/schematics": "^12.0.3",
     "@nestjs/testing": "^12.0.3",
     "@types/amqplib": "^0.10.8",
@@ -80,11 +82,20 @@
     "typescript-eslint": "^8.70.0"
   },
   "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": ["ts-jest", { "tsconfig": "tsconfig.jest.json" }]
+      "^.+\\.(t|j)s$": [
+        "ts-jest",
+        {
+          "tsconfig": "tsconfig.jest.json"
+        }
+      ]
     },
     "moduleNameMapper": {
       "^(\\.{1,2}/.*)\\.js$": "$1"
@@ -92,7 +103,9 @@
     "transformIgnorePatterns": [
       "node_modules/(?!(@nestjs)/)"
     ],
-    "collectCoverageFrom": ["**/*.(t|j)s"],
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
   },
