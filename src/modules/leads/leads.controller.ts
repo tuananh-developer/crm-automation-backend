@@ -20,7 +20,12 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { LeadsService } from './leads.service.js';
-import { CreateLeadDto, QueryLeadDto, UpdateLeadDto } from './dto/index.js';
+import {
+  ConvertLeadDto,
+  CreateLeadDto,
+  QueryLeadDto,
+  UpdateLeadDto,
+} from './dto/index.js';
 
 @ApiTags('Leads')
 @Controller('leads')
@@ -88,6 +93,34 @@ export class LeadsController {
     @Body() updateLeadDto: UpdateLeadDto,
   ) {
     return this.leadsService.update(id, updateLeadDto);
+  }
+
+  @Post(':id/convert')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Convert a qualified lead into a customer (UC08)',
+    description:
+      'Chuyển đổi lead đạt chuẩn (QUALIFIED) thành Customer, chống trùng lặp và ghi nhận audit log.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'UUID của lead cần convert',
+    format: 'uuid',
+  })
+  @ApiBody({ type: ConvertLeadDto })
+  @ApiResponse({ status: 201, description: 'Chuyển đổi lead thành công.' })
+  @ApiResponse({ status: 400, description: 'Lead không ở trạng thái QUALIFIED.' })
+  @ApiResponse({ status: 404, description: 'Lead hoặc User không tồn tại.' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Lead đã được chuyển đổi trước đó hoặc trùng lặp khách hàng mơ hồ.',
+  })
+  convert(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() convertLeadDto: ConvertLeadDto,
+  ) {
+    return this.leadsService.convert(id, convertLeadDto);
   }
 
   @Delete(':id')
