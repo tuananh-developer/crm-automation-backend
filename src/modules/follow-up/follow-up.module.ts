@@ -7,8 +7,13 @@ import { FollowUpExecution } from './entities/follow-up-execution.entity.js';
 import { Lead } from '../leads/entities/lead.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { Interaction } from '../leads/entities/interaction.entity.js';
+import { Customer } from '../customers/entities/customer.entity.js';
+import { AuditLog } from '../audit/entities/audit-log.entity.js';
+import { N8nModule } from '../../infrastructure/n8n/n8n.module.js';
 import { SequencesController } from './sequences.controller.js';
 import { SequencesService } from './sequences.service.js';
+import { FollowUpController } from './follow-up.controller.js';
+import { FollowUpService } from './follow-up.service.js';
 
 @Module({
   imports: [
@@ -20,10 +25,13 @@ import { SequencesService } from './sequences.service.js';
       Lead,
       User,
       Interaction,
+      Customer,
+      AuditLog,
     ]),
+    N8nModule,
   ],
-  controllers: [SequencesController],
-  providers: [SequencesService],
-  exports: [SequencesService, TypeOrmModule],
+  controllers: [SequencesController, FollowUpController],
+  providers: [SequencesService, FollowUpService],
+  exports: [SequencesService, FollowUpService, TypeOrmModule],
 })
 export class FollowUpModule {}

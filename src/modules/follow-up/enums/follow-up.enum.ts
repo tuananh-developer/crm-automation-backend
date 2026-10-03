@@ -18,5 +18,6 @@ export enum ExecutionStatus {
   RUNNING = 'RUNNING',
   SUCCESS = 'SUCCESS',
   FAILED = 'FAILED',
+  RETRYING = 'RETRYING',
   SKIPPED = 'SKIPPED',
 }
