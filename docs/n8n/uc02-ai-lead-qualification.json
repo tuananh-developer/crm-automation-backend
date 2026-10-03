@@ -1,57 +1,119 @@
 {
-  "name": "UC02 - AI Lead Qualification Workflow",
+  "name": "UC02 - AI Lead Qualification Engine (Enterprise Edition)",
   "nodes": [
     {
       "parameters": {
-        "queue": "crm_automation_queue",
+        "content": "## 📥 1. EVENT INGESTION & ROUTING\nLắng nghe hàng đợi RabbitMQ, chuẩn hóa payload (hỗ trợ buffer, string, json) và phân loại sự kiện.",
+        "height": 480,
+        "width": 620,
+        "color": 4
+      },
+      "id": "sticky_ingestion",
+      "name": "Sticky Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [60, 120]
+    },
+    {
+      "parameters": {
+        "content": "## 🧠 2. DATA ENRICHMENT & GEMINI 1.5 PRO\nLấy thông tin Lead từ NestJS API và gọi Google Gemini 1.5 Pro phân tích theo chuẩn B2B ICP & BANT.",
+        "height": 300,
+        "width": 680,
+        "color": 6
+      },
+      "id": "sticky_ai",
+      "name": "Sticky Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [720, 120]
+    },
+    {
+      "parameters": {
+        "content": "## ⚖️ 3. BUSINESS RULES & CRM SYNC\nÁp dụng quy tắc Confidence >= 0.80 tự động duyệt, < 0.80 tạo Review Task; đồng bộ callback về Backend.",
+        "height": 300,
+        "width": 660,
+        "color": 2
+      },
+      "id": "sticky_decision",
+      "name": "Sticky Note 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1440, 120]
+    },
+    {
+      "parameters": {
+        "content": "## 🛡️ 4. AUDIT & EXCEPTION GUARD\nChủ động ghi log sự kiện không thuộc diện thẩm định AI mà không làm gián đoạn hàng đợi hay tốn chi phí token.",
+        "height": 220,
+        "width": 560,
+        "color": 5
+      },
+      "id": "sticky_guard",
+      "name": "Sticky Note 4",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [720, 440]
+    },
+    {
+      "parameters": {
+        "queue": "crm_events_queue",
         "options": {
           "arguments": {}
         }
       },
       "id": "1",
-      "name": "RabbitMQ Trigger",
+      "name": "📥 RabbitMQ Ingestion",
       "type": "n8n-nodes-base.rabbitmqTrigger",
       "typeVersion": 1,
-      "position": [180, 300]
+      "position": [100, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Robust Payload Normalizer: handles buffer, raw string, or parsed JSON\nconst raw = $input.first().json;\nlet payload = {};\n\nif (raw.content) {\n  if (typeof raw.content === 'string') {\n    try {\n      payload = JSON.parse(raw.content);\n    } catch (e) {\n      payload = { text: raw.content };\n    }\n  } else if (typeof raw.content === 'object') {\n    payload = raw.content;\n  }\n} else {\n  payload = raw;\n}\n\nconst eventType = payload.eventType || raw.eventType || raw.fields?.routingKey || 'unknown';\nconst data = payload.data || payload;\nconst leadId = data.leadId || payload.leadId || null;\nconst workflowRunId = data.workflowRunId || payload.workflowRunId || null;\n\n// Qualification is targeted when eventType matches or leadId is explicitly provided\nconst isQualificationEvent = eventType === 'lead.qualification.requested' || (!payload.eventType && !!leadId);\nconst isValid = !!leadId && isQualificationEvent;\n\nreturn [{\n  json: {\n    eventId: payload.eventId || 'evt-' + Date.now(),\n    eventType,\n    leadId,\n    workflowRunId,\n    isQualificationEvent,\n    isValid,\n    routingStatus: isValid ? 'ROUTE_TO_AI' : 'SKIP_NON_QUALIFICATION',\n    receivedAt: new Date().toISOString(),\n    rawPayload: payload\n  }\n}];"
+      },
+      "id": "2",
+      "name": "⚙️ Normalize Event Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 320]
     },
     {
       "parameters": {
         "conditions": {
-          "string": [
+          "boolean": [
             {
-              "value1": "={{ $json.data ? $json.data.leadId : '' }}",
-              "operation": "isNotEmpty"
+              "value1": "={{ $json.isValid }}",
+              "value2": true
             }
           ]
         }
       },
-      "id": "2",
-      "name": "Validate Event",
+      "id": "3",
+      "name": "⚖️ Is Qualification Request?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [380, 300]
+      "position": [500, 320]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://crm_backend:3000') + '/api/v1/leads/' + $json.data.leadId }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/leads/' + $json.leadId }}",
         "method": "GET",
         "options": {}
       },
-      "id": "3",
-      "name": "Get Lead from NestJS API",
+      "id": "4",
+      "name": "🔍 Fetch Lead Profile",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [580, 280]
+      "position": [760, 240]
     },
     {
       "parameters": {
-        "jsCode": "const lead = $input.first().json;\nconst triggerData = $('RabbitMQ Trigger').first().json.data || {};\n\nconst prompt = `\nYou are an expert B2B Lead Qualification AI. Evaluate the following lead:\n\nName: ${lead.firstName} ${lead.lastName || ''}\nEmail: ${lead.email}\nCompany: ${lead.companyName || 'Not specified'}\nWebsite: ${lead.companyWebsite || 'Not specified'}\nJob Title: ${lead.jobTitle || 'Not specified'}\nIndustry: ${lead.industry || 'Not specified'}\nCompany Size: ${lead.companySize || 'Not specified'}\nNotes: ${lead.notes || 'None'}\n\nDecision Rule:\n- Confidence score must be between 0.00 and 1.00.\n- If confidence >= 0.80, status can be QUALIFIED or DISQUALIFIED.\n- If confidence < 0.80 or data is highly ambiguous, status should be NEEDS_REVIEW with reviewRequired=true.\n\nRespond ONLY with a valid JSON object in this exact schema:\n{\n  \"qualification\": \"QUALIFIED\" | \"DISQUALIFIED\" | \"NEEDS_REVIEW\",\n  \"confidence\": 0.85,\n  \"intent\": \"Brief intent summary\",\n  \"reason\": \"Detailed explanation\",\n  \"nextAction\": \"Recommended next sales step\",\n  \"reviewRequired\": false\n}\n`;\n\nreturn [{\n  json: {\n    leadId: lead.id,\n    workflowRunId: triggerData.workflowRunId || null,\n    leadSnapshot: lead,\n    prompt\n  }\n}];"
+        "jsCode": "const lead = $input.first().json;\nconst meta = $('⚙️ Normalize Event Payload').first().json;\n\nconst prompt = `\nYou are an enterprise B2B Lead Qualification AI Assistant for a CRM Automation platform.\nEvaluate the following incoming lead using B2B ICP (Ideal Customer Profile) and BANT framework:\n\nContact: ${lead.firstName} ${lead.lastName || ''}\nEmail: ${lead.email}\nPhone: ${lead.phone || 'N/A'}\nCompany: ${lead.companyName || 'Not specified'}\nWebsite: ${lead.companyWebsite || 'Not specified'}\nJob Title: ${lead.jobTitle || 'Not specified'}\nIndustry: ${lead.industry || 'Not specified'}\nCompany Size: ${lead.companySize || 'Not specified'}\nNotes: ${lead.notes || 'None'}\n\nEvaluation Rules:\n1. Qualification Status must be one of: \"QUALIFIED\", \"DISQUALIFIED\", \"NEEDS_REVIEW\".\n2. Confidence score must be a number between 0.00 and 1.00.\n3. If decision maker level (Director, Manager, C-level) and company size > 10, confidence >= 0.85.\n4. If personal email (gmail/yahoo) or missing company, confidence should be lower and set reviewRequired to true.\n\nRespond ONLY in this exact JSON schema:\n{\n  \"qualification\": \"QUALIFIED\" | \"DISQUALIFIED\" | \"NEEDS_REVIEW\",\n  \"confidence\": 0.90,\n  \"intent\": \"Brief summary of customer purchase intent\",\n  \"reason\": \"Detailed rationale behind this evaluation\",\n  \"nextAction\": \"Actionable recommended sales step\",\n  \"reviewRequired\": false\n}\n`;\n\nreturn [{\n  json: {\n    leadId: lead.id,\n    workflowRunId: meta.workflowRunId,\n    leadProfile: lead,\n    prompt\n  }\n}];"
       },
-      "id": "4",
-      "name": "Prepare AI Input",
+      "id": "5",
+      "name": "🧠 Synthesize B2B Prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [780, 280]
+      "position": [980, 240]
     },
     {
       "parameters": {
@@ -70,99 +132,148 @@
         "specifyBody": "json",
         "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": {{ JSON.stringify($json.prompt) }}\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.2,\n    \"responseMimeType\": \"application/json\"\n  }\n}"
       },
-      "id": "5",
-      "name": "Gemini AI Qualification",
+      "id": "6",
+      "name": "🤖 Gemini 1.5 Pro AI",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [980, 280]
+      "position": [1200, 240]
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json;\nconst prep = $('Prepare AI Input').first().json;\n\nlet aiOutput;\ntry {\n  const content = response.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n  aiOutput = JSON.parse(content);\n} catch (err) {\n  aiOutput = {\n    qualification: 'NEEDS_REVIEW',\n    confidence: 0.5,\n    intent: 'Failed to parse AI output',\n    reason: 'Raw response format invalid',\n    nextAction: 'Manual review required',\n    reviewRequired: true\n  };\n}\n\nconst confidence = typeof aiOutput.confidence === 'number' ? aiOutput.confidence : 0.5;\nconst reviewRequired = confidence < 0.80 || aiOutput.qualification === 'NEEDS_REVIEW' || aiOutput.reviewRequired === true;\n\nreturn [{\n  json: {\n    leadId: prep.leadId,\n    workflowRunId: prep.workflowRunId,\n    status: aiOutput.qualification || 'NEEDS_REVIEW',\n    intent: aiOutput.intent || null,\n    confidence: Math.min(1, Math.max(0, confidence)),\n    reason: aiOutput.reason || null,\n    nextAction: aiOutput.nextAction || null,\n    reviewRequired,\n    modelProvider: 'google',\n    modelName: $env.GEMINI_MODEL || 'gemini-1.5-pro',\n    modelVersion: 'v1beta',\n    inputSnapshot: prep.leadSnapshot,\n    outputSnapshot: aiOutput\n  }\n}];"
+        "jsCode": "const response = $input.first().json;\nconst prep = $('🧠 Synthesize B2B Prompt').first().json;\n\nlet aiOutput;\ntry {\n  const content = response.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n  aiOutput = JSON.parse(content);\n} catch (err) {\n  aiOutput = {\n    qualification: 'NEEDS_REVIEW',\n    confidence: 0.50,\n    intent: 'Failed to parse AI structured response',\n    reason: 'Model output did not conform to JSON specification',\n    nextAction: 'Manual sales inspection required',\n    reviewRequired: true\n  };\n}\n\nconst confidence = typeof aiOutput.confidence === 'number' ? aiOutput.confidence : 0.50;\nconst reviewRequired = confidence < 0.80 || aiOutput.qualification === 'NEEDS_REVIEW' || aiOutput.reviewRequired === true;\n\nreturn [{\n  json: {\n    leadId: prep.leadId,\n    workflowRunId: prep.workflowRunId,\n    status: aiOutput.qualification || 'NEEDS_REVIEW',\n    intent: aiOutput.intent || 'B2B CRM Consultation',\n    confidence: Math.min(1, Math.max(0, confidence)),\n    reason: aiOutput.reason || 'AI automated assessment',\n    nextAction: aiOutput.nextAction || 'Contact prospect',\n    reviewRequired,\n    modelProvider: 'google',\n    modelName: $env.GEMINI_MODEL || 'gemini-1.5-pro',\n    modelVersion: 'v1beta',\n    inputSnapshot: prep.leadProfile,\n    outputSnapshot: aiOutput,\n    evaluatedAt: new Date().toISOString()\n  }\n}];"
       },
-      "id": "6",
-      "name": "Validate Structured Output & Confidence Rule",
+      "id": "7",
+      "name": "📊 Evaluate Confidence Gate",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1180, 280]
+      "position": [1480, 240]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://crm_backend:3000') + '/api/v1/lead-intelligence/qualification/callback' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/lead-intelligence/qualification/callback' }}",
         "method": "POST",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json) }}",
         "options": {}
       },
-      "id": "7",
-      "name": "Callback NestJS API",
+      "id": "8",
+      "name": "🚀 Callback NestJS API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1380, 280]
+      "position": [1720, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const callbackRes = $input.first().json;\nconst decision = $('📊 Evaluate Confidence Gate').first().json;\n\nreturn [{\n  json: {\n    auditStatus: 'QUALIFICATION_SUCCESS',\n    leadId: decision.leadId,\n    assignedStatus: decision.status,\n    confidenceScore: decision.confidence,\n    requiresHumanReview: decision.reviewRequired,\n    model: decision.modelName,\n    completedAt: new Date().toISOString(),\n    backendResponse: callbackRes\n  }\n}];"
+      },
+      "id": "9",
+      "name": "✅ Audit: Succeeded",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1940, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const meta = $('⚙️ Normalize Event Payload').first().json;\n\nreturn [{\n  json: {\n    auditStatus: 'EVENT_SKIPPED_SAFELY',\n    eventId: meta.eventId,\n    receivedEventType: meta.eventType,\n    leadId: meta.leadId || 'N/A',\n    reason: meta.leadId ? `Event type '${meta.eventType}' does not trigger AI Qualification (targeted only for 'lead.qualification.requested')` : 'Payload missing leadId identifier.',\n    actionTaken: 'Safely acknowledged and dropped without consuming LLM API tokens',\n    loggedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "10",
+      "name": "📋 Audit: Event Skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 520]
     }
   ],
   "connections": {
-    "RabbitMQ Trigger": {
+    "📥 RabbitMQ Ingestion": {
       "main": [
         [
           {
-            "node": "Validate Event",
+            "node": "⚙️ Normalize Event Payload",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Validate Event": {
+    "⚙️ Normalize Event Payload": {
       "main": [
         [
           {
-            "node": "Get Lead from NestJS API",
+            "node": "⚖️ Is Qualification Request?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Get Lead from NestJS API": {
+    "⚖️ Is Qualification Request?": {
       "main": [
         [
           {
-            "node": "Prepare AI Input",
+            "node": "🔍 Fetch Lead Profile",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📋 Audit: Event Skipped",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Prepare AI Input": {
+    "🔍 Fetch Lead Profile": {
       "main": [
         [
           {
-            "node": "Gemini AI Qualification",
+            "node": "🧠 Synthesize B2B Prompt",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Gemini AI Qualification": {
+    "🧠 Synthesize B2B Prompt": {
       "main": [
         [
           {
-            "node": "Validate Structured Output & Confidence Rule",
+            "node": "🤖 Gemini 1.5 Pro AI",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Validate Structured Output & Confidence Rule": {
+    "🤖 Gemini 1.5 Pro AI": {
       "main": [
         [
           {
-            "node": "Callback NestJS API",
+            "node": "📊 Evaluate Confidence Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Evaluate Confidence Gate": {
+      "main": [
+        [
+          {
+            "node": "🚀 Callback NestJS API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚀 Callback NestJS API": {
+      "main": [
+        [
+          {
+            "node": "✅ Audit: Succeeded",
             "type": "main",
             "index": 0
           }
