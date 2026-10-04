@@ -21,6 +21,8 @@ import type {
   LeadCreatedEventData,
   LeadQualificationRequestedEventData,
   LeadEnrichmentRequestedEventData,
+  LeadScoringRequestedEventData,
+  FollowUpTriggeredEventData,
 } from './rabbitmq.interface.js';
 
 @Injectable()
@@ -169,6 +171,24 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
   ): Promise<CrmEvent<LeadEnrichmentRequestedEventData>> {
     return this.publishEvent<LeadEnrichmentRequestedEventData>(
       CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
+      data,
+    );
+  }
+
+  async publishLeadScoringRequested(
+    data: LeadScoringRequestedEventData,
+  ): Promise<CrmEvent<LeadScoringRequestedEventData>> {
+    return this.publishEvent<LeadScoringRequestedEventData>(
+      CRM_EVENTS.LEAD_SCORING_REQUESTED,
+      data,
+    );
+  }
+
+  async publishFollowUpTriggered(
+    data: FollowUpTriggeredEventData,
+  ): Promise<CrmEvent<FollowUpTriggeredEventData>> {
+    return this.publishEvent<FollowUpTriggeredEventData>(
+      CRM_EVENTS.FOLLOW_UP_TRIGGERED,
       data,
     );
   }
