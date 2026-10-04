@@ -104,10 +104,10 @@ export class SegmentsService {
           where: { segmentId: segment.id },
         });
 
-        return {
+        return this.withoutUserHashes({
           ...segment,
           customerCount,
-        };
+        });
       }),
     );
 
@@ -139,10 +139,10 @@ export class SegmentsService {
       where: { segmentId: id },
     });
 
-    return {
+    return this.withoutUserHashes({
       ...segment,
       customerCount,
-    };
+    });
   }
 
   async update(id: string, dto: UpdateSegmentDto): Promise<Segment> {
@@ -397,6 +397,29 @@ export class SegmentsService {
       processed: customers.length,
       matched,
       message: `Evaluated ${customers.length} customer(s)`,
+    };
+  }
+
+  /**
+   * `creator` / `updater` are User relations; their password hash must never
+   * leave the API.
+   */
+  private withoutUserHashes<
+    T extends { creator?: User | null; updater?: User | null },
+  >(segment: T): T {
+    const strip = (user?: User | null) => {
+      if (!user) return user;
+
+      const { passwordHash, ...safeUser } = user;
+      void passwordHash;
+
+      return safeUser as User;
+    };
+
+    return {
+      ...segment,
+      creator: strip(segment.creator),
+      updater: strip(segment.updater),
     };
   }
 

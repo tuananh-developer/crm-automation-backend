@@ -7,6 +7,8 @@ import { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { SegmentsService } from './segments.service.js';
 import { SegmentsController } from './segments.controller.js';
+import { CustomersService } from './customers.service.js';
+import { CustomersController } from './customers.controller.js';
 
 @Module({
   imports: [
@@ -18,8 +20,8 @@ import { SegmentsController } from './segments.controller.js';
       User,
     ]),
   ],
-  controllers: [SegmentsController],
-  providers: [SegmentsService],
-  exports: [TypeOrmModule, SegmentsService],
+  controllers: [SegmentsController, CustomersController],
+  providers: [SegmentsService, CustomersService],
+  exports: [TypeOrmModule, SegmentsService, CustomersService],
 })
 export class CustomersModule {}
