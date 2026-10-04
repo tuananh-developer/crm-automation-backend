@@ -57,9 +57,9 @@ export class LeadIntelligenceService {
     private readonly notificationsRepository: Repository<Notification>,
     private readonly rabbitmqService: RabbitMQService,
     @InjectRepository(LeadScore)
-    private readonly scoresRepository?: Repository<LeadScore>,
+    private readonly scoresRepository: Repository<LeadScore>,
     @InjectRepository(Interaction)
-    private readonly interactionsRepository?: Repository<Interaction>,
+    private readonly interactionsRepository: Repository<Interaction>,
   ) {}
 
   async triggerQualification(

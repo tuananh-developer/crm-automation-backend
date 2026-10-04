@@ -17,6 +17,8 @@ import { ReviewStatus } from '../review/enums/review.enum.js';
 import type { Repository } from 'typeorm';
 import type { LeadQualification } from './entities/lead-qualification.entity.js';
 import type { LeadEnrichment } from './entities/lead-enrichment.entity.js';
+import type { LeadScore } from './entities/lead-score.entity.js';
+import type { Interaction } from '../interactions/entities/interaction.entity.js';
 import type { Lead } from '../leads/entities/lead.entity.js';
 import type { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import type { ReviewTask } from '../review/entities/review-task.entity.js';
@@ -27,6 +29,8 @@ describe('LeadIntelligenceService', () => {
   let service: LeadIntelligenceService;
   let qualificationsRepo: jest.Mocked<Partial<Repository<LeadQualification>>>;
   let enrichmentsRepo: jest.Mocked<Partial<Repository<LeadEnrichment>>>;
+  let scoresRepo: jest.Mocked<Partial<Repository<LeadScore>>>;
+  let interactionsRepo: jest.Mocked<Partial<Repository<Interaction>>>;
   let leadsRepo: jest.Mocked<Partial<Repository<Lead>>>;
   let workflowRunsRepo: jest.Mocked<Partial<Repository<WorkflowRun>>>;
   let reviewTasksRepo: jest.Mocked<Partial<Repository<ReviewTask>>>;
@@ -163,6 +167,17 @@ describe('LeadIntelligenceService', () => {
       }),
     };
 
+    scoresRepo = {
+      create: jest.fn(),
+      save: jest.fn(),
+      find: jest.fn(),
+      findOne: jest.fn(),
+    };
+
+    interactionsRepo = {
+      find: jest.fn(),
+    };
+
     service = new LeadIntelligenceService(
       qualificationsRepo as Repository<LeadQualification>,
       enrichmentsRepo as Repository<LeadEnrichment>,
@@ -171,6 +186,8 @@ describe('LeadIntelligenceService', () => {
       reviewTasksRepo as Repository<ReviewTask>,
       notificationsRepo as Repository<Notification>,
       rabbitmqService as RabbitMQService,
+      scoresRepo,
+      interactionsRepo,
     );
   });
 
