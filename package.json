@@ -101,7 +101,7 @@
       "^(\\.{1,2}/.*)\\.js$": "$1"
     },
     "transformIgnorePatterns": [
-      "node_modules/(?!(@nestjs)/)"
+      "node_modules/(?!(\\.pnpm|@nestjs)/)"
     ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"

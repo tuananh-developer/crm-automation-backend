@@ -14,3 +14,12 @@ export interface LeadQualificationRequestedEventData {
   leadId: string;
   workflowRunId?: string;
 }
+
+export interface LeadEnrichmentRequestedEventData {
+  leadId: string;
+  workflowRunId: string;
+  provider: string;
+  email?: string;
+  companyName?: string;
+  companyWebsite?: string;
+}

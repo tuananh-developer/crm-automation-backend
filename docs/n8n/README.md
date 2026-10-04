@@ -7,7 +7,7 @@ Thư mục này chứa các workflow JSON của **n8n** để chạy tự độn
 | File | Use Case | Mô tả | Trạng thái |
 |---|---|---|---|
 | [`uc02-ai-lead-qualification.json`](./uc02-ai-lead-qualification.json) | **UC02 - AI Lead Qualification** | Lắng nghe event RabbitMQ `lead.qualification.requested`, lấy dữ liệu Lead từ NestJS API, gọi LLM phân tích B2B ICP & intent, áp dụng quy tắc confidence (>= 0.80 tự động duyệt, < 0.80 tạo Review Task), gọi callback về NestJS. | ✅ Hoàn thành (Mẫu chuẩn) |
-| `uc03-ai-lead-enrichment.json` | **UC03 - AI Lead Enrichment** | Làm giàu thông tin công ty từ domain/email qua external API. (Member 2 phụ trách) | ⏳ Sắp làm |
+| [`uc03-ai-lead-enrichment.json`](./uc03-ai-lead-enrichment.json) | **UC03 - AI Lead Enrichment** | Lắng nghe event RabbitMQ `lead.enrichment.requested`, lấy Lead từ API, chuẩn hóa email/domain, gọi service enrichment (với retry & timeout), chuẩn hóa và kiểm tra kết quả, gọi callback về NestJS lưu dữ liệu làm giàu và cập nhật Lead & WorkflowRun. | ✅ Hoàn thành |
 | `uc04-ai-lead-scoring.json` | **UC04 - AI Lead Scoring** | Chấm điểm Lead từ 0 - 100, gắn nhãn HOT/WARM/COLD. (Member 2 phụ trách) | ⏳ Sắp làm |
 | `uc06-follow-up-execution.json` | **UC06 - Execute Follow-up** | Gửi email/tin nhắn theo kịch bản và theo dõi tiến trình. (Member 3 phụ trách) | ⏳ Sắp làm |
 | `uc09-customer-segmentation.json` | **UC09 - Customer Segmentation** | Phân loại và gán segment cho khách hàng theo tiêu chí. (Member 3 phụ trách) | ⏳ Sắp làm |

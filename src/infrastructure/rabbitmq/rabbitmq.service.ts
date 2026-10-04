@@ -20,6 +20,7 @@ import type {
   CrmEvent,
   LeadCreatedEventData,
   LeadQualificationRequestedEventData,
+  LeadEnrichmentRequestedEventData,
 } from './rabbitmq.interface.js';
 
 @Injectable()
@@ -58,7 +59,7 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
             durable: true,
           });
           await channel.assertQueue(queueName, { durable: true });
-          await channel.bindQueue(queueName, CRM_EXCHANGE, 'lead.*');
+          await channel.bindQueue(queueName, CRM_EXCHANGE, 'lead.#');
           this.logger.log(
             `Exchange '${CRM_EXCHANGE}' and queue '${queueName}' asserted and bound`,
           );
@@ -126,12 +127,10 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
 
     if (this.channelWrapper) {
       try {
-        await this.channelWrapper.publish(
-          CRM_EXCHANGE,
-          eventType,
-          Buffer.from(JSON.stringify(event)),
-          { persistent: true, contentType: 'application/json' },
-        );
+        await this.channelWrapper.publish(CRM_EXCHANGE, eventType, event, {
+          persistent: true,
+          contentType: 'application/json',
+        });
         this.logger.log(
           `Event '${eventType}' published successfully (ID: ${event.eventId})`,
         );
@@ -161,6 +160,15 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
   ): Promise<CrmEvent<LeadQualificationRequestedEventData>> {
     return this.publishEvent<LeadQualificationRequestedEventData>(
       CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED,
+      data,
+    );
+  }
+
+  async publishLeadEnrichmentRequested(
+    data: LeadEnrichmentRequestedEventData,
+  ): Promise<CrmEvent<LeadEnrichmentRequestedEventData>> {
+    return this.publishEvent<LeadEnrichmentRequestedEventData>(
+      CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
       data,
     );
   }

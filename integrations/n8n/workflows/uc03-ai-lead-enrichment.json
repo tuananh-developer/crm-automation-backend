@@ -1,0 +1,193 @@
+{
+  "name": "UC03 - AI Lead Enrichment Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "queue": "crm_events_queue",
+        "options": {
+          "arguments": {}
+        }
+      },
+      "id": "1",
+      "name": "RabbitMQ Trigger",
+      "type": "n8n-nodes-base.rabbitmqTrigger",
+      "typeVersion": 1,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nlet payload = {};\n\nif (item.content) {\n  try {\n    payload = typeof item.content === 'string' ? JSON.parse(item.content) : item.content;\n  } catch (err) {\n    payload = {};\n  }\n} else {\n  payload = item;\n}\n\nconst routingKey = item.fields?.routingKey || payload.eventType || '';\nconst data = payload.data || {};\nconst leadId = data.leadId || payload.leadId || null;\nconst workflowRunId = data.workflowRunId || payload.workflowRunId || null;\nconst eventType = payload.eventType || routingKey || '';\n\nreturn [{\n  json: {\n    eventId: payload.eventId || null,\n    eventType,\n    routingKey,\n    data,\n    leadId,\n    workflowRunId,\n    provider: data.provider || payload.provider || 'mock',\n    email: data.email || payload.email || null,\n    companyName: data.companyName || payload.companyName || null,\n    companyWebsite: data.companyWebsite || payload.companyWebsite || null,\n    rawEvent: payload\n  }\n}];"
+      },
+      "id": "2",
+      "name": "Parse Event Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [380, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.leadId ? $json.leadId : '' }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "3",
+      "name": "Filter Enrichment Event",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [580, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:3000/api/v1/leads/' + $json.leadId }}",
+        "method": "GET",
+        "options": {}
+      },
+      "id": "4",
+      "name": "Get Lead from NestJS API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [780, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $input.first().json;\nconst parsedEvent = $('Parse Event Payload').first().json || {};\nconst triggerData = parsedEvent.data || {};\n\nconst rawEmail = (lead.email || parsedEvent.email || triggerData.email || '').trim().toLowerCase();\nlet emailDomain = '';\nif (rawEmail.includes('@')) {\n  emailDomain = rawEmail.split('@')[1];\n}\n\nconst freeEmailProviders = new Set([\n  'gmail.com',\n  'yahoo.com',\n  'hotmail.com',\n  'outlook.com',\n  'live.com',\n  'icloud.com',\n  'mail.com',\n  'aol.com'\n]);\nconst isFreeEmail = freeEmailProviders.has(emailDomain);\n\nlet websiteDomain = '';\nconst rawWebsite = (lead.companyWebsite || parsedEvent.companyWebsite || triggerData.companyWebsite || '').trim();\nif (rawWebsite) {\n  websiteDomain = rawWebsite\n    .replace(/^https?:\\/\\//i, '')\n    .replace(/^www\\./i, '')\n    .split('/')[0]\n    .split('?')[0]\n    .toLowerCase();\n}\n\nconst targetDomain = websiteDomain || (!isFreeEmail ? emailDomain : '');\nconst fallbackCompanyName = targetDomain\n  ? targetDomain.split('.')[0].charAt(0).toUpperCase() + targetDomain.split('.')[0].slice(1)\n  : 'Unknown Company';\n\nconst companyName = (lead.companyName || parsedEvent.companyName || triggerData.companyName || fallbackCompanyName).trim();\nconst provider = parsedEvent.provider || triggerData.provider || 'mock';\n\nreturn [{\n  json: {\n    leadId: lead.id,\n    workflowRunId: parsedEvent.workflowRunId || triggerData.workflowRunId || null,\n    provider,\n    email: rawEmail,\n    emailDomain,\n    isFreeEmail,\n    domain: targetDomain || 'enterprise.com',\n    companyName,\n    jobTitle: lead.jobTitle || null,\n    leadSnapshot: lead\n  }\n}];"
+      },
+      "id": "5",
+      "name": "Normalize Email & Domain",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 280]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:3000/api/v1/lead-intelligence/mock-enrichment?domain=' + encodeURIComponent($json.domain) + '&email=' + encodeURIComponent($json.email) + '&provider=' + encodeURIComponent($json.provider) }}",
+        "method": "GET",
+        "options": {
+          "retry": {
+            "maxTries": 3,
+            "waitBetweenTries": 2000
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "6",
+      "name": "Call External Enrichment Service",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "continueOnFail": true,
+      "position": [1180, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst prep = $('Normalize Email & Domain').first().json;\n\n// Check if HTTP request failed\nif (response.error || response.statusCode >= 400) {\n  const errMsg = response.error?.message || response.message || 'External enrichment service call failed after retries';\n  return [{\n    json: {\n      leadId: prep.leadId,\n      workflowRunId: prep.workflowRunId,\n      status: 'FAILED',\n      provider: prep.provider,\n      externalRequestId: null,\n      companyName: null,\n      companyWebsite: null,\n      companyIndustry: null,\n      companySize: null,\n      contactJobTitle: null,\n      contactLinkedinUrl: null,\n      rawResponse: response,\n      errorMessage: errMsg\n    }\n  }];\n}\n\n// Handle standard enrichment response schema\nconst company = response.company || {};\nconst contact = response.contact || {};\nconst enrichedCompanyName = company.name || response.companyName || prep.companyName || null;\nconst enrichedCompanyWebsite = company.website || response.companyWebsite || (prep.domain ? `https://${prep.domain}` : null);\nconst enrichedIndustry = company.industry || response.industry || response.companyIndustry || null;\nconst enrichedCompanySize = typeof company.size === 'number' ? company.size : (typeof response.companySize === 'number' ? response.companySize : null);\nconst enrichedJobTitle = contact.jobTitle || response.contactJobTitle || prep.jobTitle || null;\nconst enrichedLinkedinUrl = contact.linkedinUrl || response.contactLinkedinUrl || null;\n\nconst hasFullCompanyData = Boolean(enrichedCompanyName && enrichedIndustry && enrichedCompanySize);\nconst status = hasFullCompanyData ? 'SUCCESS' : (enrichedCompanyName ? 'PARTIAL' : 'FAILED');\n\nreturn [{\n  json: {\n    leadId: prep.leadId,\n    workflowRunId: prep.workflowRunId,\n    status,\n    provider: response.provider || prep.provider,\n    externalRequestId: response.externalRequestId || null,\n    companyName: enrichedCompanyName,\n    companyWebsite: enrichedCompanyWebsite,\n    companyIndustry: enrichedIndustry,\n    companySize: enrichedCompanySize,\n    contactJobTitle: enrichedJobTitle,\n    contactLinkedinUrl: enrichedLinkedinUrl,\n    rawResponse: response.rawResponse || response,\n    errorMessage: status === 'FAILED' ? 'Enrichment returned empty or invalid company data' : null\n  }\n}];"
+      },
+      "id": "7",
+      "name": "Normalize & Validate Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1380, 280]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3000/api/v1/lead-intelligence/enrichment/callback",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "8",
+      "name": "Callback NestJS API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1580, 280]
+    }
+  ],
+  "connections": {
+    "RabbitMQ Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Event Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Event Payload": {
+      "main": [
+        [
+          {
+            "node": "Filter Enrichment Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Enrichment Event": {
+      "main": [
+        [
+          {
+            "node": "Get Lead from NestJS API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Lead from NestJS API": {
+      "main": [
+        [
+          {
+            "node": "Normalize Email & Domain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Email & Domain": {
+      "main": [
+        [
+          {
+            "node": "Call External Enrichment Service",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call External Enrichment Service": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Validate Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Validate Result": {
+      "main": [
+        [
+          {
+            "node": "Callback NestJS API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
