@@ -1,0 +1,186 @@
+{
+  "name": "UC04 - AI Lead Scoring Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "queue": "crm_events_queue",
+        "options": {
+          "arguments": {}
+        }
+      },
+      "id": "1",
+      "name": "RabbitMQ Trigger",
+      "type": "n8n-nodes-base.rabbitmqTrigger",
+      "typeVersion": 1,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nlet payload = {};\n\nif (item.content) {\n  try {\n    payload = typeof item.content === 'string' ? JSON.parse(item.content) : item.content;\n  } catch (err) {\n    payload = {};\n  }\n} else {\n  payload = item;\n}\n\nconst routingKey = item.fields?.routingKey || payload.eventType || '';\nconst data = payload.data || {};\nconst leadId = data.leadId || payload.leadId || null;\nconst workflowRunId = data.workflowRunId || payload.workflowRunId || null;\nconst eventType = payload.eventType || routingKey || '';\n\nreturn [{\n  json: {\n    eventId: payload.eventId || null,\n    eventType,\n    routingKey,\n    data,\n    leadId,\n    workflowRunId,\n    scoringContext: data.scoringContext || null,\n    rawEvent: payload\n  }\n}];"
+      },
+      "id": "2",
+      "name": "Parse Event Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [380, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.leadId ? $json.leadId : '' }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "3",
+      "name": "Filter Scoring Event",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [580, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:3000/api/v1/lead-intelligence/score/' + $json.leadId + '/context' }}",
+        "method": "GET",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "4",
+      "name": "Get Scoring Context from NestJS API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [780, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $input.first().json;\nconst parsedEvent = $('Parse Event Payload').first().json || {};\nconst lead = context.lead || {};\nconst qual = context.qualification || {};\nconst enrich = context.enrichment || {};\nconst interactions = context.interactions || [];\nconst features = context.scoringFeatures || {};\n\nconst prompt = `\nYou are an enterprise AI Lead Scoring model. Evaluate the following prospective lead:\n\nContact Details:\n- Name: ${lead.firstName} ${lead.lastName || ''}\n- Email: ${lead.email}\n- Job Title: ${enrich.contactJobTitle || lead.jobTitle || 'Unknown'}\n- Company: ${enrich.companyName || lead.companyName || 'Unknown'}\n- Website: ${enrich.companyWebsite || lead.companyWebsite || 'None'}\n- Industry: ${enrich.companyIndustry || lead.industry || 'Unknown'}\n- Company Size: ${enrich.companySize ?? lead.companySize ?? 'Unknown'}\n\nLatest Qualification:\n- Status: ${qual.status || 'NOT_QUALIFIED'}\n- Confidence: ${qual.confidence || 'N/A'}\n- Intent: ${qual.intent || 'N/A'}\n- Reason: ${qual.reason || 'N/A'}\n\nInteraction History:\n- Total Touchpoints: ${interactions.length}\n- Recent Touchpoints (30 days): ${features.recentInteractionsCount || 0}\n\nScoring Rules (0 - 100):\n- HOT (>= 70): High commercial intent, verified decision maker (VP/C-Level/Director), mid-market to enterprise size (>= 50 employees), active touchpoints.\n- WARM (40 - 69): Moderate fit or pending qualification, small-to-mid business, standard interactions.\n- COLD (< 40): Low intent, disqualified, missing key contact info, or inactive.\n`;\n\nreturn [{\n  json: {\n    leadId: lead.id,\n    workflowRunId: parsedEvent.workflowRunId || null,\n    prompt,\n    context\n  }\n}];"
+      },
+      "id": "5",
+      "name": "Prepare Scoring Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst context = item.context || {};\nconst lead = context.lead || {};\nconst qual = context.qualification || null;\nconst enrich = context.enrichment || null;\nconst interactions = context.interactions || [];\nconst f = context.scoringFeatures || {};\n\n// Multi-factor AI Scoring Engine\nlet score = 25; // baseline\nconst breakdown = {\n  baseline: 25,\n  decisionMakerPoints: 0,\n  companyFitPoints: 0,\n  websitePoints: 0,\n  qualificationPoints: 0,\n  engagementPoints: 0\n};\n\n// 1. Decision maker factor (up to 20 pts)\nif (f.isDecisionMaker) {\n  breakdown.decisionMakerPoints = 20;\n  score += 20;\n}\n\n// 2. Firmographic size fit (up to 15 pts)\nconst size = f.companySize;\nif (typeof size === 'number') {\n  if (size >= 100) {\n    breakdown.companyFitPoints = 15;\n    score += 15;\n  } else if (size >= 20) {\n    breakdown.companyFitPoints = 10;\n    score += 10;\n  } else if (size >= 5) {\n    breakdown.companyFitPoints = 5;\n    score += 5;\n  }\n}\n\n// 3. Digital presence factor (up to 10 pts)\nif (f.hasWebsite) {\n  breakdown.websitePoints = 10;\n  score += 10;\n}\n\n// 4. AI Qualification adjustment (up to 25 pts)\nif (qual && qual.status === 'QUALIFIED') {\n  const conf = typeof qual.confidence === 'number' ? qual.confidence : 0.8;\n  const qualBonus = Math.round(conf * 25);\n  breakdown.qualificationPoints = qualBonus;\n  score += qualBonus;\n} else if (qual && qual.status === 'DISQUALIFIED') {\n  breakdown.qualificationPoints = -20;\n  score -= 20;\n} else if (qual && qual.status === 'NEEDS_REVIEW') {\n  breakdown.qualificationPoints = 5;\n  score += 5;\n}\n\n// 5. Engagement & Touchpoint activity (up to 20 pts)\nconst recentCount = f.recentInteractionsCount || interactions.length || 0;\nconst engagementBonus = Math.min(20, recentCount * 5);\nbreakdown.engagementPoints = engagementBonus;\nscore += engagementBonus;\n\n// Clamp score between 0 and 100\nconst finalScore = Math.max(0, Math.min(100, Math.round(score)));\n\n// Label assignment according to business rule\nlet label = 'COLD';\nif (finalScore >= 70) {\n  label = 'HOT';\n} else if (finalScore >= 40) {\n  label = 'WARM';\n}\n\n// Explanation synthesis\nconst drivers = [];\nif (breakdown.qualificationPoints > 15) drivers.push('Strong qualified intent');\nif (breakdown.decisionMakerPoints > 0) drivers.push('Executive decision-maker title');\nif (breakdown.companyFitPoints >= 10) drivers.push(`Target company scale (${size} employees)`);\nif (breakdown.engagementPoints >= 10) drivers.push(`Active engagement (${recentCount} touchpoints)`);\nif (qual && qual.status === 'DISQUALIFIED') drivers.push('Disqualified in previous screening');\nif (drivers.length === 0) drivers.push('Standard inbound lead profile');\n\nconst reason = `[${label}] Score ${finalScore}/100: ${drivers.join(', ')}.`;\n\nreturn [{\n  json: {\n    leadId: item.leadId,\n    workflowRunId: item.workflowRunId,\n    score: finalScore,\n    label,\n    reason,\n    scoringFeatures: {\n      ...f,\n      breakdown\n    },\n    modelProvider: 'crm-ai-scoring-engine',\n    modelName: 'lead-evaluator-v2',\n    modelVersion: '2.0.0',\n    inputSnapshot: {\n      lead: { id: lead.id, email: lead.email, company: lead.companyName, jobTitle: lead.jobTitle },\n      qualification: qual ? { status: qual.status, confidence: qual.confidence } : null,\n      enrichment: enrich ? { companySize: enrich.companySize, companyWebsite: enrich.companyWebsite } : null,\n      interactionsCount: interactions.length\n    },\n    outputSnapshot: {\n      score: finalScore,\n      label,\n      breakdown,\n      reason\n    }\n  }\n}];"
+      },
+      "id": "6",
+      "name": "AI Scoring Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\n// Validate score\nlet score = Number(item.score);\nif (isNaN(score)) {\n  score = 50;\n}\nscore = Math.max(0, Math.min(100, Math.round(score * 100) / 100));\n\n// Enforce label rules:\n// HOT >= 70, WARM 40-69, COLD < 40\nlet label = 'COLD';\nif (score >= 70) {\n  label = 'HOT';\n} else if (score >= 40) {\n  label = 'WARM';\n}\n\nreturn [{\n  json: {\n    leadId: item.leadId,\n    workflowRunId: item.workflowRunId || null,\n    score,\n    label,\n    reason: item.reason || `AI evaluated score: ${score}`,\n    modelProvider: item.modelProvider || 'crm-ai-scoring-engine',\n    modelName: item.modelName || 'lead-evaluator-v2',\n    modelVersion: item.modelVersion || '2.0.0',\n    scoringFeatures: item.scoringFeatures || {},\n    inputSnapshot: item.inputSnapshot || {},\n    outputSnapshot: item.outputSnapshot || {}\n  }\n}];"
+      },
+      "id": "7",
+      "name": "Validate Score Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1380, 280]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3000/api/v1/lead-intelligence/scoring/callback",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "8",
+      "name": "Callback NestJS API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1580, 280]
+    }
+  ],
+  "connections": {
+    "RabbitMQ Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Event Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Event Payload": {
+      "main": [
+        [
+          {
+            "node": "Filter Scoring Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Scoring Event": {
+      "main": [
+        [
+          {
+            "node": "Get Scoring Context from NestJS API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Scoring Context from NestJS API": {
+      "main": [
+        [
+          {
+            "node": "Prepare Scoring Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Scoring Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Scoring Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Scoring Engine": {
+      "main": [
+        [
+          {
+            "node": "Validate Score Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Score Output": {
+      "main": [
+        [
+          {
+            "node": "Callback NestJS API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

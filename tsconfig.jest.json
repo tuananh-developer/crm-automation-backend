@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "module": "CommonJS",
+    "module": "ESNext",
     "moduleResolution": "node",
     "ignoreDeprecations": "6.0",
     "target": "ES2023",
@@ -10,6 +10,7 @@
     "allowSyntheticDefaultImports": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
+    "isolatedModules": true,
     "strictNullChecks": true,
     "noImplicitAny": false,
     "skipLibCheck": true,
