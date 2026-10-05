@@ -11,6 +11,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiBody,
   ApiOperation,
@@ -27,6 +28,7 @@ export class LeadsController {
   constructor(private readonly leadsService: LeadsService) {}
 
   @Post()
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Create a new Lead (UC01)',
@@ -45,6 +47,11 @@ export class LeadsController {
   @ApiResponse({
     status: 409,
     description: 'A lead with this email address already exists.',
+  })
+  @ApiResponse({
+    status: 429,
+    description:
+      'Too many requests. Rate limit exceeded (maximum 10 requests per minute).',
   })
   create(@Body() createLeadDto: CreateLeadDto) {
     return this.leadsService.create(createLeadDto);

@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { LeadsService } from './leads.service.js';
 import { LeadStatus } from './enums/lead.enum.js';
-import type { Repository } from 'typeorm';
+import { QueryFailedError, type Repository } from 'typeorm';
 import type { Lead } from './entities/lead.entity.js';
 import type { LeadSource } from './entities/lead-source.entity.js';
 import type { User } from '../users/entities/user.entity.js';
@@ -130,6 +130,35 @@ describe('LeadsService', () => {
       expect(rabbitmqService.publishLeadCreated).not.toHaveBeenCalled();
     });
 
+    it('should throw ConflictException if duplicate email race condition triggers 23505 QueryFailedError on save', async () => {
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (leadSourcesRepository.findOne as jest.Mock).mockResolvedValue(
+        mockSource,
+      );
+      (leadsRepository.create as jest.Mock).mockReturnValue(mockLead);
+
+      const dbError = new QueryFailedError(
+        'INSERT INTO leads...',
+        [],
+        new Error(
+          'duplicate key value violates unique constraint "UQ_leads_email"',
+        ),
+      );
+      (dbError as unknown as { code: string }).code = '23505';
+      (leadsRepository.save as jest.Mock).mockRejectedValue(dbError);
+
+      await expect(
+        service.create({
+          firstName: 'John',
+          lastName: 'Doe',
+          email: 'john.doe@example.com',
+          sourceId: 'source-123',
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(rabbitmqService.publishLeadCreated).not.toHaveBeenCalled();
+    });
+
     it('should throw NotFoundException if sourceId does not exist', async () => {
       (leadsRepository.findOne as jest.Mock).mockResolvedValue(null);
       (leadSourcesRepository.findOne as jest.Mock).mockResolvedValue(null);
@@ -174,6 +203,22 @@ describe('LeadsService', () => {
           ownerId: 'non-existent-user',
         }),
       ).rejects.toThrow(NotFoundException);
+    });
+    it('should throw ConflictException if duplicate name triggers 23505 QueryFailedError on save', async () => {
+      (leadSourcesRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (leadSourcesRepository.create as jest.Mock).mockReturnValue(mockSource);
+
+      const dbError = new QueryFailedError(
+        'INSERT INTO lead_sources...',
+        [],
+        new Error('duplicate key value violates unique constraint'),
+      );
+      (dbError as unknown as { code: string }).code = '23505';
+      (leadSourcesRepository.save as jest.Mock).mockRejectedValue(dbError);
+
+      await expect(service.createSource({ name: 'Website' })).rejects.toThrow(
+        ConflictException,
+      );
     });
   });
 

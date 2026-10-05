@@ -12,6 +12,8 @@ import { CustomersModule } from './modules/customers/customers.module.js';
 import { WorkflowModule } from './modules/workflow/workflow.module.js';
 import { ReviewModule } from './modules/review/review.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
 
@@ -46,8 +48,21 @@ import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
     ReviewModule,
     NotificationsModule,
     AuditModule,
+    ThrottlerModule.forRoot([
+      {
+        name: 'default',
+        ttl: 60000,
+        limit: 100,
+      },
+    ]),
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}

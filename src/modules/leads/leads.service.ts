@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
 import { Lead } from './entities/lead.entity.js';
 import { LeadSource } from './entities/lead-source.entity.js';
 import { User } from '../users/entities/user.entity.js';
@@ -78,13 +78,29 @@ export class LeadsService {
       status: LeadStatus.NEW,
     });
 
-    const savedLead = await this.leadsRepository.save(lead);
-    this.logger.log(`Created new lead ${savedLead.id} (${savedLead.email})`);
+    try {
+      const savedLead = await this.leadsRepository.save(lead);
+      this.logger.log(`Created new lead ${savedLead.id} (${savedLead.email})`);
 
-    // 5. Publish lead.created event to RabbitMQ
-    await this.rabbitmqService.publishLeadCreated(savedLead.id);
+      // 5. Publish lead.created event to RabbitMQ
+      await this.rabbitmqService.publishLeadCreated(savedLead.id);
 
-    return savedLead;
+      return savedLead;
+    } catch (error: unknown) {
+      if (
+        error instanceof QueryFailedError &&
+        ((error as unknown as { code?: string }).code === '23505' ||
+          (error as unknown as { driverError?: { code?: string } }).driverError
+            ?.code === '23505' ||
+          error.message?.includes('duplicate key') ||
+          error.message?.includes('violates unique constraint'))
+      ) {
+        throw new ConflictException(
+          `Lead with email '${normalizedEmail}' already exists`,
+        );
+      }
+      throw error;
+    }
   }
 
   async findAll(query: QueryLeadDto): Promise<{
@@ -286,6 +302,22 @@ export class LeadsService {
       isActive: dto.isActive ?? true,
     });
 
-    return this.leadSourcesRepository.save(source);
+    try {
+      return await this.leadSourcesRepository.save(source);
+    } catch (error: unknown) {
+      if (
+        error instanceof QueryFailedError &&
+        ((error as unknown as { code?: string }).code === '23505' ||
+          (error as unknown as { driverError?: { code?: string } }).driverError
+            ?.code === '23505' ||
+          error.message?.includes('duplicate key') ||
+          error.message?.includes('violates unique constraint'))
+      ) {
+        throw new ConflictException(
+          `LeadSource with name '${trimmedName}' already exists`,
+        );
+      }
+      throw error;
+    }
   }
 }
