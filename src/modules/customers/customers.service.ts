@@ -30,7 +30,9 @@ export class CustomersService {
 
     const qb = this.customersRepository
       .createQueryBuilder('customer')
-      .leftJoinAndSelect('customer.creator', 'creator');
+      .leftJoinAndSelect('customer.creator', 'creator')
+      .leftJoinAndSelect('customer.customerSegments', 'customerSegment')
+      .leftJoinAndSelect('customerSegment.segment', 'segment');
 
     if (query.search) {
       qb.andWhere(
@@ -50,7 +52,17 @@ export class CustomersService {
     const [data, total] = await qb.getManyAndCount();
 
     return {
-      data: data.map((customer) => this.withoutCreatorHash(customer)),
+      data: data.map((customer) => ({
+        ...this.withoutCreatorHash(customer),
+        segments: (customer.customerSegments ?? []).map((assignment) => ({
+          id: assignment.segment?.id ?? assignment.segmentId,
+          name: assignment.segment?.name ?? null,
+          assignmentType: assignment.assignmentType,
+          confidence: assignment.confidence,
+          assignedReason: assignment.assignedReason,
+          assignedAt: assignment.assignedAt,
+        })),
+      })),
       meta: {
         page,
         limit,
