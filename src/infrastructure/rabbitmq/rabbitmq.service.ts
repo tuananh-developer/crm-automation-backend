@@ -97,9 +97,9 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       return fullUrl;
     }
 
-    const host = this.configService.get<string>('RABBITMQ_HOST', 'localhost');
-    const port = this.configService.get<number>('RABBITMQ_PORT', 5672);
-    const user = this.configService.get<string>('RABBITMQ_USER', 'guest');
+    const host = this.configService.get<string>('RABBITMQ_HOST');
+    const port = this.configService.get<number>('RABBITMQ_PORT');
+    const user = this.configService.get<string>('RABBITMQ_USER');
     const password = this.configService.get<string>(
       'RABBITMQ_PASSWORD',
       'guest',
