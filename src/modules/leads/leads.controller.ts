@@ -12,7 +12,12 @@ import {
   Query,
 } from '@nestjs/common';
 import { LeadsService } from './leads.service.js';
-import { CreateLeadDto, QueryLeadDto, UpdateLeadDto } from './dto/index.js';
+import {
+  CreateLeadDto,
+  QueryLeadDto,
+  UpdateLeadDto,
+  ConvertLeadDto,
+} from './dto/index.js';
 
 @Controller('leads')
 export class LeadsController {
@@ -46,5 +51,11 @@ export class LeadsController {
   @HttpCode(HttpStatus.OK)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.leadsService.remove(id);
+  }
+
+  @Post(':id/convert')
+  @HttpCode(HttpStatus.OK)
+  convert(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ConvertLeadDto) {
+    return this.leadsService.convertLead(id, dto);
   }
 }
