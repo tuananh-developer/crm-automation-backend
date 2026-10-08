@@ -1,11 +1,11 @@
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsString, ValidateIf } from 'class-validator';
 import { ReviewDecision } from '../enums/review.enum.js';
 
 export class ResolveReviewTaskDto {
   @IsEnum(ReviewDecision)
   decision!: ReviewDecision;
 
-  @IsOptional()
   @IsString()
-  reviewComment?: string;
+  @ValidateIf((o: ResolveReviewTaskDto) => o.decision === ReviewDecision.MODIFY)
+  reviewComment!: string;
 }

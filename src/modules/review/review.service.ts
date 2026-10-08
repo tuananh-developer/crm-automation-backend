@@ -9,7 +9,10 @@ import { ReviewTask } from './entities/review-task.entity.js';
 import { ReviewDecision, ReviewStatus } from './enums/review.enum.js';
 import { Lead } from '../leads/entities/lead.entity.js';
 import { User } from '../users/entities/user.entity.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
+import { NotificationType } from '../notifications/enums/notification.enum.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import {
   AssignReviewTaskDto,
@@ -29,6 +32,9 @@ export class ReviewService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
 
+    @InjectRepository(WorkflowRun)
+    private readonly workflowRunRepository: Repository<WorkflowRun>,
+
     @InjectRepository(Notification)
     private readonly notificationRepository: Repository<Notification>,
 
@@ -45,6 +51,22 @@ export class ReviewService {
       throw new NotFoundException('Lead not found');
     }
 
+    if (dto.workflowRunId) {
+      const workflowRun = await this.workflowRunRepository.findOne({
+        where: { id: dto.workflowRunId },
+      });
+
+      if (!workflowRun) {
+        throw new NotFoundException('Workflow run not found');
+      }
+
+      if (workflowRun.leadId !== dto.leadId) {
+        throw new BadRequestException(
+          'Workflow run does not belong to the specified lead',
+        );
+      }
+    }
+
     const reviewTask = this.reviewTaskRepository.create({
       leadId: dto.leadId,
       workflowRunId: dto.workflowRunId ?? null,
@@ -57,9 +79,7 @@ export class ReviewService {
       resolvedAt: null,
     });
 
-    const savedTask = await this.reviewTaskRepository.save(reviewTask);
-
-    return savedTask;
+    return this.reviewTaskRepository.save(reviewTask);
   }
 
   async findAll(): Promise<ReviewTask[]> {
@@ -112,12 +132,32 @@ export class ReviewService {
   async assign(id: string, dto: AssignReviewTaskDto): Promise<ReviewTask> {
     const reviewTask = await this.findOne(id);
 
+    if (reviewTask.status !== ReviewStatus.PENDING) {
+      throw new BadRequestException(
+        'Only PENDING review tasks can be assigned',
+      );
+    }
+
+    if (reviewTask.assignedTo && reviewTask.assignedTo !== dto.reviewerId) {
+      throw new BadRequestException(
+        'Review task is already assigned to a different reviewer',
+      );
+    }
+
     const reviewer = await this.userRepository.findOne({
       where: { id: dto.reviewerId },
     });
 
     if (!reviewer) {
       throw new NotFoundException('Reviewer not found');
+    }
+
+    if (reviewer.role !== UserRole.SALES) {
+      throw new BadRequestException('Reviewer must have SALES role');
+    }
+
+    if (reviewer.status !== UserStatus.ACTIVE) {
+      throw new BadRequestException('Reviewer must be ACTIVE');
     }
 
     reviewTask.assignedTo = reviewer.id;
@@ -157,6 +197,12 @@ export class ReviewService {
 
     if (!reviewTask.assignedTo) {
       throw new BadRequestException('Review task has no reviewer');
+    }
+
+    if (dto.decision === ReviewDecision.MODIFY && !dto.reviewComment) {
+      throw new BadRequestException(
+        'reviewComment is required for MODIFY decision',
+      );
     }
 
     const oldValue = {
@@ -205,7 +251,7 @@ export class ReviewService {
     await this.notificationRepository.save(
       this.notificationRepository.create({
         userId,
-        type: 'HUMAN_REVIEW_REQUIRED',
+        type: NotificationType.HUMAN_REVIEW_REQUIRED,
         title: 'Human review required',
         content: `Lead ${leadId} requires manual review.`,
         leadId,

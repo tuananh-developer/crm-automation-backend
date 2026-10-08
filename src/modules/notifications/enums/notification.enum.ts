@@ -1,0 +1,4 @@
+export enum NotificationType {
+  HUMAN_REVIEW_REQUIRED = 'HUMAN_REVIEW_REQUIRED',
+  FOLLOW_UP_FAILED = 'FOLLOW_UP_FAILED',
+}
