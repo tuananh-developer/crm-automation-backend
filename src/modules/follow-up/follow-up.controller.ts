@@ -4,15 +4,42 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Query,
 } from '@nestjs/common';
 import { FollowUpService } from './follow-up.service.js';
-import { ExecuteFollowUpDto, QueryFollowUpExecutionDto } from './dto/index.js';
+import {
+  EnrollLeadDto,
+  ExecuteFollowUpDto,
+  QueryFollowUpExecutionDto,
+  UpdateEnrollmentDto,
+} from './dto/index.js';
 
 @Controller('follow-ups')
 export class FollowUpController {
   constructor(private readonly followUpService: FollowUpService) {}
+
+  @Post('enrollments')
+  @HttpCode(HttpStatus.CREATED)
+  enrollLead(@Body() dto: EnrollLeadDto) {
+    return this.followUpService.enrollLead(dto);
+  }
+
+  @Post('enrollments/:id/pause')
+  pauseEnrollment(@Param('id') id: string, @Body() dto: UpdateEnrollmentDto) {
+    return this.followUpService.pauseEnrollment(id, dto);
+  }
+
+  @Post('enrollments/:id/resume')
+  resumeEnrollment(@Param('id') id: string) {
+    return this.followUpService.resumeEnrollment(id);
+  }
+
+  @Post('enrollments/:id/cancel')
+  cancelEnrollment(@Param('id') id: string, @Body() dto: UpdateEnrollmentDto) {
+    return this.followUpService.cancelEnrollment(id, dto);
+  }
 
   @Post('executions')
   @HttpCode(HttpStatus.OK)

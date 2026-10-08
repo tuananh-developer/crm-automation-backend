@@ -7,6 +7,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
 import { FollowUpService } from './follow-up.service.js';
 import { EnrollmentStatus, ExecutionStatus } from './enums/follow-up.enum.js';
+import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
 import { FollowUpExecution } from './entities/follow-up-execution.entity.js';
 import { LeadFollowUpEnrollment } from './entities/lead-follow-up-enrollment.entity.js';
@@ -21,6 +22,7 @@ describe('FollowUpService', () => {
   let enrollmentsRepository: jest.Mocked<
     Partial<Repository<LeadFollowUpEnrollment>>
   >;
+  let sequencesRepository: jest.Mocked<Partial<Repository<FollowUpSequence>>>;
   let stepsRepository: jest.Mocked<Partial<Repository<FollowUpStep>>>;
   let executionsRepository: jest.Mocked<Partial<Repository<FollowUpExecution>>>;
   let leadsRepository: jest.Mocked<Partial<Repository<Lead>>>;
@@ -104,6 +106,11 @@ describe('FollowUpService', () => {
       find: jest.fn(),
     };
 
+    sequencesRepository = {
+      findOne: jest.fn(),
+      find: jest.fn(),
+    };
+
     stepsRepository = {
       findOne: jest.fn(),
       find: jest.fn(),
@@ -154,6 +161,9 @@ describe('FollowUpService', () => {
         if (entity === LeadFollowUpEnrollment) {
           return enrollmentsRepository;
         }
+        if (entity === FollowUpSequence) {
+          return sequencesRepository;
+        }
         if (entity === FollowUpStep) {
           return stepsRepository;
         }
@@ -186,6 +196,7 @@ describe('FollowUpService', () => {
 
     service = new FollowUpService(
       enrollmentsRepository as Repository<LeadFollowUpEnrollment>,
+      sequencesRepository as Repository<FollowUpSequence>,
       stepsRepository as Repository<FollowUpStep>,
       executionsRepository as Repository<FollowUpExecution>,
       leadsRepository as Repository<Lead>,

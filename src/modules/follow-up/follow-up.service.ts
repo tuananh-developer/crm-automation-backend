@@ -5,24 +5,36 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, MoreThan, Repository } from 'typeorm';
+import { DataSource, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
+import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
 import { FollowUpExecution } from './entities/follow-up-execution.entity.js';
 import { LeadFollowUpEnrollment } from './entities/lead-follow-up-enrollment.entity.js';
-import { EnrollmentStatus, ExecutionStatus } from './enums/follow-up.enum.js';
+import {
+  FollowUpSequenceStatus,
+  EnrollmentStatus,
+  ExecutionStatus,
+} from './enums/follow-up.enum.js';
 import { Lead } from '../leads/entities/lead.entity.js';
 import { Customer } from '../customers/entities/customer.entity.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import { N8nClientService } from '../../infrastructure/n8n/n8n-client.service.js';
-import { ExecuteFollowUpDto, QueryFollowUpExecutionDto } from './dto/index.js';
+import {
+  EnrollLeadDto,
+  ExecuteFollowUpDto,
+  QueryFollowUpExecutionDto,
+  UpdateEnrollmentDto,
+} from './dto/index.js';
 
 export const DEFAULT_MAX_RETRIES = 3;
 export const DEFAULT_RETRY_DELAY_MINUTES = 10;
 export const DEFAULT_FOLLOW_UP_WEBHOOK_PATH = 'follow-up-execute';
 
 const PHONE_CHANNELS = ['SMS', 'WHATSAPP', 'MESSAGE', 'PHONE', 'ZALO'];
+const RUNNING_TIMEOUT_MINUTES = 5;
 
 export interface N8nFollowUpResponse {
   success?: boolean;
@@ -38,6 +50,12 @@ export interface ExecuteFollowUpResult {
   message: string;
 }
 
+export interface EnrollLeadResult {
+  enrollment: LeadFollowUpEnrollment;
+  execution: FollowUpExecution | null;
+  message: string;
+}
+
 @Injectable()
 export class FollowUpService {
   private readonly logger = new Logger(FollowUpService.name);
@@ -45,6 +63,8 @@ export class FollowUpService {
   constructor(
     @InjectRepository(LeadFollowUpEnrollment)
     private readonly enrollmentsRepository: Repository<LeadFollowUpEnrollment>,
+    @InjectRepository(FollowUpSequence)
+    private readonly sequencesRepository: Repository<FollowUpSequence>,
     @InjectRepository(FollowUpStep)
     private readonly stepsRepository: Repository<FollowUpStep>,
     @InjectRepository(FollowUpExecution)
@@ -248,6 +268,440 @@ export class FollowUpService {
         ...(query.status ? { status: query.status } : {}),
       },
       order: { createdAt: 'DESC' },
+    });
+  }
+
+  @Cron(CronExpression.EVERY_MINUTE)
+  async processPendingExecutions(): Promise<void> {
+    const now = new Date();
+
+    const pendingExecutions = await this.executionsRepository.find({
+      where: {
+        status: ExecutionStatus.PENDING,
+        scheduledAt: LessThanOrEqual(now),
+      },
+      relations: { enrollment: { lead: true } },
+      take: 50,
+    });
+
+    if (pendingExecutions.length === 0) {
+      return;
+    }
+
+    this.logger.log(
+      `Processing ${pendingExecutions.length} pending follow-up execution(s)`,
+    );
+
+    for (const execution of pendingExecutions) {
+      try {
+        await this.execute({
+          enrollmentId: execution.enrollmentId,
+          stepId: execution.stepId,
+        });
+      } catch (error: unknown) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Failed to process follow-up execution ${execution.id}: ${errorMessage}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+  }
+
+  async handleStaleRunningExecutions(): Promise<void> {
+    const timeoutThreshold = new Date(
+      Date.now() - RUNNING_TIMEOUT_MINUTES * 60_000,
+    );
+
+    const staleExecutions = await this.executionsRepository.find({
+      where: {
+        status: ExecutionStatus.RUNNING,
+        startedAt: LessThanOrEqual(timeoutThreshold),
+      },
+      relations: { enrollment: { lead: true } },
+    });
+
+    if (staleExecutions.length === 0) {
+      return;
+    }
+
+    this.logger.warn(
+      `Found ${staleExecutions.length} stale RUNNING execution(s), marking as FAILED for retry`,
+    );
+
+    for (const execution of staleExecutions) {
+      try {
+        const enrollment = execution.enrollment;
+        if (!enrollment) {
+          continue;
+        }
+
+        const step = await this.stepsRepository.findOne({
+          where: { id: execution.stepId },
+        });
+
+        if (!step) {
+          continue;
+        }
+
+        await this.dataSource.transaction(async (manager) => {
+          const executionsRepository = manager.getRepository(FollowUpExecution);
+          const auditLogRepository = manager.getRepository(AuditLog);
+
+          const previousStatus = execution.status;
+          const previousRetryCount = execution.retryCount;
+          const maxRetries = this.getMaxRetries();
+
+          execution.status = ExecutionStatus.FAILED;
+          execution.completedAt = new Date();
+          execution.errorMessage = `Execution timed out after ${RUNNING_TIMEOUT_MINUTES} minutes`;
+
+          const savedExecution = await executionsRepository.save(execution);
+
+          let retryScheduled = false;
+          let retryCount = savedExecution.retryCount;
+
+          if (savedExecution.retryCount < maxRetries) {
+            retryCount = savedExecution.retryCount + 1;
+            savedExecution.retryCount = retryCount;
+            savedExecution.status = ExecutionStatus.RETRYING;
+            savedExecution.startedAt = null;
+            savedExecution.completedAt = null;
+            savedExecution.scheduledAt = new Date(
+              Date.now() + this.getRetryDelayMinutes() * 60_000,
+            );
+            await executionsRepository.save(savedExecution);
+            retryScheduled = true;
+          }
+
+          await auditLogRepository.save(
+            auditLogRepository.create({
+              userId: enrollment.assignedBy,
+              action: 'FOLLOW_UP_FAILED',
+              entityType: 'FollowUpExecution',
+              entityId: execution.id,
+              oldValue: {
+                status: previousStatus,
+                retryCount: previousRetryCount,
+              },
+              newValue: {
+                status: savedExecution.status,
+                retryCount,
+              },
+              metadata: {
+                enrollmentId: enrollment.id,
+                stepId: step.id,
+                channel: step.channel,
+                attempt: previousRetryCount + 1,
+                errorMessage: execution.errorMessage,
+                maxRetries,
+                retryScheduled,
+                staleTimeout: true,
+              },
+              ipAddress: null,
+              userAgent: null,
+            }),
+          );
+        });
+      } catch (error: unknown) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Failed to handle stale execution ${execution.id}: ${errorMessage}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+  }
+
+  async enrollLead(dto: EnrollLeadDto): Promise<EnrollLeadResult> {
+    const lead = await this.leadsRepository.findOne({
+      where: { id: dto.leadId },
+    });
+
+    if (!lead) {
+      throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
+    }
+
+    const sequence = await this.sequencesRepository.findOne({
+      where: { id: dto.sequenceId },
+    });
+
+    if (!sequence) {
+      throw new NotFoundException(
+        `Follow-up sequence with ID '${dto.sequenceId}' not found`,
+      );
+    }
+
+    if (sequence.status !== FollowUpSequenceStatus.ACTIVE) {
+      throw new BadRequestException(
+        `Follow-up sequence '${sequence.id}' is '${sequence.status}' and cannot enroll leads`,
+      );
+    }
+
+    const existingEnrollment = await this.enrollmentsRepository.findOne({
+      where: {
+        leadId: dto.leadId,
+        sequenceId: dto.sequenceId,
+        status: EnrollmentStatus.ACTIVE,
+      },
+    });
+
+    if (existingEnrollment) {
+      throw new ConflictException(
+        `Lead '${dto.leadId}' is already actively enrolled in sequence '${dto.sequenceId}'`,
+      );
+    }
+
+    const firstStep = await this.stepsRepository.findOne({
+      where: { sequenceId: dto.sequenceId, isActive: true },
+      order: { stepOrder: 'ASC' },
+    });
+
+    if (!firstStep) {
+      throw new BadRequestException(
+        `Follow-up sequence '${dto.sequenceId}' has no active steps`,
+      );
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const enrollmentsRepository = manager.getRepository(
+        LeadFollowUpEnrollment,
+      );
+      const executionsRepository = manager.getRepository(FollowUpExecution);
+      const auditLogRepository = manager.getRepository(AuditLog);
+
+      const now = new Date();
+
+      const enrollment = enrollmentsRepository.create({
+        leadId: dto.leadId,
+        sequenceId: dto.sequenceId,
+        currentStepId: firstStep.id,
+        status: EnrollmentStatus.ACTIVE,
+        startedAt: now,
+        assignedBy: dto.assignedBy ?? null,
+      });
+
+      const savedEnrollment = await enrollmentsRepository.save(enrollment);
+
+      const execution = executionsRepository.create({
+        enrollmentId: savedEnrollment.id,
+        stepId: firstStep.id,
+        status: ExecutionStatus.PENDING,
+        scheduledAt: now,
+        startedAt: null,
+        completedAt: null,
+        providerMessageId: null,
+        requestPayload: null,
+        responsePayload: null,
+        errorMessage: null,
+        retryCount: 0,
+      });
+
+      const savedExecution = await executionsRepository.save(execution);
+
+      await auditLogRepository.save(
+        auditLogRepository.create({
+          userId: dto.assignedBy ?? null,
+          action: 'FOLLOW_UP_ENROLLED',
+          entityType: 'LeadFollowUpEnrollment',
+          entityId: savedEnrollment.id,
+          oldValue: null,
+          newValue: {
+            status: EnrollmentStatus.ACTIVE,
+            currentStepId: firstStep.id,
+            leadId: dto.leadId,
+            sequenceId: dto.sequenceId,
+          },
+          metadata: {
+            leadId: dto.leadId,
+            sequenceId: dto.sequenceId,
+            firstStepId: firstStep.id,
+            scheduledAt: now,
+          },
+          ipAddress: null,
+          userAgent: null,
+        }),
+      );
+
+      return {
+        enrollment: savedEnrollment,
+        execution: savedExecution,
+        message: `Lead '${dto.leadId}' enrolled in sequence '${dto.sequenceId}'. First step scheduled.`,
+      };
+    });
+  }
+
+  async pauseEnrollment(
+    id: string,
+    dto: UpdateEnrollmentDto,
+  ): Promise<LeadFollowUpEnrollment> {
+    const enrollment = await this.enrollmentsRepository.findOne({
+      where: { id },
+    });
+
+    if (!enrollment) {
+      throw new NotFoundException(
+        `Follow-up enrollment with ID '${id}' not found`,
+      );
+    }
+
+    if (enrollment.status !== EnrollmentStatus.ACTIVE) {
+      throw new ConflictException(
+        `Enrollment '${id}' is '${enrollment.status}' and cannot be paused`,
+      );
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const enrollmentsRepository = manager.getRepository(
+        LeadFollowUpEnrollment,
+      );
+      const auditLogRepository = manager.getRepository(AuditLog);
+
+      const previousStatus = enrollment.status;
+
+      enrollment.status = EnrollmentStatus.PAUSED;
+      enrollment.pausedAt = new Date();
+      if (dto.reason) {
+        enrollment.cancellationReason = dto.reason;
+      }
+
+      const savedEnrollment = await enrollmentsRepository.save(enrollment);
+
+      await auditLogRepository.save(
+        auditLogRepository.create({
+          userId: enrollment.assignedBy,
+          action: 'FOLLOW_UP_PAUSED',
+          entityType: 'LeadFollowUpEnrollment',
+          entityId: enrollment.id,
+          oldValue: { status: previousStatus },
+          newValue: {
+            status: EnrollmentStatus.PAUSED,
+            pausedAt: savedEnrollment.pausedAt,
+          },
+          metadata: {
+            enrollmentId: enrollment.id,
+            reason: dto.reason ?? null,
+          },
+          ipAddress: null,
+          userAgent: null,
+        }),
+      );
+
+      return savedEnrollment;
+    });
+  }
+
+  async resumeEnrollment(id: string): Promise<LeadFollowUpEnrollment> {
+    const enrollment = await this.enrollmentsRepository.findOne({
+      where: { id },
+    });
+
+    if (!enrollment) {
+      throw new NotFoundException(
+        `Follow-up enrollment with ID '${id}' not found`,
+      );
+    }
+
+    if (enrollment.status !== EnrollmentStatus.PAUSED) {
+      throw new ConflictException(
+        `Enrollment '${id}' is '${enrollment.status}' and cannot be resumed`,
+      );
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const enrollmentsRepository = manager.getRepository(
+        LeadFollowUpEnrollment,
+      );
+      const auditLogRepository = manager.getRepository(AuditLog);
+
+      const previousStatus = enrollment.status;
+
+      enrollment.status = EnrollmentStatus.ACTIVE;
+      enrollment.pausedAt = null;
+
+      const savedEnrollment = await enrollmentsRepository.save(enrollment);
+
+      await auditLogRepository.save(
+        auditLogRepository.create({
+          userId: enrollment.assignedBy,
+          action: 'FOLLOW_UP_RESUMED',
+          entityType: 'LeadFollowUpEnrollment',
+          entityId: enrollment.id,
+          oldValue: { status: previousStatus },
+          newValue: { status: EnrollmentStatus.ACTIVE },
+          metadata: {
+            enrollmentId: enrollment.id,
+          },
+          ipAddress: null,
+          userAgent: null,
+        }),
+      );
+
+      return savedEnrollment;
+    });
+  }
+
+  async cancelEnrollment(
+    id: string,
+    dto: UpdateEnrollmentDto,
+  ): Promise<LeadFollowUpEnrollment> {
+    const enrollment = await this.enrollmentsRepository.findOne({
+      where: { id },
+    });
+
+    if (!enrollment) {
+      throw new NotFoundException(
+        `Follow-up enrollment with ID '${id}' not found`,
+      );
+    }
+
+    if (
+      enrollment.status === EnrollmentStatus.CANCELLED ||
+      enrollment.status === EnrollmentStatus.COMPLETED
+    ) {
+      throw new ConflictException(
+        `Enrollment '${id}' is '${enrollment.status}' and cannot be cancelled`,
+      );
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const enrollmentsRepository = manager.getRepository(
+        LeadFollowUpEnrollment,
+      );
+      const auditLogRepository = manager.getRepository(AuditLog);
+
+      const previousStatus = enrollment.status;
+
+      enrollment.status = EnrollmentStatus.CANCELLED;
+      enrollment.cancelledAt = new Date();
+      enrollment.cancellationReason = dto.reason ?? null;
+
+      const savedEnrollment = await enrollmentsRepository.save(enrollment);
+
+      await auditLogRepository.save(
+        auditLogRepository.create({
+          userId: enrollment.assignedBy,
+          action: 'FOLLOW_UP_CANCELLED',
+          entityType: 'LeadFollowUpEnrollment',
+          entityId: enrollment.id,
+          oldValue: { status: previousStatus },
+          newValue: {
+            status: EnrollmentStatus.CANCELLED,
+            cancelledAt: savedEnrollment.cancelledAt,
+            cancellationReason: dto.reason ?? null,
+          },
+          metadata: {
+            enrollmentId: enrollment.id,
+            reason: dto.reason ?? null,
+          },
+          ipAddress: null,
+          userAgent: null,
+        }),
+      );
+
+      return savedEnrollment;
     });
   }
 

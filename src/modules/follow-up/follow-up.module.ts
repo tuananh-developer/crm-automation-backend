@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
@@ -17,6 +18,7 @@ import { FollowUpService } from './follow-up.service.js';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       FollowUpSequence,
       FollowUpStep,
