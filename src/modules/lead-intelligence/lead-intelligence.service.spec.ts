@@ -7,8 +7,12 @@ import { LeadStatus } from '../leads/enums/lead.enum.js';
 import { QualificationStatus } from './enums/lead-intelligence.enum.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { ReviewStatus } from '../review/enums/review.enum.js';
-import type { Repository } from 'typeorm';
+import { ScoreLabel } from './enums/lead-intelligence.enum.js';
+import type { DataSource, Repository } from 'typeorm';
 import type { LeadQualification } from './entities/lead-qualification.entity.js';
+import type { LeadEnrichment } from './entities/lead-enrichment.entity.js';
+import type { LeadScore } from './entities/lead-score.entity.js';
+import type { Interaction } from '../leads/entities/interaction.entity.js';
 import type { Lead } from '../leads/entities/lead.entity.js';
 import type { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import type { ReviewTask } from '../review/entities/review-task.entity.js';
@@ -18,6 +22,9 @@ import type { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.ser
 describe('LeadIntelligenceService', () => {
   let service: LeadIntelligenceService;
   let qualificationsRepo: jest.Mocked<Partial<Repository<LeadQualification>>>;
+  let enrichmentsRepo: jest.Mocked<Partial<Repository<LeadEnrichment>>>;
+  let scoresRepo: jest.Mocked<Partial<Repository<LeadScore>>>;
+  let interactionsRepo: jest.Mocked<Partial<Repository<Interaction>>>;
   let leadsRepo: jest.Mocked<Partial<Repository<Lead>>>;
   let workflowRunsRepo: jest.Mocked<Partial<Repository<WorkflowRun>>>;
   let reviewTasksRepo: jest.Mocked<Partial<Repository<ReviewTask>>>;
@@ -78,6 +85,33 @@ describe('LeadIntelligenceService', () => {
     createdAt: new Date(),
   };
 
+  const mockScore: LeadScore = {
+    id: 'score-123',
+    leadId: 'lead-123',
+    workflowRunId: 'wf-run-123',
+    score: 85,
+    label: ScoreLabel.HOT,
+    reason: 'High buying intent and strong company fit',
+    scoringFeatures: { intent: 90, fit: 80 },
+    modelProvider: 'openai',
+    modelName: 'gpt-4o',
+    modelVersion: '2024-08-06',
+    inputSnapshot: {},
+    outputSnapshot: {},
+    createdAt: new Date(),
+  };
+
+  const mockInteraction: Interaction = {
+    id: 'interaction-123',
+    leadId: 'lead-123',
+    type: 'CALL',
+    channel: 'PHONE',
+    subject: 'Intro call',
+    content: 'Discussed requirements',
+    occurredAt: new Date(),
+    createdAt: new Date(),
+  };
+
   beforeEach(() => {
     qualificationsRepo = {
       create: jest.fn(),
@@ -115,15 +149,41 @@ describe('LeadIntelligenceService', () => {
         occurredAt: new Date().toISOString(),
         data: { leadId: 'lead-123', workflowRunId: 'wf-run-123' },
       }),
+      publishLeadScoringRequested: jest.fn().mockResolvedValue({
+        eventId: 'event-456',
+        eventType: 'lead.scoring.requested',
+        version: 1,
+        occurredAt: new Date().toISOString(),
+        data: { leadId: 'lead-123', workflowRunId: 'wf-run-123' },
+      }),
+    };
+
+    scoresRepo = {
+      create: jest.fn(),
+      save: jest.fn(),
+      findOne: jest.fn(),
+      find: jest.fn(),
+    };
+
+    interactionsRepo = {
+      find: jest.fn(),
+    };
+
+    enrichmentsRepo = {
+      findOne: jest.fn(),
+      find: jest.fn(),
     };
 
     service = new LeadIntelligenceService(
-      qualificationsRepo as Repository<LeadQualification>,
-      leadsRepo as Repository<Lead>,
-      workflowRunsRepo as Repository<WorkflowRun>,
-      reviewTasksRepo as Repository<ReviewTask>,
-      notificationsRepo as Repository<Notification>,
+      qualificationsRepo,
+      leadsRepo,
+      workflowRunsRepo,
+      reviewTasksRepo,
+      notificationsRepo,
       rabbitmqService as RabbitMQService,
+      scoresRepo,
+      interactionsRepo,
+      enrichmentsRepo,
     );
   });
 
@@ -320,6 +380,271 @@ describe('LeadIntelligenceService', () => {
           reviewTaskId: 'review-task-123',
         }),
       );
+    });
+  });
+
+  describe('triggerScoring', () => {
+    it('should throw NotFoundException if lead does not exist', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(service.triggerScoring('invalid-lead')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should aggregate context, create WorkflowRun, and publish event', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (qualificationsRepo.findOne as jest.Mock).mockResolvedValue(
+        mockQualification,
+      );
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue(null);
+      (interactionsRepo.find as jest.Mock).mockResolvedValue([mockInteraction]);
+      (workflowRunsRepo.create as jest.Mock).mockReturnValue(mockWorkflowRun);
+      (workflowRunsRepo.save as jest.Mock).mockResolvedValue(mockWorkflowRun);
+
+      const result = await service.triggerScoring('lead-123');
+
+      expect(workflowRunsRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowName: 'lead-scoring',
+          leadId: 'lead-123',
+          status: WorkflowStatus.PENDING,
+        }),
+      );
+      expect(rabbitmqService.publishLeadScoringRequested).toHaveBeenCalledWith(
+        expect.objectContaining({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+        }),
+      );
+      expect(result).toEqual({
+        message: 'Lead scoring workflow triggered successfully',
+        workflowRunId: 'wf-run-123',
+        leadId: 'lead-123',
+      });
+    });
+  });
+
+  describe('handleScoringCallback', () => {
+    it('should throw NotFoundException if lead does not exist', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.handleScoringCallback({
+          leadId: 'invalid-lead',
+          workflowRunId: 'wf-run-123',
+          status: 'SUCCESS',
+          score: 80,
+          label: ScoreLabel.HOT,
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should return existing score idempotently if workflowRun is already finished', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        status: WorkflowStatus.SUCCESS,
+      });
+      (scoresRepo.findOne as jest.Mock).mockResolvedValue(mockScore);
+
+      const result = await service.handleScoringCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: 'SUCCESS',
+        score: 85,
+        label: ScoreLabel.HOT,
+      });
+
+      expect(result.score).toEqual(mockScore);
+      expect(result.workflowRunUpdated).toBe(false);
+      expect(scoresRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('should update WorkflowRun to FAILED and not create score when status is FAILED', async () => {
+      const runningWorkflowRun = {
+        ...mockWorkflowRun,
+        status: WorkflowStatus.PENDING,
+      };
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(
+        runningWorkflowRun,
+      );
+      (scoresRepo.findOne as jest.Mock).mockResolvedValue(null);
+      (workflowRunsRepo.save as jest.Mock).mockResolvedValue(
+        runningWorkflowRun,
+      );
+
+      const result = await service.handleScoringCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: 'FAILED',
+        errorMessage: 'AI model service unavailable',
+      });
+
+      expect(workflowRunsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: WorkflowStatus.FAILED,
+          errorMessage: 'AI model service unavailable',
+        }),
+      );
+      expect(scoresRepo.create).not.toHaveBeenCalled();
+      expect(result.score).toBeNull();
+      expect(result.workflowRunUpdated).toBe(true);
+    });
+
+    it('should insert LeadScore and update WorkflowRun to SUCCESS when status is SUCCESS', async () => {
+      const runningWorkflowRun = {
+        ...mockWorkflowRun,
+        status: WorkflowStatus.PENDING,
+      };
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(
+        runningWorkflowRun,
+      );
+      (scoresRepo.findOne as jest.Mock).mockResolvedValue(null);
+      (scoresRepo.create as jest.Mock).mockReturnValue(mockScore);
+      (scoresRepo.save as jest.Mock).mockResolvedValue(mockScore);
+      (workflowRunsRepo.save as jest.Mock).mockResolvedValue({
+        ...runningWorkflowRun,
+        status: WorkflowStatus.SUCCESS,
+      });
+
+      const result = await service.handleScoringCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: 'SUCCESS',
+        score: 85,
+        label: ScoreLabel.HOT,
+        reason: 'High buying intent and strong company fit',
+        scoringFeatures: { intent: 90, fit: 80 },
+        modelInfo: {
+          provider: 'openai',
+          model: 'gpt-4o',
+          version: '2024-08-06',
+        },
+        inputOutputSnapshot: {
+          input: { leadId: 'lead-123' },
+          output: { score: 85 },
+        },
+      });
+
+      expect(scoresRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          score: 85,
+          label: ScoreLabel.HOT,
+          reason: 'High buying intent and strong company fit',
+          modelProvider: 'openai',
+          modelName: 'gpt-4o',
+          modelVersion: '2024-08-06',
+          scoringFeatures: { intent: 90, fit: 80 },
+          inputSnapshot: { leadId: 'lead-123' },
+          outputSnapshot: { score: 85 },
+        }),
+      );
+      expect(scoresRepo.save).toHaveBeenCalled();
+      expect(workflowRunsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: WorkflowStatus.SUCCESS,
+        }),
+      );
+      expect(result.score).toEqual(mockScore);
+      expect(result.workflowRunUpdated).toBe(true);
+    });
+
+    it('should execute inside database transaction if dataSource is present', async () => {
+      const mockSavedScore = { ...mockScore };
+      const mockScoreRepo = {
+        create: jest.fn().mockReturnValue(mockSavedScore),
+        save: jest.fn().mockResolvedValue(mockSavedScore),
+      };
+      const mockWfRepo = {
+        findOne: jest.fn().mockResolvedValue({ ...mockWorkflowRun }),
+        save: jest.fn().mockResolvedValue({
+          ...mockWorkflowRun,
+          status: WorkflowStatus.SUCCESS,
+        }),
+      };
+
+      const mockDataSource = {
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            (
+              cb: (manager: {
+                getRepository: (entity: unknown) => unknown;
+              }) => Promise<unknown>,
+            ) => {
+              return cb({
+                getRepository: jest.fn().mockImplementation((entity) => {
+                  if (
+                    entity &&
+                    (entity as { name?: string }).name === 'LeadScore'
+                  ) {
+                    return mockScoreRepo;
+                  }
+                  return mockWfRepo;
+                }),
+              });
+            },
+          ),
+      };
+
+      const transactionalService = new LeadIntelligenceService(
+        qualificationsRepo,
+        leadsRepo,
+        workflowRunsRepo,
+        reviewTasksRepo,
+        notificationsRepo,
+        rabbitmqService as RabbitMQService,
+        scoresRepo,
+        interactionsRepo,
+        enrichmentsRepo,
+        mockDataSource as unknown as DataSource,
+      );
+
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(null);
+      (scoresRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      const result = await transactionalService.handleScoringCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: 'SUCCESS',
+        score: 85,
+        label: ScoreLabel.HOT,
+      });
+
+      expect(mockDataSource.transaction).toHaveBeenCalled();
+      expect(result.score).toBeDefined();
+    });
+  });
+
+  describe('getScoresByLead & getLatestScore', () => {
+    it('should return all scores for a lead ordered by createdAt DESC', async () => {
+      (scoresRepo.find as jest.Mock).mockResolvedValue([mockScore]);
+
+      const scores = await service.getScoresByLead('lead-123');
+      expect(scores).toEqual([mockScore]);
+      expect(scoresRepo.find).toHaveBeenCalledWith({
+        where: { leadId: 'lead-123' },
+        order: { createdAt: 'DESC' },
+        relations: { workflowRun: true },
+      });
+    });
+
+    it('should return latest score for a lead', async () => {
+      (scoresRepo.findOne as jest.Mock).mockResolvedValue(mockScore);
+
+      const latest = await service.getLatestScore('lead-123');
+      expect(latest).toEqual(mockScore);
+      expect(scoresRepo.findOne).toHaveBeenCalledWith({
+        where: { leadId: 'lead-123' },
+        order: { createdAt: 'DESC' },
+        relations: { workflowRun: true },
+      });
     });
   });
 
