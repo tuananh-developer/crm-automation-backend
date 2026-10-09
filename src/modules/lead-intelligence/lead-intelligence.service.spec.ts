@@ -1,13 +1,20 @@
-import { NotFoundException } from '@nestjs/common';
+import {
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   CONFIDENCE_THRESHOLD,
+  DEFAULT_ENRICHMENT_PROVIDER,
   LeadIntelligenceService,
 } from './lead-intelligence.service.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
-import { QualificationStatus } from './enums/lead-intelligence.enum.js';
+import {
+  EnrichmentStatus,
+  QualificationStatus,
+  ScoreLabel,
+} from './enums/lead-intelligence.enum.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { ReviewStatus } from '../review/enums/review.enum.js';
-import { ScoreLabel } from './enums/lead-intelligence.enum.js';
 import type { DataSource, Repository } from 'typeorm';
 import type { LeadQualification } from './entities/lead-qualification.entity.js';
 import type { LeadEnrichment } from './entities/lead-enrichment.entity.js';
@@ -101,6 +108,25 @@ describe('LeadIntelligenceService', () => {
     createdAt: new Date(),
   };
 
+  const mockEnrichment: LeadEnrichment = {
+    id: 'enrich-123',
+    leadId: 'lead-123',
+    workflowRunId: 'wf-run-123',
+    provider: 'mock',
+    status: EnrichmentStatus.SUCCESS,
+    companyName: 'Acme Corp',
+    companyWebsite: 'https://acme.com',
+    companyIndustry: 'Technology',
+    companySize: 200,
+    contactJobTitle: 'VP of Sales',
+    contactLinkedinUrl: null,
+    rawResponse: {},
+    errorMessage: null,
+    enrichedAt: new Date(),
+    externalRequestId: 'ext-123',
+    createdAt: new Date(),
+  };
+
   const mockInteraction: Interaction = {
     id: 'interaction-123',
     leadId: 'lead-123',
@@ -159,6 +185,17 @@ describe('LeadIntelligenceService', () => {
         occurredAt: new Date().toISOString(),
         data: { leadId: 'lead-123', workflowRunId: 'wf-run-123' },
       }),
+      publishLeadEnrichmentRequested: jest.fn().mockResolvedValue({
+        eventId: 'event-789',
+        eventType: 'lead.enrichment.requested',
+        version: 1,
+        occurredAt: new Date().toISOString(),
+        data: {
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          provider: 'mock',
+        },
+      }),
     };
 
     scoresRepo = {
@@ -173,6 +210,8 @@ describe('LeadIntelligenceService', () => {
     };
 
     enrichmentsRepo = {
+      create: jest.fn(),
+      save: jest.fn(),
       findOne: jest.fn(),
       find: jest.fn(),
     };
@@ -704,6 +743,453 @@ describe('LeadIntelligenceService', () => {
         order: { createdAt: 'DESC' },
         relations: { workflowRun: true },
       });
+    });
+  });
+
+  describe('triggerEnrichment', () => {
+    it('should throw NotFoundException if lead does not exist', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(service.triggerEnrichment('invalid-id')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should create WorkflowRun, create pending LeadEnrichment, and publish event with default provider', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (workflowRunsRepo.create as jest.Mock).mockReturnValue({
+        ...mockWorkflowRun,
+        id: 'wf-run-enrich-1',
+        workflowName: 'lead-enrichment',
+      });
+      (workflowRunsRepo.save as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        id: 'wf-run-enrich-1',
+        workflowName: 'lead-enrichment',
+      });
+      (enrichmentsRepo.create as jest.Mock).mockReturnValue({
+        ...mockEnrichment,
+        id: 'enrich-1',
+        workflowRunId: 'wf-run-enrich-1',
+      });
+      (enrichmentsRepo.save as jest.Mock).mockResolvedValue({
+        ...mockEnrichment,
+        id: 'enrich-1',
+        workflowRunId: 'wf-run-enrich-1',
+      });
+
+      const result = await service.triggerEnrichment('lead-123');
+
+      expect(result.leadId).toBe('lead-123');
+      expect(result.workflowRunId).toBe('wf-run-enrich-1');
+      expect(result.enrichmentId).toBe('enrich-1');
+      expect(workflowRunsRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowName: 'lead-enrichment',
+          leadId: 'lead-123',
+          status: WorkflowStatus.PENDING,
+          inputPayload: expect.objectContaining({
+            leadId: 'lead-123',
+            provider: DEFAULT_ENRICHMENT_PROVIDER,
+            email: 'alice@example.com',
+          }),
+        }),
+      );
+      expect(enrichmentsRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-enrich-1',
+          provider: DEFAULT_ENRICHMENT_PROVIDER,
+          status: EnrichmentStatus.PENDING,
+        }),
+      );
+      expect(
+        rabbitmqService.publishLeadEnrichmentRequested,
+      ).toHaveBeenCalledWith({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-enrich-1',
+        provider: DEFAULT_ENRICHMENT_PROVIDER,
+        email: 'alice@example.com',
+        companyName: 'Tech Innovations',
+        companyWebsite: undefined,
+        domain: 'example.com',
+        website: undefined,
+      });
+    });
+
+    it('should respect custom provider and userId if provided in DTO', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (workflowRunsRepo.create as jest.Mock).mockReturnValue({
+        ...mockWorkflowRun,
+        id: 'wf-run-enrich-custom',
+      });
+      (workflowRunsRepo.save as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        id: 'wf-run-enrich-custom',
+      });
+      (enrichmentsRepo.create as jest.Mock).mockReturnValue({
+        ...mockEnrichment,
+        id: 'enrich-custom',
+        provider: 'clearbit',
+      });
+      (enrichmentsRepo.save as jest.Mock).mockResolvedValue({
+        ...mockEnrichment,
+        id: 'enrich-custom',
+        provider: 'clearbit',
+      });
+
+      const result = await service.triggerEnrichment('lead-123', {
+        userId: 'user-sales-456',
+        provider: 'clearbit',
+      });
+
+      expect(result.workflowRunId).toBe('wf-run-enrich-custom');
+      expect(workflowRunsRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          triggeredByUserId: 'user-sales-456',
+        }),
+      );
+      expect(enrichmentsRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: 'clearbit',
+        }),
+      );
+    });
+  });
+
+  describe('handleEnrichmentCallback', () => {
+    it('should throw NotFoundException if lead does not exist', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.handleEnrichmentCallback({
+          leadId: 'invalid-lead-id',
+          status: EnrichmentStatus.SUCCESS,
+          provider: 'mock',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should update LeadEnrichment to SUCCESS, update WorkflowRun to SUCCESS, and update lead profile fields', async () => {
+      const currentLead = { ...mockLead, companyWebsite: null };
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(currentLead);
+      (leadsRepo.save as jest.Mock).mockImplementation((l) =>
+        Promise.resolve(l),
+      );
+
+      const pendingEnrichment = { ...mockEnrichment };
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue(
+        pendingEnrichment,
+      );
+      (enrichmentsRepo.save as jest.Mock).mockImplementation((e) =>
+        Promise.resolve(e),
+      );
+
+      const pendingWfRun = {
+        ...mockWorkflowRun,
+        workflowName: 'lead-enrichment',
+      };
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(pendingWfRun);
+      (workflowRunsRepo.save as jest.Mock).mockImplementation((w) =>
+        Promise.resolve(w),
+      );
+
+      const callbackDto = {
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: EnrichmentStatus.SUCCESS,
+        provider: 'mock',
+        externalRequestId: 'ext-req-789',
+        companyName: 'Tech Innovations Global',
+        companyWebsite: 'https://techinnovations.io',
+        companyIndustry: 'Cloud Computing',
+        companySize: 250,
+        contactJobTitle: 'Chief Technology Officer',
+        contactLinkedinUrl: 'https://linkedin.com/in/alicesmith',
+        rawResponse: { source: 'mock-test', valid: true },
+      };
+
+      const result = await service.handleEnrichmentCallback(callbackDto);
+
+      expect(result.workflowRunUpdated).toBe(true);
+      expect(result.enrichment.status).toBe(EnrichmentStatus.SUCCESS);
+      expect(result.enrichment.companyName).toBe('Tech Innovations Global');
+      expect(result.enrichment.companyWebsite).toBe(
+        'https://techinnovations.io',
+      );
+      expect(result.enrichment.companyIndustry).toBe('Cloud Computing');
+      expect(result.enrichment.companySize).toBe(250);
+
+      expect(leadsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          companyName: 'Tech Innovations Global',
+          companyWebsite: 'https://techinnovations.io',
+          industry: 'Cloud Computing',
+          companySize: 250,
+          jobTitle: 'Chief Technology Officer',
+        }),
+      );
+
+      expect(workflowRunsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: WorkflowStatus.SUCCESS,
+          errorMessage: null,
+        }),
+      );
+    });
+
+    it('should update LeadEnrichment and WorkflowRun to FAILED and record error message on failure', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      const pendingEnrichment = { ...mockEnrichment };
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue(
+        pendingEnrichment,
+      );
+      (enrichmentsRepo.save as jest.Mock).mockImplementation((e) =>
+        Promise.resolve(e),
+      );
+
+      const pendingWfRun = {
+        ...mockWorkflowRun,
+        workflowName: 'lead-enrichment',
+      };
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(pendingWfRun);
+      (workflowRunsRepo.save as jest.Mock).mockImplementation((w) =>
+        Promise.resolve(w),
+      );
+
+      const result = await service.handleEnrichmentCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: EnrichmentStatus.FAILED,
+        provider: 'clearbit',
+        errorMessage: 'Domain not found or API rate limited',
+      });
+
+      expect(result.workflowRunUpdated).toBe(true);
+      expect(result.enrichment.status).toBe(EnrichmentStatus.FAILED);
+      expect(result.enrichment.errorMessage).toBe(
+        'Domain not found or API rate limited',
+      );
+      expect(workflowRunsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: WorkflowStatus.FAILED,
+          errorMessage: 'Domain not found or API rate limited',
+        }),
+      );
+    });
+
+    it('should handle PARTIAL enrichment status and still save data to Lead and LeadEnrichment', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue(null);
+      (enrichmentsRepo.create as jest.Mock).mockReturnValue({
+        ...mockEnrichment,
+      });
+      (enrichmentsRepo.save as jest.Mock).mockImplementation((e) =>
+        Promise.resolve(e),
+      );
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      const result = await service.handleEnrichmentCallback({
+        leadId: 'lead-123',
+        status: EnrichmentStatus.PARTIAL,
+        provider: 'mock',
+        companyName: 'Partially Enriched Co',
+      });
+
+      expect(enrichmentsRepo.create).toHaveBeenCalled();
+      expect(result.enrichment.status).toBe(EnrichmentStatus.PARTIAL);
+    });
+
+    it('should be idempotent and return existing enrichment when already completed', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        status: WorkflowStatus.SUCCESS,
+      });
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockEnrichment,
+        status: EnrichmentStatus.SUCCESS,
+      });
+
+      const result = await service.handleEnrichmentCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: EnrichmentStatus.SUCCESS,
+      });
+
+      expect(result.workflowRunUpdated).toBe(false);
+      expect(result.enrichment.status).toBe(EnrichmentStatus.SUCCESS);
+      expect(enrichmentsRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('should map alternate field names (industry, jobTitle, linkedInUrl) correctly', async () => {
+      const currentLead = { ...mockLead };
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(currentLead);
+      (leadsRepo.save as jest.Mock).mockImplementation((l) =>
+        Promise.resolve(l),
+      );
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockEnrichment,
+        status: EnrichmentStatus.PENDING,
+      });
+      (enrichmentsRepo.save as jest.Mock).mockImplementation((e) =>
+        Promise.resolve(e),
+      );
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        status: WorkflowStatus.PENDING,
+      });
+      (workflowRunsRepo.save as jest.Mock).mockImplementation((w) =>
+        Promise.resolve(w),
+      );
+
+      const result = await service.handleEnrichmentCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: EnrichmentStatus.SUCCESS,
+        industry: 'FinTech',
+        jobTitle: 'Head of Growth',
+        linkedInUrl: 'https://linkedin.com/in/growth-head',
+        companySize: 85,
+      });
+
+      expect(result.enrichment.companyIndustry).toBe('FinTech');
+      expect(result.enrichment.contactJobTitle).toBe('Head of Growth');
+      expect(result.enrichment.contactLinkedinUrl).toBe(
+        'https://linkedin.com/in/growth-head',
+      );
+      expect(result.enrichment.companySize).toBe(85);
+      expect(leadsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          industry: 'FinTech',
+          jobTitle: 'Head of Growth',
+          companySize: 85,
+        }),
+      );
+    });
+
+    it('should execute inside DB transaction when dataSource is provided', async () => {
+      const currentLead = { ...mockLead };
+      const mockLeadRepo = {
+        findOne: jest.fn().mockResolvedValue(currentLead),
+        save: jest.fn().mockImplementation((l) => Promise.resolve(l)),
+      };
+      const mockEnrichRepo = {
+        findOne: jest.fn().mockResolvedValue({
+          ...mockEnrichment,
+          status: EnrichmentStatus.PENDING,
+        }),
+        save: jest.fn().mockImplementation((e) => Promise.resolve(e)),
+      };
+      const mockWfRepo = {
+        findOne: jest.fn().mockResolvedValue({
+          ...mockWorkflowRun,
+          status: WorkflowStatus.PENDING,
+        }),
+        save: jest.fn().mockImplementation((w) => Promise.resolve(w)),
+      };
+
+      const mockDataSource = {
+        transaction: jest
+          .fn()
+          .mockImplementation((cb: (manager: unknown) => Promise<unknown>) => {
+            return cb({
+              getRepository: (entity: { name?: string }) => {
+                if (entity.name === 'Lead') return mockLeadRepo;
+                if (entity.name === 'LeadEnrichment') return mockEnrichRepo;
+                if (entity.name === 'WorkflowRun') return mockWfRepo;
+                return {};
+              },
+            });
+          }),
+      };
+
+      const transactionalService = new LeadIntelligenceService(
+        qualificationsRepo as Repository<LeadQualification>,
+        leadsRepo as Repository<Lead>,
+        workflowRunsRepo as Repository<WorkflowRun>,
+        reviewTasksRepo as Repository<ReviewTask>,
+        notificationsRepo as Repository<Notification>,
+        rabbitmqService as RabbitMQService,
+        scoresRepo as Repository<LeadScore>,
+        interactionsRepo as Repository<Interaction>,
+        enrichmentsRepo as Repository<LeadEnrichment>,
+        mockDataSource as unknown as DataSource,
+      );
+
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(currentLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(null);
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      const result = await transactionalService.handleEnrichmentCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: EnrichmentStatus.SUCCESS,
+        companyName: 'Transactional Co',
+      });
+
+      expect(mockDataSource.transaction).toHaveBeenCalled();
+      expect(mockEnrichRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ companyName: 'Transactional Co' }),
+      );
+      expect(result.enrichment.companyName).toBe('Transactional Co');
+    });
+  });
+
+  describe('getEnrichmentsByLead & getLatestEnrichment', () => {
+    it('should return all enrichments for a lead ordered by createdAt DESC', async () => {
+      (enrichmentsRepo.find as jest.Mock).mockResolvedValue([mockEnrichment]);
+
+      const list = await service.getEnrichmentsByLead('lead-123');
+      expect(list).toEqual([mockEnrichment]);
+      expect(enrichmentsRepo.find).toHaveBeenCalledWith({
+        where: { leadId: 'lead-123' },
+        order: { createdAt: 'DESC' },
+        relations: { workflowRun: true },
+      });
+    });
+
+    it('should return latest enrichment for a lead', async () => {
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue(mockEnrichment);
+
+      const latest = await service.getLatestEnrichment('lead-123');
+      expect(latest).toEqual(mockEnrichment);
+      expect(enrichmentsRepo.findOne).toHaveBeenCalledWith({
+        where: { leadId: 'lead-123' },
+        order: { createdAt: 'DESC' },
+        relations: { workflowRun: true },
+      });
+    });
+  });
+
+  describe('mockEnrichment', () => {
+    it('should return mock company and contact details given domain and email', () => {
+      const res = service.mockEnrichment({
+        domain: 'acme-corp.com',
+        email: 'john@acme-corp.com',
+        provider: 'mock',
+      });
+
+      expect(res.provider).toBe('mock');
+      expect(res.company.name).toContain('Acme-corp');
+      expect(res.company.website).toBe('https://acme-corp.com');
+      expect(res.company.size).toBe(150);
+      expect(res.contact.jobTitle).toBe('Director of Operations');
+      expect(res.rawResponse).toBeDefined();
+    });
+
+    it('should throw InternalServerErrorException when fail="true" or domain is fail-retry.test', () => {
+      expect(() =>
+        service.mockEnrichment({
+          fail: 'true',
+        }),
+      ).toThrow(InternalServerErrorException);
+
+      expect(() =>
+        service.mockEnrichment({
+          domain: 'fail-retry.test',
+        }),
+      ).toThrow(InternalServerErrorException);
     });
   });
 

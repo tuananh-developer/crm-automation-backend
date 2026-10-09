@@ -24,3 +24,23 @@ export interface LeadScoringRequestedEventData {
   enrichmentData?: Record<string, any> | null;
   interactions?: Array<Record<string, any>>;
 }
+
+export interface LeadEnrichmentRequestedEventData {
+  leadId: string;
+  workflowRunId: string;
+  provider: string;
+  email?: string;
+  companyName?: string;
+  companyWebsite?: string;
+  domain?: string;
+  website?: string;
+}
+
+export interface FollowUpTriggeredEventData {
+  enrollmentId: string;
+  leadId: string;
+  sequenceId: string;
+  stepId?: string;
+  scheduledAt?: string;
+}
+

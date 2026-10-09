@@ -1,5 +1,6 @@
 import {
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
   Optional,
@@ -16,6 +17,7 @@ import { ReviewTask } from '../review/entities/review-task.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
 import {
+  EnrichmentStatus,
   QualificationStatus,
   ScoreLabel,
 } from './enums/lead-intelligence.enum.js';
@@ -24,13 +26,16 @@ import { ReviewStatus } from '../review/enums/review.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
 import {
   computeScoreLabel,
+  EnrichmentCallbackDto,
   QualificationCallbackDto,
   ScoringCallbackDto,
+  TriggerEnrichmentDto,
   TriggerQualificationDto,
   TriggerScoringDto,
 } from './dto/index.js';
 
 export const CONFIDENCE_THRESHOLD = 0.8;
+export const DEFAULT_ENRICHMENT_PROVIDER = 'mock';
 
 @Injectable()
 export class LeadIntelligenceService {
@@ -286,6 +291,354 @@ export class LeadIntelligenceService {
         workflowRun: true,
       },
     });
+  }
+
+  async getEnrichmentsByLead(leadId: string): Promise<LeadEnrichment[]> {
+    return this.enrichmentsRepository.find({
+      where: { leadId },
+      order: { createdAt: 'DESC' },
+      relations: {
+        workflowRun: true,
+      },
+    });
+  }
+
+  async triggerEnrichment(
+    leadId: string,
+    dto?: TriggerEnrichmentDto,
+  ): Promise<{
+    message: string;
+    workflowRunId: string;
+    enrichmentId: string;
+    leadId: string;
+  }> {
+    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
+    if (!lead) {
+      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
+    }
+
+    const provider = dto?.provider ?? DEFAULT_ENRICHMENT_PROVIDER;
+
+    // Normalize domain and website for RabbitMQ / n8n
+    const website = lead.companyWebsite || undefined;
+    let domain: string | undefined = undefined;
+    if (website) {
+      domain = website
+        .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+        .split('/')[0]
+        .split(':')[0]
+        .trim();
+    } else if (lead.email && lead.email.includes('@')) {
+      domain = lead.email.split('@')[1].trim();
+    }
+
+    // 1. Create WorkflowRun
+    const workflowRun = this.workflowRunsRepository.create({
+      workflowName: 'lead-enrichment',
+      leadId: lead.id,
+      triggeredByUserId: dto?.userId ?? null,
+      status: WorkflowStatus.PENDING,
+      startedAt: new Date(),
+      inputPayload: {
+        leadId: lead.id,
+        provider,
+        email: lead.email,
+        companyName: lead.companyName,
+        companyWebsite: lead.companyWebsite,
+        domain,
+        website,
+      },
+    });
+    const savedWorkflowRun =
+      await this.workflowRunsRepository.save(workflowRun);
+    this.logger.log(
+      `Created WorkflowRun ${savedWorkflowRun.id} for lead enrichment of lead ${lead.id}`,
+    );
+
+    // 2. Create pending LeadEnrichment record
+    const enrichment = this.enrichmentsRepository.create({
+      leadId: lead.id,
+      workflowRunId: savedWorkflowRun.id,
+      provider,
+      status: EnrichmentStatus.PENDING,
+      enrichedAt: new Date(),
+    });
+    const savedEnrichment = await this.enrichmentsRepository.save(enrichment);
+    this.logger.log(
+      `Created LeadEnrichment ${savedEnrichment.id} (status=PENDING) for lead ${lead.id}`,
+    );
+
+    // 3. Publish event
+    await this.rabbitmqService.publishLeadEnrichmentRequested({
+      leadId: lead.id,
+      workflowRunId: savedWorkflowRun.id,
+      provider,
+      email: lead.email ?? undefined,
+      companyName: lead.companyName ?? undefined,
+      companyWebsite: lead.companyWebsite ?? undefined,
+      domain,
+      website,
+    });
+
+    return {
+      message: 'Lead enrichment workflow triggered successfully',
+      workflowRunId: savedWorkflowRun.id,
+      enrichmentId: savedEnrichment.id,
+      leadId: lead.id,
+    };
+  }
+
+  /**
+   * Handle the callback from n8n after enrichment completes:
+   *  1. Perform idempotency check to avoid duplicate processing.
+   *  2. Execute within DB Transaction:
+   *     - Find or create LeadEnrichment record.
+   *     - Update with enriched data & final status (SUCCESS/FAILED/PARTIAL).
+   *     - Update Lead profile if SUCCESS or PARTIAL.
+   *     - Update WorkflowRun to SUCCESS or FAILED.
+   */
+  async handleEnrichmentCallback(dto: EnrichmentCallbackDto): Promise<{
+    enrichment: LeadEnrichment;
+    workflowRunUpdated: boolean;
+  }> {
+    const lead = await this.leadsRepository.findOne({
+      where: { id: dto.leadId },
+    });
+    if (!lead) {
+      throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
+    }
+
+    const provider = dto.provider ?? DEFAULT_ENRICHMENT_PROVIDER;
+    const companyIndustry = dto.industry ?? dto.companyIndustry ?? null;
+    const contactJobTitle = dto.jobTitle ?? dto.contactJobTitle ?? null;
+    const contactLinkedinUrl =
+      dto.linkedInUrl ?? dto.contactLinkedinUrl ?? null;
+    const companySize = dto.companySize ?? null;
+
+    // ── Idempotency Check ───────────────────────────────────────────────────
+    if (dto.workflowRunId) {
+      const existingRun = await this.workflowRunsRepository.findOne({
+        where: { id: dto.workflowRunId },
+      });
+      const existingEnrichment = await this.enrichmentsRepository.findOne({
+        where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
+      });
+
+      if (
+        existingEnrichment &&
+        existingEnrichment.status !== EnrichmentStatus.PENDING &&
+        existingRun &&
+        (existingRun.status === WorkflowStatus.SUCCESS ||
+          existingRun.status === WorkflowStatus.FAILED)
+      ) {
+        this.logger.warn(
+          `Idempotent duplicate callback detected for workflowRunId=${dto.workflowRunId}. Returning existing enrichment result.`,
+        );
+        return {
+          enrichment: existingEnrichment,
+          workflowRunUpdated: false,
+        };
+      }
+    }
+
+    // ── Transaction Execution ───────────────────────────────────────────────
+    const processEnrichment = async (repos: {
+      leadRepo: Repository<Lead>;
+      enrichmentRepo: Repository<LeadEnrichment>;
+      workflowRunRepo: Repository<WorkflowRun>;
+    }) => {
+      // 1. Find the pending enrichment record
+      const enrichment = dto.workflowRunId
+        ? await repos.enrichmentRepo.findOne({
+            where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
+          })
+        : await repos.enrichmentRepo.findOne({
+            where: { leadId: dto.leadId, status: EnrichmentStatus.PENDING },
+            order: { createdAt: 'DESC' },
+          });
+
+      const target =
+        enrichment ??
+        repos.enrichmentRepo.create({
+          leadId: dto.leadId,
+          workflowRunId: dto.workflowRunId ?? null,
+          provider,
+          status: EnrichmentStatus.PENDING,
+          enrichedAt: new Date(),
+        });
+
+      // 2. Apply enriched data
+      target.status = dto.status;
+      target.provider = provider;
+      target.externalRequestId = dto.externalRequestId ?? null;
+      target.companyName = dto.companyName ?? null;
+      target.companyWebsite = dto.companyWebsite ?? null;
+      target.companyIndustry = companyIndustry;
+      target.companySize = companySize;
+      target.contactJobTitle = contactJobTitle;
+      target.contactLinkedinUrl = contactLinkedinUrl;
+      target.rawResponse = dto.rawResponse ?? null;
+      target.errorMessage = dto.errorMessage ?? null;
+      target.enrichedAt = new Date();
+
+      const savedEnrichment = await repos.enrichmentRepo.save(target);
+      this.logger.log(
+        `Updated LeadEnrichment ${savedEnrichment.id} to status=${dto.status} for lead ${dto.leadId}`,
+      );
+
+      // 3. Update Lead with enriched fields if successful or partial (Lost Update Prevention)
+      if (
+        dto.status === EnrichmentStatus.SUCCESS ||
+        dto.status === EnrichmentStatus.PARTIAL
+      ) {
+        const leadToUpdate =
+          typeof repos.leadRepo.findOne === 'function'
+            ? await repos.leadRepo.findOne({
+                where: { id: dto.leadId },
+              })
+            : lead;
+        if (leadToUpdate) {
+          if (dto.companyName) leadToUpdate.companyName = dto.companyName;
+          if (dto.companyWebsite)
+            leadToUpdate.companyWebsite = dto.companyWebsite;
+          if (companyIndustry) leadToUpdate.industry = companyIndustry;
+          if (companySize !== null && companySize !== undefined) {
+            leadToUpdate.companySize = companySize;
+          }
+          if (contactJobTitle) leadToUpdate.jobTitle = contactJobTitle;
+          await repos.leadRepo.save(leadToUpdate);
+          this.logger.log(
+            `Updated Lead ${leadToUpdate.id} profile with enriched details`,
+          );
+        }
+      }
+
+      // 4. Update WorkflowRun
+      let workflowRunUpdated = false;
+      const workflowRunId =
+        dto.workflowRunId ?? savedEnrichment.workflowRunId ?? null;
+
+      if (workflowRunId) {
+        const workflowRun = await repos.workflowRunRepo.findOne({
+          where: { id: workflowRunId },
+        });
+        if (workflowRun) {
+          const isFailure = dto.status === EnrichmentStatus.FAILED;
+          workflowRun.status = isFailure
+            ? WorkflowStatus.FAILED
+            : WorkflowStatus.SUCCESS;
+          workflowRun.finishedAt = new Date();
+          workflowRun.errorMessage = dto.errorMessage ?? null;
+          workflowRun.outputPayload = {
+            enrichmentId: savedEnrichment.id,
+            status: dto.status,
+            provider,
+            companyName: dto.companyName,
+            companyWebsite: dto.companyWebsite,
+            companyIndustry,
+          };
+          await repos.workflowRunRepo.save(workflowRun);
+          workflowRunUpdated = true;
+        }
+      }
+
+      if (dto.status === EnrichmentStatus.PARTIAL) {
+        this.logger.warn(
+          `Lead ${dto.leadId} enrichment partially succeeded (provider: ${provider}): ${dto.errorMessage ?? 'no details'}`,
+        );
+      } else if (dto.status === EnrichmentStatus.FAILED) {
+        this.logger.error(
+          `Lead ${dto.leadId} enrichment failed (provider: ${provider}): ${dto.errorMessage ?? 'unknown error'}`,
+        );
+      }
+
+      return { enrichment: savedEnrichment, workflowRunUpdated };
+    };
+
+    if (this.dataSource) {
+      return await this.dataSource.transaction(async (manager) => {
+        return processEnrichment({
+          leadRepo: manager.getRepository(Lead),
+          enrichmentRepo: manager.getRepository(LeadEnrichment),
+          workflowRunRepo: manager.getRepository(WorkflowRun),
+        });
+      });
+    }
+
+    return await processEnrichment({
+      leadRepo: this.leadsRepository,
+      enrichmentRepo: this.enrichmentsRepository,
+      workflowRunRepo: this.workflowRunsRepository,
+    });
+  }
+
+  /**
+   * Mock external enrichment service for local development, n8n workflows, and testing.
+   * Can simulate failure with `fail=true` to test retries and error handling.
+   */
+  mockEnrichment(query: {
+    domain?: string;
+    email?: string;
+    provider?: string;
+    fail?: string;
+  }) {
+    if (query.fail === 'true' || query.domain === 'fail-retry.test') {
+      throw new InternalServerErrorException(
+        'Simulated external enrichment service failure (for retry testing)',
+      );
+    }
+
+    const freeEmailProviders = new Set([
+      'gmail.com',
+      'yahoo.com',
+      'hotmail.com',
+      'outlook.com',
+      'live.com',
+      'icloud.com',
+      'mail.com',
+      'aol.com',
+    ]);
+
+    let domain = query.domain?.trim().toLowerCase();
+    if (domain && freeEmailProviders.has(domain)) {
+      domain = '';
+    }
+    if (!domain) {
+      const emailDomain =
+        query.email && query.email.includes('@')
+          ? query.email.split('@')[1].trim().toLowerCase()
+          : '';
+      if (emailDomain && !freeEmailProviders.has(emailDomain)) {
+        domain = emailDomain;
+      } else {
+        domain = 'enterprise.com';
+      }
+    }
+
+    const namePart = domain ? domain.split('.')[0] : 'Enterprise';
+    const capitalizedName =
+      namePart.charAt(0).toUpperCase() + namePart.slice(1);
+
+    return {
+      provider: query.provider || 'mock',
+      externalRequestId: `ext-${Date.now()}`,
+      company: {
+        name: `${capitalizedName} Solutions`,
+        website: `https://${domain}`,
+        industry: 'Software & Technology',
+        size: 150,
+      },
+      contact: {
+        jobTitle: 'Director of Operations',
+        linkedinUrl: `https://linkedin.com/company/${namePart}`,
+      },
+      rawResponse: {
+        source: 'mock-enrichment-v1',
+        query: { domain, email: query.email },
+        timestamp: new Date().toISOString(),
+        score: 0.95,
+      },
+    };
   }
 
   /**

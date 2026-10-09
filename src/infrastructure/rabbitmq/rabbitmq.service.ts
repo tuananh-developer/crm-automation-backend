@@ -20,6 +20,7 @@ import type {
   CrmEvent,
   LeadCreatedEventData,
   LeadQualificationRequestedEventData,
+  LeadEnrichmentRequestedEventData,
   LeadScoringRequestedEventData,
 } from './rabbitmq.interface.js';
 
@@ -61,6 +62,14 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
           await channel.assertQueue(queueName, { durable: true });
           await channel.bindQueue(queueName, CRM_EXCHANGE, 'lead.*');
 
+          // Assert dedicated queue for AI Lead Enrichment (UC03)
+          await channel.assertQueue('lead.enrichment.queue', { durable: true });
+          await channel.bindQueue(
+            'lead.enrichment.queue',
+            CRM_EXCHANGE,
+            CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
+          );
+
           // Assert dedicated queue for AI Lead Scoring (UC04)
           await channel.assertQueue('lead.scoring.queue', { durable: true });
           await channel.bindQueue(
@@ -70,7 +79,7 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
           );
 
           this.logger.log(
-            `Exchange '${CRM_EXCHANGE}', default queue '${queueName}', and 'lead.scoring.queue' asserted and bound`,
+            `Exchange '${CRM_EXCHANGE}', default queue '${queueName}', 'lead.enrichment.queue', and 'lead.scoring.queue' asserted and bound`,
           );
         },
       });
@@ -171,6 +180,15 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
   ): Promise<CrmEvent<LeadQualificationRequestedEventData>> {
     return this.publishEvent<LeadQualificationRequestedEventData>(
       CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED,
+      data,
+    );
+  }
+
+  async publishLeadEnrichmentRequested(
+    data: LeadEnrichmentRequestedEventData,
+  ): Promise<CrmEvent<LeadEnrichmentRequestedEventData>> {
+    return this.publishEvent<LeadEnrichmentRequestedEventData>(
+      CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
       data,
     );
   }
