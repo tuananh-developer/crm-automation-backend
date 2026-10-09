@@ -151,6 +151,7 @@ describe('SegmentsService', () => {
     });
 
     it('rejects duplicate segment name', async () => {
+      (usersRepository.findOne as jest.Mock).mockResolvedValue(mockUser);
       (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
 
       await expect(
@@ -201,7 +202,9 @@ describe('SegmentsService', () => {
   describe('evaluateCustomer', () => {
     it('matches customer matching the criteria and assigns segment', async () => {
       (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
-      (customersRepository.findOne as jest.Mock).mockResolvedValue(mockCustomer);
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
       (customerSegmentsRepository.findOne as jest.Mock).mockResolvedValue(null);
 
       const result = await service.evaluateCustomer('segment-1', {
@@ -225,7 +228,9 @@ describe('SegmentsService', () => {
         customerId: 'customer-1',
         segmentId: 'segment-1',
       } as unknown as CustomerSegment;
-      (customerSegmentsRepository.findOne as jest.Mock).mockResolvedValue(existing);
+      (customerSegmentsRepository.findOne as jest.Mock).mockResolvedValue(
+        existing,
+      );
 
       const result = await service.evaluateCustomer('segment-1', {
         customerId: 'customer-1',

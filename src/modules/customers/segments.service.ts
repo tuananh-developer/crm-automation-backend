@@ -67,7 +67,8 @@ export class SegmentsService {
       updatedBy: null,
     });
 
-    return this.segmentsRepository.save(segment);
+    const saved = await this.segmentsRepository.save(segment);
+    return this.withoutUserHashes(saved);
   }
 
   async findAll(query: QuerySegmentDto) {
@@ -110,9 +111,7 @@ export class SegmentsService {
         .groupBy('cs.segment_id')
         .getRawMany<{ segmentId: string; count: string }>();
 
-      countMap = new Map(
-        counts.map((c) => [c.segmentId, Number(c.count)]),
-      );
+      countMap = new Map(counts.map((c) => [c.segmentId, Number(c.count)]));
     }
 
     const dataWithCount = data.map((segment) =>
@@ -207,7 +206,8 @@ export class SegmentsService {
       segment.isActive = dto.isActive;
     }
 
-    return this.segmentsRepository.save(segment);
+    const saved = await this.segmentsRepository.save(segment);
+    return this.withoutUserHashes(saved);
   }
 
   async remove(id: string) {
