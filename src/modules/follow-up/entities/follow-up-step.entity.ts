@@ -51,6 +51,10 @@ export class FollowUpStep {
   @Column({ name: 'metadata', type: 'jsonb', nullable: true })
   metadata!: Record<string, any> | null;
 
+  get actionConfig(): Record<string, any> | null {
+    return this.metadata ?? this.conditions ?? null;
+  }
+
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive!: boolean;
 

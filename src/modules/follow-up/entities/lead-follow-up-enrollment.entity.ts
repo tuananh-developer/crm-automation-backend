@@ -20,6 +20,10 @@ import type { User } from '../../users/entities/user.entity.js';
 @Index('IDX_enrollments_lead_id', ['leadId'])
 @Index('IDX_enrollments_sequence_id', ['sequenceId'])
 @Index('IDX_enrollments_status', ['status'])
+@Index('UQ_enrollments_lead_sequence_active', ['leadId', 'sequenceId'], {
+  unique: true,
+  where: `"status" = 'ACTIVE'`,
+})
 export class LeadFollowUpEnrollment {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
