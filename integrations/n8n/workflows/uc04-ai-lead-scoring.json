@@ -107,7 +107,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  workflowRunId: $('Prepare Scoring Input & Bundle').first()?.json?.workflowRunId || null,\n  leadId: $('Prepare Scoring Input & Bundle').first()?.json?.leadId || null,\n  status: 'FAILED',\n  errorMessage: $json.execution?.error?.message || 'Workflow execution error during AI scoring'\n}) }}",
+        "jsonBody": "={{ (() => {\n  let leadId = null, workflowRunId = null;\n  try {\n    const prep = $('Prepare Scoring Input & Bundle')?.first()?.json;\n    leadId = prep?.leadId;\n    workflowRunId = prep?.workflowRunId;\n  } catch (e) {}\n  if (!leadId || !workflowRunId) {\n    try {\n      const trig = $('RabbitMQ Trigger (lead.scoring.queue)')?.first()?.json;\n      let p = trig?.content;\n      if (typeof p === 'string') {\n        p = JSON.parse(p);\n      }\n      leadId = leadId || p?.data?.leadId || p?.leadId || null;\n      workflowRunId = workflowRunId || p?.data?.workflowRunId || p?.workflowRunId || null;\n    } catch (e) {}\n  }\n  return JSON.stringify({\n    leadId,\n    workflowRunId,\n    status: 'FAILED',\n    errorMessage: $json?.execution?.error?.message || $json?.message || 'Workflow execution error during AI scoring'\n  });\n})() }}",
         "options": {
           "timeout": 10000
         }
