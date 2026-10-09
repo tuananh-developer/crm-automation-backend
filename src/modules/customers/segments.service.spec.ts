@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { SegmentsService } from './segments.service.js';
 import type { Repository } from 'typeorm';
 import type { Customer } from './entities/customer.entity.js';
@@ -10,7 +6,6 @@ import type { Segment } from './entities/segment.entity.js';
 import type { CustomerSegment } from './entities/customer-segment.entity.js';
 import type { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import type { User } from '../users/entities/user.entity.js';
-import { SegmentAssignmentType } from './enums/customer.enum.js';
 
 describe('SegmentsService', () => {
   let service: SegmentsService;
@@ -76,7 +71,6 @@ describe('SegmentsService', () => {
 
   const createQueryBuilder = () => ({
     leftJoinAndSelect: jest.fn().mockReturnThis(),
-    loadRelationCountAndMap: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
@@ -98,13 +92,23 @@ describe('SegmentsService', () => {
       remove: jest.fn(),
       createQueryBuilder: jest.fn(),
     };
+    const countQb = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest
+        .fn()
+        .mockResolvedValue([{ segmentId: 'segment-1', count: '42' }]),
+    };
     customerSegmentsRepository = {
       find: jest.fn(),
       findOne: jest.fn(),
       create: jest.fn((dto) => (dto ?? {}) as CustomerSegment),
       save: jest.fn((item) => Promise.resolve(item as any)),
       remove: jest.fn((item) => Promise.resolve(item as any)),
-      count: jest.fn(),
+      count: jest.fn().mockResolvedValue(5),
+      createQueryBuilder: jest.fn().mockReturnValue(countQb),
     };
     leadScoresRepository = {
       createQueryBuilder: jest.fn(),
@@ -152,18 +156,14 @@ describe('SegmentsService', () => {
   });
 
   describe('findAll', () => {
-    it('uses loadRelationCountAndMap and returns paginated segments without password hashes', async () => {
+    it('aggregates customer counts in a single group query and strips creator password hash', async () => {
       const qb = createQueryBuilder();
-      const segmentWithCount = { ...mockSegment, customerCount: 42 };
-      qb.getManyAndCount.mockResolvedValue([[segmentWithCount], 1]);
+      qb.getManyAndCount.mockResolvedValue([[mockSegment], 1]);
       (segmentsRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
 
       const result = await service.findAll({ page: 1, limit: 10 });
 
-      expect(qb.loadRelationCountAndMap).toHaveBeenCalledWith(
-        'segment.customerCount',
-        'segment.customerSegments',
-      );
+      expect(customerSegmentsRepository.createQueryBuilder).toHaveBeenCalled();
       expect(result.data).toHaveLength(1);
       expect(result.data[0].customerCount).toBe(42);
       expect((result.data[0].creator as any)?.passwordHash).toBeUndefined();
@@ -172,10 +172,8 @@ describe('SegmentsService', () => {
 
   describe('findOne', () => {
     it('returns a single segment with mapped customerCount', async () => {
-      const qb = createQueryBuilder();
-      const segmentWithCount = { ...mockSegment, customerCount: 5 };
-      qb.getOne.mockResolvedValue(segmentWithCount);
-      (segmentsRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customerSegmentsRepository.count as jest.Mock).mockResolvedValue(5);
 
       const result = await service.findOne('segment-1');
 
@@ -184,9 +182,7 @@ describe('SegmentsService', () => {
     });
 
     it('throws NotFoundException when segment does not exist', async () => {
-      const qb = createQueryBuilder();
-      qb.getOne.mockResolvedValue(null);
-      (segmentsRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(null);
 
       await expect(service.findOne('missing-id')).rejects.toBeInstanceOf(
         NotFoundException,

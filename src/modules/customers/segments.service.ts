@@ -77,11 +77,7 @@ export class SegmentsService {
     const qb = this.segmentsRepository
       .createQueryBuilder('segment')
       .leftJoinAndSelect('segment.creator', 'creator')
-      .leftJoinAndSelect('segment.updater', 'updater')
-      .loadRelationCountAndMap(
-        'segment.customerCount',
-        'segment.customerSegments',
-      );
+      .leftJoinAndSelect('segment.updater', 'updater');
 
     if (query.search) {
       qb.andWhere(
@@ -102,10 +98,27 @@ export class SegmentsService {
 
     const [data, total] = await qb.getManyAndCount();
 
-    const dataWithCount = data.map((segment: any) =>
+    let countMap = new Map<string, number>();
+
+    if (data.length > 0) {
+      const segmentIds = data.map((s) => s.id);
+      const counts = await this.customerSegmentsRepository
+        .createQueryBuilder('cs')
+        .select('cs.segment_id', 'segmentId')
+        .addSelect('COUNT(cs.id)', 'count')
+        .where('cs.segment_id IN (:...segmentIds)', { segmentIds })
+        .groupBy('cs.segment_id')
+        .getRawMany<{ segmentId: string; count: string }>();
+
+      countMap = new Map(
+        counts.map((c) => [c.segmentId, Number(c.count)]),
+      );
+    }
+
+    const dataWithCount = data.map((segment) =>
       this.withoutUserHashes({
         ...segment,
-        customerCount: Number(segment.customerCount ?? 0),
+        customerCount: countMap.get(segment.id) ?? 0,
       }),
     );
 
@@ -121,24 +134,25 @@ export class SegmentsService {
   }
 
   async findOne(id: string): Promise<Segment & { customerCount: number }> {
-    const segment = await this.segmentsRepository
-      .createQueryBuilder('segment')
-      .leftJoinAndSelect('segment.creator', 'creator')
-      .leftJoinAndSelect('segment.updater', 'updater')
-      .loadRelationCountAndMap(
-        'segment.customerCount',
-        'segment.customerSegments',
-      )
-      .where('segment.id = :id', { id })
-      .getOne();
+    const segment = await this.segmentsRepository.findOne({
+      where: { id },
+      relations: {
+        creator: true,
+        updater: true,
+      },
+    });
 
     if (!segment) {
       throw new NotFoundException(`Segment with ID '${id}' not found`);
     }
 
+    const customerCount = await this.customerSegmentsRepository.count({
+      where: { segmentId: id },
+    });
+
     return this.withoutUserHashes({
       ...segment,
-      customerCount: Number((segment as any).customerCount ?? 0),
+      customerCount,
     });
   }
 
