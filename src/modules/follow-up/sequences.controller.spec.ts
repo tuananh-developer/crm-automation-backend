@@ -136,6 +136,16 @@ describe('SequencesController', () => {
     expect(res.id).toBe('seq-123');
   });
 
+  it('should archive/delete sequence via service', async () => {
+    const res = await controller.deleteSequence('seq-123');
+
+    expect(service.updateSequence).toHaveBeenCalledWith('seq-123', {
+      status: FollowUpSequenceStatus.ARCHIVED,
+      isActive: false,
+    });
+    expect(res.id).toBe('seq-123');
+  });
+
   // ── Step CRUD Tests ───────────────────────────────────────────────────────
 
   it('should create step for sequence via service', async () => {

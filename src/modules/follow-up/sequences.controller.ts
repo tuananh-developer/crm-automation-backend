@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -271,6 +272,24 @@ export class SequencesController {
     @Body() dto: UpdateSequenceDto,
   ) {
     return this.sequencesService.updateSequence(id, dto);
+  }
+
+  @Delete(':id')
+  @ApiOperation({
+    summary: 'Archive/Delete a sequence',
+    description: 'Archives a sequence by transitioning its status to ARCHIVED.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the sequence to archive' })
+  @ApiResponse({
+    status: 200,
+    description: 'Sequence archived successfully.',
+  })
+  @ApiResponse({ status: 404, description: 'Sequence not found.' })
+  deleteSequence(@Param('id', ParseUUIDPipe) id: string) {
+    return this.sequencesService.updateSequence(id, {
+      status: FollowUpSequenceStatus.ARCHIVED,
+      isActive: false,
+    });
   }
 
   @Post(':id/steps')
