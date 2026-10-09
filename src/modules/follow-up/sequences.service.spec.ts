@@ -109,7 +109,9 @@ describe('SequencesService', () => {
     createdAt: new Date(),
     updatedAt: new Date(),
     steps: [mockStep1, mockStep2],
-    isActive: true,
+    get isActive() {
+      return this.status === FollowUpSequenceStatus.ACTIVE;
+    },
   } as unknown as FollowUpSequence;
 
   const mockEnrollment: LeadFollowUpEnrollment = {
@@ -330,6 +332,7 @@ describe('SequencesService', () => {
       (sequencesRepo.findOne as jest.Mock).mockResolvedValue({
         ...mockSequence,
         status: FollowUpSequenceStatus.PAUSED,
+        isActive: false,
       });
 
       await expect(

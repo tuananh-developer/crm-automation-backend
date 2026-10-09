@@ -330,7 +330,10 @@ export class SequencesService {
 
     // 2. Validate Sequence
     const sequence = await this.findSequenceById(dto.sequenceId);
-    if (!sequence.isActive) {
+    if (
+      sequence.status !== FollowUpSequenceStatus.ACTIVE ||
+      sequence.isActive === false
+    ) {
       throw new BadRequestException('Sequence is not active');
     }
 
