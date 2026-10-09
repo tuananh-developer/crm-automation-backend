@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
@@ -77,7 +77,11 @@ export class SegmentsService {
     const qb = this.segmentsRepository
       .createQueryBuilder('segment')
       .leftJoinAndSelect('segment.creator', 'creator')
-      .leftJoinAndSelect('segment.updater', 'updater');
+      .leftJoinAndSelect('segment.updater', 'updater')
+      .loadRelationCountAndMap(
+        'segment.customerCount',
+        'segment.customerSegments',
+      );
 
     if (query.search) {
       qb.andWhere(
@@ -98,16 +102,10 @@ export class SegmentsService {
 
     const [data, total] = await qb.getManyAndCount();
 
-    const dataWithCount = await Promise.all(
-      data.map(async (segment) => {
-        const customerCount = await this.customerSegmentsRepository.count({
-          where: { segmentId: segment.id },
-        });
-
-        return this.withoutUserHashes({
-          ...segment,
-          customerCount,
-        });
+    const dataWithCount = data.map((segment: any) =>
+      this.withoutUserHashes({
+        ...segment,
+        customerCount: Number(segment.customerCount ?? 0),
       }),
     );
 
@@ -123,25 +121,24 @@ export class SegmentsService {
   }
 
   async findOne(id: string): Promise<Segment & { customerCount: number }> {
-    const segment = await this.segmentsRepository.findOne({
-      where: { id },
-      relations: {
-        creator: true,
-        updater: true,
-      },
-    });
+    const segment = await this.segmentsRepository
+      .createQueryBuilder('segment')
+      .leftJoinAndSelect('segment.creator', 'creator')
+      .leftJoinAndSelect('segment.updater', 'updater')
+      .loadRelationCountAndMap(
+        'segment.customerCount',
+        'segment.customerSegments',
+      )
+      .where('segment.id = :id', { id })
+      .getOne();
 
     if (!segment) {
       throw new NotFoundException(`Segment with ID '${id}' not found`);
     }
 
-    const customerCount = await this.customerSegmentsRepository.count({
-      where: { segmentId: id },
-    });
-
     return this.withoutUserHashes({
       ...segment,
-      customerCount,
+      customerCount: Number((segment as any).customerCount ?? 0),
     });
   }
 
@@ -360,34 +357,55 @@ export class SegmentsService {
           },
         });
 
+    const BATCH_SIZE = 50;
     let matched = 0;
 
-    for (const customer of customers) {
-      const evaluation = await this.evaluateRule(segment, customer);
+    for (let i = 0; i < customers.length; i += BATCH_SIZE) {
+      const batch = customers.slice(i, i + BATCH_SIZE);
+      const customerIdsInBatch = batch.map((c) => c.id);
 
-      const existing = await this.customerSegmentsRepository.findOne({
+      const existingAssignments = await this.customerSegmentsRepository.find({
         where: {
-          customerId: customer.id,
           segmentId: segment.id,
+          customerId: In(customerIdsInBatch),
         },
       });
+      const existingMap = new Map(
+        existingAssignments.map((a) => [a.customerId, a]),
+      );
 
-      if (evaluation.matched) {
-        matched++;
+      const toSave: CustomerSegment[] = [];
+      const toRemove: CustomerSegment[] = [];
 
-        const assignment = existing ?? this.customerSegmentsRepository.create();
+      for (const customer of batch) {
+        const evaluation = await this.evaluateRule(segment, customer);
+        const existing = existingMap.get(customer.id);
 
-        assignment.customerId = customer.id;
-        assignment.segmentId = segment.id;
-        assignment.assignmentType = SegmentAssignmentType.RULE;
-        assignment.confidence = evaluation.confidence;
-        assignment.assignedReason = evaluation.reason;
-        assignment.assignedAt = new Date();
-        assignment.assignedBy = segment.createdBy;
+        if (evaluation.matched) {
+          matched++;
 
-        await this.customerSegmentsRepository.save(assignment);
-      } else if (existing) {
-        await this.customerSegmentsRepository.remove(existing);
+          const assignment =
+            existing ?? this.customerSegmentsRepository.create();
+
+          assignment.customerId = customer.id;
+          assignment.segmentId = segment.id;
+          assignment.assignmentType = SegmentAssignmentType.RULE;
+          assignment.confidence = evaluation.confidence;
+          assignment.assignedReason = evaluation.reason;
+          assignment.assignedAt = new Date();
+          assignment.assignedBy = segment.createdBy;
+
+          toSave.push(assignment);
+        } else if (existing) {
+          toRemove.push(existing);
+        }
+      }
+
+      if (toSave.length > 0) {
+        await this.customerSegmentsRepository.save(toSave);
+      }
+      if (toRemove.length > 0) {
+        await this.customerSegmentsRepository.remove(toRemove);
       }
     }
 

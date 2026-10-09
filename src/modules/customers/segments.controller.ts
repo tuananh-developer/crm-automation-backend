@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -32,32 +33,44 @@ export class SegmentsController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.segmentsService.findOne(id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateSegmentDto) {
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateSegmentDto,
+  ) {
     return this.segmentsService.update(id, dto);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
+  remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.segmentsService.remove(id);
   }
 
   @Get(':id/customers')
-  getCustomers(@Param('id') id: string, @Query() query: QuerySegmentDto) {
+  getCustomers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: QuerySegmentDto,
+  ) {
     return this.segmentsService.getCustomers(id, query);
   }
 
   @Post(':id/evaluate')
-  evaluateCustomer(@Param('id') id: string, @Body() dto: EvaluateSegmentDto) {
+  evaluateCustomer(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: EvaluateSegmentDto,
+  ) {
     return this.segmentsService.evaluateCustomer(id, dto);
   }
 
   @Post(':id/evaluate-all')
-  evaluateAll(@Param('id') id: string, @Body() dto: EvaluateSegmentBulkDto) {
+  evaluateAll(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: EvaluateSegmentBulkDto,
+  ) {
     return this.segmentsService.evaluateAll(id, dto);
   }
 }
