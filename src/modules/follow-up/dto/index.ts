@@ -4,3 +4,7 @@ export * from './create-step.dto.js';
 export * from './update-step.dto.js';
 export * from './enroll-lead.dto.js';
 export * from './cancel-enrollment.dto.js';
+export * from './execute-follow-up.dto.js';
+export * from './query-follow-up-execution.dto.js';
+export * from './enroll-lead.dto.js';
+export * from './update-enrollment.dto.js';

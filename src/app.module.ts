@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller.js';
@@ -23,6 +24,7 @@ import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    ScheduleModule.forRoot(),
     RabbitMQModule,
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],

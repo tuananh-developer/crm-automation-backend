@@ -1,0 +1,151 @@
+{
+  "name": "UC06 - Follow-up Execution Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "follow-up-execute",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [180, 300],
+      "webhookId": "uc06-follow-up-execute"
+    },
+    {
+      "parameters": {
+        "jsCode": "const incoming = $input.first().json;\nconst body = incoming.body ?? incoming;\n\nconst required = ['executionId', 'enrollmentId', 'stepId', 'recipient', 'message', 'channel'];\nconst missing = required.filter((key) => !body[key]);\n\nif (missing.length > 0) {\n  throw new Error(`Invalid follow-up payload. Missing fields: ${missing.join(', ')}`);\n}\n\nreturn [{ json: { ...body, attempt: body.attempt ?? 1 } }];"
+      },
+      "id": "2",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst channel = String(input.channel || 'EMAIL').toUpperCase();\nconst message = String(input.message || '').trim();\n\nif (!message) {\n  throw new Error('Follow-up message content is empty after template rendering');\n}\n\nreturn [{\n  json: {\n    ...input,\n    channel,\n    providerPayload: {\n      to: input.recipient,\n      subject: input.subject ?? null,\n      text: message,\n      channel,\n      actionType: input.actionType ?? null,\n      executionId: input.executionId,\n      enrollmentId: input.enrollmentId,\n      stepId: input.stepId,\n      leadId: input.leadId ?? null,\n      customerId: input.customerId ?? null\n    }\n  }\n}];"
+      },
+      "id": "3",
+      "name": "Build Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [620, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.COMMUNICATION_SERVICE_URL || 'http://crm_communication_service:3000') + '/messages' }}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.providerPayload) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "4",
+      "name": "Send Email/Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [860, 300],
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst request = $('Build Message').first().json;\n\nconst errorMessage = item?.error?.message ?? item?.errorMessage ?? item?.message ?? null;\nconst failed = Boolean(item?.error) || item?.success === false || Boolean(errorMessage && !item?.id && !item?.messageId);\n\nif (failed) {\n  return [{\n    json: {\n      success: false,\n      executionId: request.executionId,\n      enrollmentId: request.enrollmentId,\n      stepId: request.stepId,\n      error: errorMessage || 'Provider failed to deliver the follow-up message',\n      retryable: true\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    success: true,\n    executionId: request.executionId,\n    enrollmentId: request.enrollmentId,\n    stepId: request.stepId,\n    providerMessageId: item?.id ?? item?.messageId ?? `${request.channel}-${request.executionId}-${Date.now()}`,\n    message: 'Follow-up executed successfully'\n  }\n}];"
+      },
+      "id": "5",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "6",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1380, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Build Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Message": {
+      "main": [
+        [
+          {
+            "node": "Send Email/Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email/Message": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
