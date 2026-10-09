@@ -34,6 +34,10 @@ export class FollowUpSequence {
   })
   status!: FollowUpSequenceStatus;
 
+  get isActive(): boolean {
+    return this.status === FollowUpSequenceStatus.ACTIVE;
+  }
+
   @Column({ name: 'created_by', type: 'uuid' })
   createdBy!: string;
 
