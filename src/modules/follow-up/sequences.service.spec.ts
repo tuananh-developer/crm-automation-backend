@@ -109,9 +109,7 @@ describe('SequencesService', () => {
     createdAt: new Date(),
     updatedAt: new Date(),
     steps: [mockStep1, mockStep2],
-    get isActive() {
-      return this.status === FollowUpSequenceStatus.ACTIVE;
-    },
+    isActive: true,
   } as unknown as FollowUpSequence;
 
   const mockEnrollment: LeadFollowUpEnrollment = {
