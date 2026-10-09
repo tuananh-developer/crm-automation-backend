@@ -33,14 +33,14 @@ import {
   FollowUpSequenceStatus,
 } from './enums/follow-up.enum.js';
 
-@ApiTags('Sequences')
-@Controller('sequences')
+@ApiTags('Follow-up Sequences')
+@Controller(['follow-up', 'sequences'])
 export class SequencesController {
   constructor(private readonly sequencesService: SequencesService) {}
 
   // ── Sequence CRUD Endpoints ────────────────────────────────────────────────
 
-  @Post()
+  @Post(['sequences', ''])
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Create a new follow-up sequence (UC05)',
@@ -60,7 +60,7 @@ export class SequencesController {
     return this.sequencesService.createSequence(dto);
   }
 
-  @Get()
+  @Get(['sequences', ''])
   @ApiOperation({
     summary: 'List all follow-up sequences',
     description: 'Retrieves all sequences, optionally filtered by status.',
@@ -120,7 +120,7 @@ export class SequencesController {
     });
   }
 
-  @Get('enrollments/lead/:leadId')
+  @Get(['leads/:leadId/enrollments', 'enrollments/lead/:leadId'])
   @ApiOperation({
     summary: 'Get all enrollments for a specific lead',
     description: 'Retrieves the enrollment history of a lead by lead UUID.',
@@ -240,7 +240,7 @@ export class SequencesController {
 
   // ── Sequence By ID & Steps Endpoints ────────────────────────────────────────
 
-  @Get(':id')
+  @Get(['sequences/:id', ':id'])
   @ApiOperation({
     summary: 'Get sequence details by ID',
     description: 'Retrieves a single sequence with its configured steps.',
@@ -255,7 +255,7 @@ export class SequencesController {
     return this.sequencesService.findSequenceById(id);
   }
 
-  @Patch(':id')
+  @Patch(['sequences/:id', ':id'])
   @ApiOperation({
     summary: 'Update sequence metadata',
     description: 'Updates sequence name, description, status, or active flag.',
@@ -274,7 +274,7 @@ export class SequencesController {
     return this.sequencesService.updateSequence(id, dto);
   }
 
-  @Delete(':id')
+  @Delete(['sequences/:id', ':id'])
   @ApiOperation({
     summary: 'Archive/Delete a sequence',
     description: 'Archives a sequence by transitioning its status to ARCHIVED.',
@@ -292,7 +292,7 @@ export class SequencesController {
     });
   }
 
-  @Post(':id/steps')
+  @Post(['sequences/:id/steps', ':id/steps'])
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Add a new step to a sequence',
@@ -313,7 +313,7 @@ export class SequencesController {
     return this.sequencesService.createStep(sequenceId, dto);
   }
 
-  @Get(':id/steps')
+  @Get(['sequences/:id/steps', ':id/steps'])
   @ApiOperation({
     summary: 'List all steps of a sequence',
     description: 'Retrieves all ordered steps for the given sequence.',
@@ -328,7 +328,7 @@ export class SequencesController {
     return this.sequencesService.findStepsBySequence(sequenceId);
   }
 
-  @Patch(':sequenceId/steps/:stepId')
+  @Patch(['sequences/:sequenceId/steps/:stepId', ':sequenceId/steps/:stepId'])
   @ApiOperation({
     summary: 'Update a step within a sequence',
     description:
@@ -349,7 +349,7 @@ export class SequencesController {
     return this.sequencesService.updateStep(stepId, dto);
   }
 
-  @Patch('steps/:stepId')
+  @Patch(['steps/:stepId', 'sequences/steps/:stepId'])
   @ApiOperation({
     summary: 'Update a step directly by ID',
     description: 'Direct step update without specifying sequenceId in path.',
@@ -368,7 +368,7 @@ export class SequencesController {
     return this.sequencesService.updateStep(stepId, dto);
   }
 
-  @Post(':id/enroll')
+  @Post(['sequences/:id/enroll', ':id/enroll'])
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Enroll a lead into this sequence (UC05)',

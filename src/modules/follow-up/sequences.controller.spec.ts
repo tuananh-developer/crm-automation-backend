@@ -181,7 +181,7 @@ describe('SequencesController', () => {
 
   // ── Enrollment Management Tests ───────────────────────────────────────────
 
-  it('should enroll lead into sequence via service (POST /sequences/:id/enroll)', async () => {
+  it('should enroll lead into sequence via service (POST /follow-up/sequences/:id/enroll)', async () => {
     const dto: EnrollLeadDto = { leadId: 'lead-123' };
     const res = await controller.enrollLead('seq-123', dto);
 
@@ -192,7 +192,7 @@ describe('SequencesController', () => {
     expect(res.enrollment.id).toBe('enroll-123');
   });
 
-  it('should enroll lead directly via service (POST /sequences/enroll)', async () => {
+  it('should enroll lead directly via service (POST /follow-up/enroll)', async () => {
     const dto: EnrollLeadDto = { leadId: 'lead-123', sequenceId: 'seq-123' };
     const res = await controller.enrollLeadDirect(dto);
 
@@ -200,7 +200,7 @@ describe('SequencesController', () => {
     expect(res.enrollment.id).toBe('enroll-123');
   });
 
-  it('should list all enrollments via service (GET /sequences/enrollments)', async () => {
+  it('should list all enrollments via service (GET /follow-up/enrollments)', async () => {
     const res = await controller.findAllEnrollments(
       'lead-123',
       'seq-123',
@@ -215,21 +215,21 @@ describe('SequencesController', () => {
     expect(res).toHaveLength(1);
   });
 
-  it('should get enrollments by lead via service (GET /sequences/enrollments/lead/:leadId)', async () => {
+  it('should get enrollments by lead via service (GET /follow-up/leads/:leadId/enrollments)', async () => {
     const res = await controller.findEnrollmentsByLead('lead-123');
 
     expect(service.findEnrollmentsByLead).toHaveBeenCalledWith('lead-123');
     expect(res).toHaveLength(1);
   });
 
-  it('should get enrollment by id via service (GET /sequences/enrollments/:id)', async () => {
+  it('should get enrollment by id via service (GET /follow-up/enrollments/:id)', async () => {
     const res = await controller.findEnrollmentById('enroll-123');
 
     expect(service.findEnrollmentById).toHaveBeenCalledWith('enroll-123');
     expect(res.id).toBe('enroll-123');
   });
 
-  it('should cancel enrollment via service (PATCH /sequences/enrollments/:id/cancel)', async () => {
+  it('should cancel enrollment via service (PATCH /follow-up/enrollments/:id/cancel)', async () => {
     const dto: CancelEnrollmentDto = {
       cancellationReason: 'Lead not interested',
     };
@@ -239,14 +239,14 @@ describe('SequencesController', () => {
     expect(res.status).toBe(EnrollmentStatus.CANCELLED);
   });
 
-  it('should pause enrollment via service (PATCH /sequences/enrollments/:id/pause)', async () => {
+  it('should pause enrollment via service (PATCH /follow-up/enrollments/:id/pause)', async () => {
     const res = await controller.pauseEnrollment('enroll-123');
 
     expect(service.pauseEnrollment).toHaveBeenCalledWith('enroll-123');
     expect(res.status).toBe(EnrollmentStatus.PAUSED);
   });
 
-  it('should resume enrollment via service (PATCH /sequences/enrollments/:id/resume)', async () => {
+  it('should resume enrollment via service (PATCH /follow-up/enrollments/:id/resume)', async () => {
     const res = await controller.resumeEnrollment('enroll-123');
 
     expect(service.resumeEnrollment).toHaveBeenCalledWith('enroll-123');
