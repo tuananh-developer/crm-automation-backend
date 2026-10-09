@@ -8,6 +8,7 @@ import type { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import type { FollowUpStep } from './entities/follow-up-step.entity.js';
 import type { LeadFollowUpEnrollment } from './entities/lead-follow-up-enrollment.entity.js';
 import type { EnrollLeadDto } from './dto/enroll-lead.dto.js';
+import type { CancelEnrollmentDto } from './dto/cancel-enrollment.dto.js';
 
 describe('SequencesController', () => {
   let controller: SequencesController;
@@ -76,10 +77,30 @@ describe('SequencesController', () => {
         enrollment: mockEnrollment,
         firstStep: mockStep,
       }),
+      findAllEnrollments: jest.fn().mockResolvedValue([mockEnrollment]),
+      findEnrollmentsByLead: jest.fn().mockResolvedValue([mockEnrollment]),
+      findEnrollmentById: jest.fn().mockResolvedValue(mockEnrollment),
+      cancelEnrollment: jest.fn().mockResolvedValue({
+        ...mockEnrollment,
+        status: EnrollmentStatus.CANCELLED,
+        cancelledAt: new Date(),
+      }),
+      pauseEnrollment: jest.fn().mockResolvedValue({
+        ...mockEnrollment,
+        status: EnrollmentStatus.PAUSED,
+        pausedAt: new Date(),
+      }),
+      resumeEnrollment: jest.fn().mockResolvedValue({
+        ...mockEnrollment,
+        status: EnrollmentStatus.ACTIVE,
+        pausedAt: null,
+      }),
     };
 
     controller = new SequencesController(service as SequencesService);
   });
+
+  // ── Sequence CRUD Tests ───────────────────────────────────────────────────
 
   it('should create sequence via service', async () => {
     const dto = { name: 'Sample Sequence' };
@@ -115,6 +136,8 @@ describe('SequencesController', () => {
     expect(res.id).toBe('seq-123');
   });
 
+  // ── Step CRUD Tests ───────────────────────────────────────────────────────
+
   it('should create step for sequence via service', async () => {
     const dto = { stepOrder: 1, actionType: 'EMAIL', channel: 'EMAIL' };
     const res = await controller.createStep('seq-123', dto);
@@ -138,6 +161,16 @@ describe('SequencesController', () => {
     expect(res.id).toBe('step-1');
   });
 
+  it('should update step directly via service', async () => {
+    const dto = { delayMinutes: 90 };
+    const res = await controller.updateStepDirect('step-1', dto);
+
+    expect(service.updateStep).toHaveBeenCalledWith('step-1', dto);
+    expect(res.id).toBe('step-1');
+  });
+
+  // ── Enrollment Management Tests ───────────────────────────────────────────
+
   it('should enroll lead into sequence via service (POST /sequences/:id/enroll)', async () => {
     const dto: EnrollLeadDto = { leadId: 'lead-123' };
     const res = await controller.enrollLead('seq-123', dto);
@@ -147,5 +180,66 @@ describe('SequencesController', () => {
       sequenceId: 'seq-123',
     });
     expect(res.enrollment.id).toBe('enroll-123');
+  });
+
+  it('should enroll lead directly via service (POST /sequences/enroll)', async () => {
+    const dto: EnrollLeadDto = { leadId: 'lead-123', sequenceId: 'seq-123' };
+    const res = await controller.enrollLeadDirect(dto);
+
+    expect(service.enrollLead).toHaveBeenCalledWith(dto);
+    expect(res.enrollment.id).toBe('enroll-123');
+  });
+
+  it('should list all enrollments via service (GET /sequences/enrollments)', async () => {
+    const res = await controller.findAllEnrollments(
+      'lead-123',
+      'seq-123',
+      EnrollmentStatus.ACTIVE,
+    );
+
+    expect(service.findAllEnrollments).toHaveBeenCalledWith({
+      leadId: 'lead-123',
+      sequenceId: 'seq-123',
+      status: EnrollmentStatus.ACTIVE,
+    });
+    expect(res).toHaveLength(1);
+  });
+
+  it('should get enrollments by lead via service (GET /sequences/enrollments/lead/:leadId)', async () => {
+    const res = await controller.findEnrollmentsByLead('lead-123');
+
+    expect(service.findEnrollmentsByLead).toHaveBeenCalledWith('lead-123');
+    expect(res).toHaveLength(1);
+  });
+
+  it('should get enrollment by id via service (GET /sequences/enrollments/:id)', async () => {
+    const res = await controller.findEnrollmentById('enroll-123');
+
+    expect(service.findEnrollmentById).toHaveBeenCalledWith('enroll-123');
+    expect(res.id).toBe('enroll-123');
+  });
+
+  it('should cancel enrollment via service (PATCH /sequences/enrollments/:id/cancel)', async () => {
+    const dto: CancelEnrollmentDto = {
+      cancellationReason: 'Lead not interested',
+    };
+    const res = await controller.cancelEnrollment('enroll-123', dto);
+
+    expect(service.cancelEnrollment).toHaveBeenCalledWith('enroll-123', dto);
+    expect(res.status).toBe(EnrollmentStatus.CANCELLED);
+  });
+
+  it('should pause enrollment via service (PATCH /sequences/enrollments/:id/pause)', async () => {
+    const res = await controller.pauseEnrollment('enroll-123');
+
+    expect(service.pauseEnrollment).toHaveBeenCalledWith('enroll-123');
+    expect(res.status).toBe(EnrollmentStatus.PAUSED);
+  });
+
+  it('should resume enrollment via service (PATCH /sequences/enrollments/:id/resume)', async () => {
+    const res = await controller.resumeEnrollment('enroll-123');
+
+    expect(service.resumeEnrollment).toHaveBeenCalledWith('enroll-123');
+    expect(res.status).toBe(EnrollmentStatus.ACTIVE);
   });
 });
