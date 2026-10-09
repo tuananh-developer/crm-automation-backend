@@ -36,27 +36,23 @@ describe('ScoringController', () => {
         workflowRunUpdated: true,
       }),
       getScoringContext: jest.fn().mockResolvedValue({
-        leadId: 'lead-123',
-        profile: { email: 'john@example.com' },
+        lead: { id: 'lead-123', email: 'john@example.com' },
         qualification: null,
         enrichment: null,
-        interactionHistory: [],
+        interactions: [],
+        scoringFeatures: {},
       }),
       getScoresByLead: jest.fn().mockResolvedValue([mockScore]),
       getLatestScore: jest.fn().mockResolvedValue(mockScore),
     };
 
-    controller = new ScoringController(service);
+    controller = new ScoringController(service as LeadIntelligenceService);
   });
 
   it('should trigger scoring via service', async () => {
-    const result = await controller.triggerScoring('lead-123', {
-      model: 'gpt-4o',
-    });
+    const result = await controller.triggerScoring('lead-123');
 
-    expect(service.triggerScoring).toHaveBeenCalledWith('lead-123', {
-      model: 'gpt-4o',
-    });
+    expect(service.triggerScoring).toHaveBeenCalledWith('lead-123', undefined);
     expect(result.workflowRunId).toBe('wf-run-123');
   });
 
@@ -81,7 +77,7 @@ describe('ScoringController', () => {
     const result = await controller.getScoringContext('lead-123');
 
     expect(service.getScoringContext).toHaveBeenCalledWith('lead-123');
-    expect(result.leadId).toBe('lead-123');
+    expect(result.lead.id).toBe('lead-123');
   });
 
   it('should return score history', async () => {

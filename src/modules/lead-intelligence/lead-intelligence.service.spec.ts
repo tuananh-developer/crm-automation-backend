@@ -108,7 +108,9 @@ describe('LeadIntelligenceService', () => {
     channel: 'PHONE',
     subject: 'Intro call',
     content: 'Discussed requirements',
+    metadata: null,
     occurredAt: new Date(),
+    createdBy: null,
     createdAt: new Date(),
   };
 
@@ -175,15 +177,15 @@ describe('LeadIntelligenceService', () => {
     };
 
     service = new LeadIntelligenceService(
-      qualificationsRepo,
-      leadsRepo,
-      workflowRunsRepo,
-      reviewTasksRepo,
-      notificationsRepo,
+      qualificationsRepo as Repository<LeadQualification>,
+      leadsRepo as Repository<Lead>,
+      workflowRunsRepo as Repository<WorkflowRun>,
+      reviewTasksRepo as Repository<ReviewTask>,
+      notificationsRepo as Repository<Notification>,
       rabbitmqService as RabbitMQService,
-      scoresRepo,
-      interactionsRepo,
-      enrichmentsRepo,
+      scoresRepo as Repository<LeadScore>,
+      interactionsRepo as Repository<Interaction>,
+      enrichmentsRepo as Repository<LeadEnrichment>,
     );
   });
 
@@ -593,15 +595,15 @@ describe('LeadIntelligenceService', () => {
       };
 
       const transactionalService = new LeadIntelligenceService(
-        qualificationsRepo,
-        leadsRepo,
-        workflowRunsRepo,
-        reviewTasksRepo,
-        notificationsRepo,
+        qualificationsRepo as Repository<LeadQualification>,
+        leadsRepo as Repository<Lead>,
+        workflowRunsRepo as Repository<WorkflowRun>,
+        reviewTasksRepo as Repository<ReviewTask>,
+        notificationsRepo as Repository<Notification>,
         rabbitmqService as RabbitMQService,
-        scoresRepo,
-        interactionsRepo,
-        enrichmentsRepo,
+        scoresRepo as Repository<LeadScore>,
+        interactionsRepo as Repository<Interaction>,
+        enrichmentsRepo as Repository<LeadEnrichment>,
         mockDataSource as unknown as DataSource,
       );
 
