@@ -8,7 +8,13 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
+import {
+  DataSource,
+  In,
+  LessThanOrEqual,
+  MoreThan,
+  Repository,
+} from 'typeorm';
 import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
 import { FollowUpExecution } from './entities/follow-up-execution.entity.js';
@@ -277,8 +283,9 @@ export class FollowUpService {
 
     const pendingExecutions = await this.executionsRepository.find({
       where: {
-        status: ExecutionStatus.PENDING,
+        status: In([ExecutionStatus.PENDING, ExecutionStatus.RETRYING]),
         scheduledAt: LessThanOrEqual(now),
+        enrollment: { status: EnrollmentStatus.ACTIVE },
       },
       relations: { enrollment: { lead: true } },
       take: 50,
@@ -309,6 +316,7 @@ export class FollowUpService {
     }
   }
 
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async handleStaleRunningExecutions(): Promise<void> {
     const timeoutThreshold = new Date(
       Date.now() - RUNNING_TIMEOUT_MINUTES * 60_000,

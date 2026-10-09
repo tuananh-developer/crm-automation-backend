@@ -123,9 +123,7 @@
             "type": "main",
             "index": 0
           }
-        ]
-      ],
-      "error": [
+        ],
         [
           {
             "node": "Build Response",

@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Post,
   Query,
 } from '@nestjs/common';
@@ -27,17 +28,23 @@ export class FollowUpController {
   }
 
   @Post('enrollments/:id/pause')
-  pauseEnrollment(@Param('id') id: string, @Body() dto: UpdateEnrollmentDto) {
+  pauseEnrollment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateEnrollmentDto,
+  ) {
     return this.followUpService.pauseEnrollment(id, dto);
   }
 
   @Post('enrollments/:id/resume')
-  resumeEnrollment(@Param('id') id: string) {
+  resumeEnrollment(@Param('id', ParseUUIDPipe) id: string) {
     return this.followUpService.resumeEnrollment(id);
   }
 
   @Post('enrollments/:id/cancel')
-  cancelEnrollment(@Param('id') id: string, @Body() dto: UpdateEnrollmentDto) {
+  cancelEnrollment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateEnrollmentDto,
+  ) {
     return this.followUpService.cancelEnrollment(id, dto);
   }
 
