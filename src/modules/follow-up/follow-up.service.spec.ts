@@ -72,6 +72,7 @@ describe('FollowUpService', () => {
       'Xin chào {{firstName}},\nchúng tôi muốn trao đổi thêm với bạn về nhu cầu của {{companyName}}.',
     conditions: null,
     metadata: null,
+    actionConfig: null,
     isActive: true,
     createdAt: new Date(),
     updatedAt: new Date(),
