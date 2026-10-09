@@ -6,6 +6,7 @@ import type { Segment } from './entities/segment.entity.js';
 import type { CustomerSegment } from './entities/customer-segment.entity.js';
 import type { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import type { User } from '../users/entities/user.entity.js';
+import { SegmentAssignmentType } from './enums/customer.enum.js';
 
 describe('SegmentsService', () => {
   let service: SegmentsService;
@@ -104,9 +105,15 @@ describe('SegmentsService', () => {
     customerSegmentsRepository = {
       find: jest.fn(),
       findOne: jest.fn(),
-      create: jest.fn((dto) => (dto ?? {}) as CustomerSegment),
-      save: jest.fn((item) => Promise.resolve(item as any)),
-      remove: jest.fn((item) => Promise.resolve(item as any)),
+      create: jest
+        .fn()
+        .mockImplementation((dto) => (dto ?? {}) as CustomerSegment) as any,
+      save: jest
+        .fn()
+        .mockImplementation((item) => Promise.resolve(item)) as any,
+      remove: jest
+        .fn()
+        .mockImplementation((item) => Promise.resolve(item)) as any,
       count: jest.fn().mockResolvedValue(5),
       createQueryBuilder: jest.fn().mockReturnValue(countQb),
     };
@@ -150,6 +157,7 @@ describe('SegmentsService', () => {
         service.create({
           name: 'Enterprise Tech',
           createdBy: 'user-1',
+          criteria: mockSegment.criteria as any,
         }),
       ).rejects.toBeInstanceOf(ConflictException);
     });
@@ -198,6 +206,7 @@ describe('SegmentsService', () => {
 
       const result = await service.evaluateCustomer('segment-1', {
         customerId: 'customer-1',
+        assignmentType: SegmentAssignmentType.RULE,
       });
 
       expect(result.matched).toBe(true);
@@ -215,11 +224,12 @@ describe('SegmentsService', () => {
         id: 'cs-1',
         customerId: 'customer-1',
         segmentId: 'segment-1',
-      } as CustomerSegment;
+      } as unknown as CustomerSegment;
       (customerSegmentsRepository.findOne as jest.Mock).mockResolvedValue(existing);
 
       const result = await service.evaluateCustomer('segment-1', {
         customerId: 'customer-1',
+        assignmentType: SegmentAssignmentType.RULE,
       });
 
       expect(result.matched).toBe(false);
@@ -236,7 +246,9 @@ describe('SegmentsService', () => {
       ]);
       (customerSegmentsRepository.find as jest.Mock).mockResolvedValue([]);
 
-      const result = await service.evaluateAll('segment-1', {});
+      const result = await service.evaluateAll('segment-1', {
+        assignmentType: SegmentAssignmentType.RULE,
+      });
 
       expect(result.status).toBe('COMPLETED');
       expect(result.total).toBe(2);
