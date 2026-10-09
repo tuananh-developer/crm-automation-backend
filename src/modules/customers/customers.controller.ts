@@ -13,6 +13,15 @@ import { Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity.js';
 import { Lead } from '../leads/entities/lead.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiOkResponse,
+  ApiNotFoundResponse,
+  ApiBearerAuth,
+  ApiParam,
+  ApiQuery,
+} from '@nestjs/swagger';
 
 interface CustomerListMeta {
   page: number;
@@ -76,6 +85,8 @@ interface CustomerDetail {
   segmentCount: number;
 }
 
+@ApiTags('Customers')
+@ApiBearerAuth('JWT-auth')
 @Controller('customers')
 export class CustomersController {
   constructor(
@@ -89,6 +100,21 @@ export class CustomersController {
 
   @Get()
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'List all customers',
+    description:
+      'Returns a paginated list of customers with optional filtering, search, and status filter',
+  })
+  @ApiOkResponse({ description: 'Customers retrieved successfully' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({ name: 'search', required: false, type: String, example: 'acme' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    example: 'ACTIVE',
+  })
   async findAll(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -134,6 +160,19 @@ export class CustomersController {
 
   @Get(':id')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Get a customer by ID',
+    description:
+      'Returns a single customer with converted leads and segment memberships',
+  })
+  @ApiOkResponse({ description: 'Customer found' })
+  @ApiNotFoundResponse({ description: 'Customer not found' })
+  @ApiParam({
+    name: 'id',
+    type: String,
+    format: 'uuid',
+    description: 'Customer UUID',
+  })
   async findOne(
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<CustomerDetail> {

@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { LeadQualification } from './entities/lead-qualification.entity.js';
 import { Lead } from '../leads/entities/lead.entity.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
@@ -34,6 +34,7 @@ export class LeadIntelligenceService {
     @InjectRepository(Notification)
     private readonly notificationsRepository: Repository<Notification>,
     private readonly rabbitmqService: RabbitMQService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async triggerQualification(
@@ -94,128 +95,135 @@ export class LeadIntelligenceService {
     reviewRequired: boolean;
     reviewTaskId?: string;
   }> {
-    const lead = await this.leadsRepository.findOne({
-      where: { id: dto.leadId },
-    });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
-    }
+    return this.dataSource.transaction(async (manager) => {
+      const qualificationsRepo = manager.getRepository(LeadQualification);
+      const leadsRepo = manager.getRepository(Lead);
+      const workflowRunsRepo = manager.getRepository(WorkflowRun);
+      const reviewTasksRepo = manager.getRepository(ReviewTask);
+      const notificationsRepo = manager.getRepository(Notification);
 
-    // 1. Create and save LeadQualification
-    const qualification = this.qualificationsRepository.create({
-      leadId: dto.leadId,
-      workflowRunId: dto.workflowRunId ?? null,
-      status: dto.status,
-      intent: dto.intent ?? null,
-      confidence: dto.confidence,
-      reason: dto.reason ?? null,
-      modelProvider: dto.modelProvider ?? null,
-      modelName: dto.modelName ?? null,
-      modelVersion: dto.modelVersion ?? null,
-      inputSnapshot: dto.inputSnapshot ?? null,
-      outputSnapshot: dto.outputSnapshot ?? null,
-    });
+      const lead = await leadsRepo.findOne({
+        where: { id: dto.leadId },
+      });
+      if (!lead) {
+        throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
+      }
 
-    const savedQualification =
-      await this.qualificationsRepository.save(qualification);
-    this.logger.log(
-      `Saved LeadQualification ${savedQualification.id} for lead ${lead.id}`,
-    );
-
-    // 2. Update WorkflowRun if found
-    const workflowRun = dto.workflowRunId
-      ? await this.workflowRunsRepository.findOne({
-          where: { id: dto.workflowRunId },
-        })
-      : await this.workflowRunsRepository.findOne({
-          where: {
-            leadId: dto.leadId,
-            workflowName: 'lead-qualification',
-            status: WorkflowStatus.PENDING,
-          },
-          order: { createdAt: 'DESC' },
-        });
-
-    if (workflowRun) {
-      workflowRun.status = WorkflowStatus.SUCCESS;
-      workflowRun.finishedAt = new Date();
-      workflowRun.outputPayload = {
-        qualificationId: savedQualification.id,
+      // 1. Create and save LeadQualification
+      const qualification = qualificationsRepo.create({
+        leadId: dto.leadId,
+        workflowRunId: dto.workflowRunId ?? null,
         status: dto.status,
+        intent: dto.intent ?? null,
         confidence: dto.confidence,
-        reason: dto.reason,
-        intent: dto.intent,
-        nextAction: dto.nextAction,
-        reviewRequired: dto.reviewRequired,
-      };
-      await this.workflowRunsRepository.save(workflowRun);
-    }
-
-    // 3. Apply Confidence Threshold Rule
-    const isConfidenceBelowThreshold = dto.confidence < CONFIDENCE_THRESHOLD;
-    const reviewRequired =
-      isConfidenceBelowThreshold ||
-      dto.reviewRequired === true ||
-      dto.status === QualificationStatus.NEEDS_REVIEW;
-
-    let reviewTaskId: string | undefined;
-
-    if (reviewRequired) {
-      this.logger.warn(
-        `Lead ${lead.id} qualification confidence (${dto.confidence}) is below threshold ${CONFIDENCE_THRESHOLD} or flagged for review. Creating ReviewTask.`,
-      );
-
-      // Lead stays in QUALIFYING until human review is completed
-      lead.status = LeadStatus.QUALIFYING;
-
-      const reason =
-        dto.reason ||
-        `AI qualification confidence (${(dto.confidence * 100).toFixed(1)}%) is below required threshold (80%). Manual review required.`;
-
-      const reviewTask = this.reviewTasksRepository.create({
-        leadId: lead.id,
-        workflowRunId: workflowRun?.id ?? null,
-        assignedTo: lead.ownerId ?? null,
-        status: ReviewStatus.PENDING,
-        reason,
+        reason: dto.reason ?? null,
+        modelProvider: dto.modelProvider ?? null,
+        modelName: dto.modelName ?? null,
+        modelVersion: dto.modelVersion ?? null,
+        inputSnapshot: dto.inputSnapshot ?? null,
+        outputSnapshot: dto.outputSnapshot ?? null,
       });
 
-      const savedReviewTask = await this.reviewTasksRepository.save(reviewTask);
-      reviewTaskId = savedReviewTask.id;
-
-      // If lead has an owner, notify them
-      if (lead.ownerId) {
-        const notification = this.notificationsRepository.create({
-          userId: lead.ownerId,
-          type: 'REVIEW_REQUIRED',
-          title: 'Review Required: Low Confidence AI Qualification',
-          content: `Lead ${lead.firstName} ${lead.lastName || ''} requires human review: ${reason}`,
-          leadId: lead.id,
-          reviewTaskId: savedReviewTask.id,
-          isRead: false,
-        });
-        await this.notificationsRepository.save(notification);
-      }
-    } else {
-      // Automatic acceptance
-      if (dto.status === QualificationStatus.QUALIFIED) {
-        lead.status = LeadStatus.QUALIFIED;
-      } else if (dto.status === QualificationStatus.DISQUALIFIED) {
-        lead.status = LeadStatus.LOST;
-      }
+      const savedQualification = await qualificationsRepo.save(qualification);
       this.logger.log(
-        `Lead ${lead.id} automatically updated to status '${lead.status}' (confidence: ${dto.confidence})`,
+        `Saved LeadQualification ${savedQualification.id} for lead ${lead.id}`,
       );
-    }
 
-    await this.leadsRepository.save(lead);
+      // 2. Update WorkflowRun if found
+      const workflowRun = dto.workflowRunId
+        ? await workflowRunsRepo.findOne({
+            where: { id: dto.workflowRunId },
+          })
+        : await workflowRunsRepo.findOne({
+            where: {
+              leadId: dto.leadId,
+              workflowName: 'lead-qualification',
+              status: WorkflowStatus.PENDING,
+            },
+            order: { createdAt: 'DESC' },
+          });
 
-    return {
-      qualification: savedQualification,
-      leadStatus: lead.status,
-      reviewRequired,
-      reviewTaskId,
-    };
+      if (workflowRun) {
+        workflowRun.status = WorkflowStatus.SUCCESS;
+        workflowRun.finishedAt = new Date();
+        workflowRun.outputPayload = {
+          qualificationId: savedQualification.id,
+          status: dto.status,
+          confidence: dto.confidence,
+          reason: dto.reason,
+          intent: dto.intent,
+          nextAction: dto.nextAction,
+          reviewRequired: dto.reviewRequired,
+        };
+        await workflowRunsRepo.save(workflowRun);
+      }
+
+      // 3. Apply Confidence Threshold Rule
+      const isConfidenceBelowThreshold = dto.confidence < CONFIDENCE_THRESHOLD;
+      const reviewRequired =
+        isConfidenceBelowThreshold ||
+        dto.reviewRequired === true ||
+        dto.status === QualificationStatus.NEEDS_REVIEW;
+
+      let reviewTaskId: string | undefined;
+
+      if (reviewRequired) {
+        this.logger.warn(
+          `Lead ${lead.id} qualification confidence (${dto.confidence}) is below threshold ${CONFIDENCE_THRESHOLD} or flagged for review. Creating ReviewTask.`,
+        );
+
+        // Lead stays in QUALIFYING until human review is completed
+        lead.status = LeadStatus.QUALIFYING;
+
+        const reason =
+          dto.reason ||
+          `AI qualification confidence (${(dto.confidence * 100).toFixed(1)}%) is below required threshold (80%). Manual review required.`;
+
+        const reviewTask = reviewTasksRepo.create({
+          leadId: lead.id,
+          workflowRunId: workflowRun?.id ?? null,
+          assignedTo: lead.ownerId ?? null,
+          status: ReviewStatus.PENDING,
+          reason,
+        });
+
+        const savedReviewTask = await reviewTasksRepo.save(reviewTask);
+        reviewTaskId = savedReviewTask.id;
+
+        // If lead has an owner, notify them
+        if (lead.ownerId) {
+          const notification = notificationsRepo.create({
+            userId: lead.ownerId,
+            type: 'REVIEW_REQUIRED',
+            title: 'Review Required: Low Confidence AI Qualification',
+            content: `Lead ${lead.firstName} ${lead.lastName || ''} requires human review: ${reason}`,
+            leadId: lead.id,
+            reviewTaskId: savedReviewTask.id,
+            isRead: false,
+          });
+          await notificationsRepo.save(notification);
+        }
+      } else {
+        // Automatic acceptance
+        if (dto.status === QualificationStatus.QUALIFIED) {
+          lead.status = LeadStatus.QUALIFIED;
+        } else if (dto.status === QualificationStatus.DISQUALIFIED) {
+          lead.status = LeadStatus.LOST;
+        }
+        this.logger.log(
+          `Lead ${lead.id} automatically updated to status '${lead.status}' (confidence: ${dto.confidence})`,
+        );
+      }
+
+      await leadsRepo.save(lead);
+
+      return {
+        qualification: savedQualification,
+        leadStatus: lead.status,
+        reviewRequired,
+        reviewTaskId,
+      };
+    });
   }
 
   async getQualificationsByLead(leadId: string): Promise<LeadQualification[]> {

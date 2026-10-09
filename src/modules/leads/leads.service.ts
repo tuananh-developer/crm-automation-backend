@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { Lead } from './entities/lead.entity.js';
 import { LeadSource } from './entities/lead-source.entity.js';
 import { User } from '../users/entities/user.entity.js';
@@ -38,6 +38,7 @@ export class LeadsService {
     @InjectRepository(AuditLog)
     private readonly auditLogRepository: Repository<AuditLog>,
     private readonly rabbitmqService: RabbitMQService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async create(dto: CreateLeadDto): Promise<Lead> {
@@ -268,97 +269,118 @@ export class LeadsService {
     customer: Customer;
     customerCreated: boolean;
   }> {
-    const lead = await this.findOne(id);
+    return this.dataSource.transaction(async (manager) => {
+      const leadsRepo = manager.getRepository(Lead);
+      const customersRepo = manager.getRepository(Customer);
+      const usersRepo = manager.getRepository(User);
+      const auditLogRepo = manager.getRepository(AuditLog);
 
-    if (lead.status === LeadStatus.CONVERTED) {
-      throw new BadRequestException(
-        `Lead is already converted to customer ${lead.convertedCustomerId}`,
-      );
-    }
-
-    if (lead.status !== LeadStatus.QUALIFIED) {
-      throw new BadRequestException(
-        `Only QUALIFIED leads can be converted. Current status: ${lead.status}`,
-      );
-    }
-
-    const user = await this.usersRepository.findOne({
-      where: { id: dto.userId },
-    });
-    if (!user) {
-      throw new NotFoundException(`User with ID '${dto.userId}' not found`);
-    }
-
-    let customer = await this.customersRepository.findOne({
-      where: { email: lead.email },
-    });
-
-    let customerCreated = false;
-    if (!customer) {
-      customer = this.customersRepository.create({
-        name: `${lead.firstName} ${lead.lastName ?? ''}`.trim(),
-        email: lead.email,
-        phone: lead.phone,
-        companyName: lead.companyName,
-        companyWebsite: lead.companyWebsite,
-        jobTitle: lead.jobTitle,
-        companySize: lead.companySize,
-        industry: lead.industry,
-        status: 'ACTIVE',
-        createdBy: dto.userId,
-        notes: dto.notes ?? lead.notes,
-      });
-      customer = await this.customersRepository.save(customer);
-      customerCreated = true;
-      this.logger.log(
-        `Created new customer ${customer.id} from lead ${lead.id}`,
-      );
-    } else {
-      this.logger.log(
-        `Reusing existing customer ${customer.id} for lead ${lead.id}`,
-      );
-    }
-
-    const oldLeadStatus = lead.status;
-    lead.status = LeadStatus.CONVERTED;
-    lead.convertedCustomerId = customer.id;
-    lead.convertedBy = dto.userId;
-    lead.convertedAt = new Date();
-    if (dto.notes) {
-      lead.notes = dto.notes;
-    }
-
-    const savedLead = await this.leadsRepository.save(lead);
-
-    await this.auditLogRepository.save(
-      this.auditLogRepository.create({
-        userId: dto.userId,
-        action: 'LEAD_CONVERTED',
-        entityType: 'Lead',
-        entityId: lead.id,
-        oldValue: { status: oldLeadStatus },
-        newValue: { status: LeadStatus.CONVERTED },
-        metadata: {
-          leadId: lead.id,
-          customerId: customer.id,
-          convertedBy: dto.userId,
-          convertedAt: lead.convertedAt.toISOString(),
-          customerCreated,
+      const lead = await leadsRepo.findOne({
+        where: { id },
+        relations: {
+          source: true,
+          owner: true,
+          qualifications: true,
+          enrichments: true,
+          scores: true,
+          interactions: true,
         },
-        ipAddress: null,
-        userAgent: null,
-      }),
-    );
+      });
 
-    this.logger.log(
-      `Converted lead ${lead.id} to customer ${customer.id} by user ${dto.userId}`,
-    );
+      if (!lead) {
+        throw new NotFoundException(`Lead with ID '${id}' not found`);
+      }
 
-    return {
-      lead: savedLead,
-      customer,
-      customerCreated,
-    };
+      if (lead.status === LeadStatus.CONVERTED) {
+        throw new BadRequestException(
+          `Lead is already converted to customer ${lead.convertedCustomerId}`,
+        );
+      }
+
+      if (lead.status !== LeadStatus.QUALIFIED) {
+        throw new BadRequestException(
+          `Only QUALIFIED leads can be converted. Current status: ${lead.status}`,
+        );
+      }
+
+      const user = await usersRepo.findOne({
+        where: { id: dto.userId },
+      });
+      if (!user) {
+        throw new NotFoundException(`User with ID '${dto.userId}' not found`);
+      }
+
+      let customer = await customersRepo.findOne({
+        where: { email: lead.email },
+      });
+
+      let customerCreated = false;
+      if (!customer) {
+        customer = customersRepo.create({
+          name: `${lead.firstName} ${lead.lastName ?? ''}`.trim(),
+          email: lead.email,
+          phone: lead.phone,
+          companyName: lead.companyName,
+          companyWebsite: lead.companyWebsite,
+          jobTitle: lead.jobTitle,
+          companySize: lead.companySize,
+          industry: lead.industry,
+          status: 'ACTIVE',
+          createdBy: dto.userId,
+          notes: dto.notes ?? lead.notes,
+        });
+        customer = await customersRepo.save(customer);
+        customerCreated = true;
+        this.logger.log(
+          `Created new customer ${customer.id} from lead ${lead.id}`,
+        );
+      } else {
+        this.logger.log(
+          `Reusing existing customer ${customer.id} for lead ${lead.id}`,
+        );
+      }
+
+      const oldLeadStatus = lead.status;
+      lead.status = LeadStatus.CONVERTED;
+      lead.convertedCustomerId = customer.id;
+      lead.convertedBy = dto.userId;
+      lead.convertedAt = new Date();
+      if (dto.notes) {
+        lead.notes = dto.notes;
+      }
+
+      const savedLead = await leadsRepo.save(lead);
+
+      await auditLogRepo.save(
+        auditLogRepo.create({
+          userId: dto.userId,
+          action: 'LEAD_CONVERTED',
+          entityType: 'Lead',
+          entityId: lead.id,
+          oldValue: { status: oldLeadStatus },
+          newValue: { status: LeadStatus.CONVERTED },
+          metadata: {
+            leadId: lead.id,
+            customerId: customer.id,
+            convertedBy: dto.userId,
+            convertedAt: lead.convertedAt.toISOString(),
+            customerCreated,
+          },
+          ipAddress: null,
+          userAgent: null,
+        }),
+      );
+
+      this.logger.log(
+        `Converted lead ${lead.id} to customer ${customer.id} by user ${dto.userId}`,
+      );
+
+      return {
+        lead: savedLead,
+        customer,
+        customerCreated,
+      };
+    });
   }
 
   // --- Lead Sources Management ---

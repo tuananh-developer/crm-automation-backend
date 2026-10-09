@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { LeadsService } from './leads.service.js';
 import { LeadStatus } from './enums/lead.enum.js';
-import type { Repository } from 'typeorm';
+import type { Repository, DataSource } from 'typeorm';
 import type { Lead } from './entities/lead.entity.js';
 import type { LeadSource } from './entities/lead-source.entity.js';
 import type { User } from '../users/entities/user.entity.js';
@@ -21,6 +21,7 @@ describe('LeadsService', () => {
   let customersRepository: jest.Mocked<Partial<Repository<Customer>>>;
   let auditLogRepository: jest.Mocked<Partial<Repository<AuditLog>>>;
   let rabbitmqService: jest.Mocked<Partial<RabbitMQService>>;
+  let dataSource: jest.Mocked<Partial<DataSource>>;
 
   const mockSource: LeadSource = {
     id: 'source-123',
@@ -124,6 +125,22 @@ describe('LeadsService', () => {
       }),
     };
 
+    dataSource = {
+      transaction: jest.fn().mockImplementation((callback) => {
+        return callback({
+          getRepository: jest.fn().mockImplementation((entity) => {
+            const entityName =
+              typeof entity === 'function' ? entity.name : String(entity);
+            if (entityName === 'Lead') return leadsRepository;
+            if (entityName === 'Customer') return customersRepository;
+            if (entityName === 'User') return usersRepository;
+            if (entityName === 'AuditLog') return auditLogRepository;
+            return {};
+          }),
+        });
+      }),
+    };
+
     service = new LeadsService(
       leadsRepository as Repository<Lead>,
       leadSourcesRepository as Repository<LeadSource>,
@@ -131,6 +148,7 @@ describe('LeadsService', () => {
       customersRepository as Repository<Customer>,
       auditLogRepository as Repository<AuditLog>,
       rabbitmqService as RabbitMQService,
+      dataSource as DataSource,
     );
   });
 

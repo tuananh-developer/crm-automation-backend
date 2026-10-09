@@ -8,7 +8,9 @@ import {
   TypeOrmHealthIndicator,
 } from '@nestjs/terminus';
 import { RmqOptions, Transport } from '@nestjs/microservices';
+import { ApiTags, ApiOperation, ApiOkResponse } from '@nestjs/swagger';
 
+@ApiTags('Health')
 @Controller('health')
 export class HealthController {
   constructor(
@@ -21,6 +23,23 @@ export class HealthController {
 
   @Get()
   @HealthCheck()
+  @ApiOperation({
+    summary: 'Health check',
+    description:
+      'Returns the health status of the application including database, memory, and RabbitMQ',
+  })
+  @ApiOkResponse({
+    description: 'Health check completed',
+    schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', example: 'ok' },
+        info: { type: 'object' },
+        error: { type: 'object' },
+        details: { type: 'object' },
+      },
+    },
+  })
   check() {
     const rabbitMqUrl =
       this.configService.get<string>('RABBITMQ_URL') ||

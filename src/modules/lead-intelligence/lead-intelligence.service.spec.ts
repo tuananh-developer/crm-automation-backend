@@ -7,7 +7,7 @@ import { LeadStatus } from '../leads/enums/lead.enum.js';
 import { QualificationStatus } from './enums/lead-intelligence.enum.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { ReviewStatus } from '../review/enums/review.enum.js';
-import type { Repository } from 'typeorm';
+import type { Repository, DataSource } from 'typeorm';
 import type { LeadQualification } from './entities/lead-qualification.entity.js';
 import type { Lead } from '../leads/entities/lead.entity.js';
 import type { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
@@ -23,6 +23,7 @@ describe('LeadIntelligenceService', () => {
   let reviewTasksRepo: jest.Mocked<Partial<Repository<ReviewTask>>>;
   let notificationsRepo: jest.Mocked<Partial<Repository<Notification>>>;
   let rabbitmqService: jest.Mocked<Partial<RabbitMQService>>;
+  let dataSource: jest.Mocked<Partial<DataSource>>;
 
   const mockLead: Lead = {
     id: 'lead-123',
@@ -117,6 +118,23 @@ describe('LeadIntelligenceService', () => {
       }),
     };
 
+    dataSource = {
+      transaction: jest.fn().mockImplementation((callback) => {
+        return callback({
+          getRepository: jest.fn().mockImplementation((entity) => {
+            const entityName =
+              typeof entity === 'function' ? entity.name : String(entity);
+            if (entityName === 'LeadQualification') return qualificationsRepo;
+            if (entityName === 'Lead') return leadsRepo;
+            if (entityName === 'WorkflowRun') return workflowRunsRepo;
+            if (entityName === 'ReviewTask') return reviewTasksRepo;
+            if (entityName === 'Notification') return notificationsRepo;
+            return {};
+          }),
+        });
+      }),
+    };
+
     service = new LeadIntelligenceService(
       qualificationsRepo as Repository<LeadQualification>,
       leadsRepo as Repository<Lead>,
@@ -124,6 +142,7 @@ describe('LeadIntelligenceService', () => {
       reviewTasksRepo as Repository<ReviewTask>,
       notificationsRepo as Repository<Notification>,
       rabbitmqService as RabbitMQService,
+      dataSource as DataSource,
     );
   });
 

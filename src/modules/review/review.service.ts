@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { ReviewTask } from './entities/review-task.entity.js';
 import { ReviewDecision, ReviewStatus } from './enums/review.enum.js';
 import { Lead } from '../leads/entities/lead.entity.js';
@@ -40,6 +40,8 @@ export class ReviewService {
 
     @InjectRepository(AuditLog)
     private readonly auditLogRepository: Repository<AuditLog>,
+
+    private readonly dataSource: DataSource,
   ) {}
 
   async create(dto: CreateReviewTaskDto): Promise<ReviewTask> {
@@ -189,58 +191,95 @@ export class ReviewService {
   }
 
   async resolve(id: string, dto: ResolveReviewTaskDto): Promise<ReviewTask> {
-    const reviewTask = await this.findOne(id);
+    return this.dataSource.transaction(async (manager) => {
+      const reviewTaskRepo = manager.getRepository(ReviewTask);
+      const leadRepo = manager.getRepository(Lead);
+      const auditLogRepo = manager.getRepository(AuditLog);
 
-    if (reviewTask.status !== ReviewStatus.IN_REVIEW) {
-      throw new BadRequestException('Only IN_REVIEW tasks can be resolved');
-    }
+      const reviewTask = await reviewTaskRepo.findOne({
+        where: { id },
+        relations: {
+          lead: true,
+          assignee: true,
+          workflowRun: true,
+          notifications: true,
+        },
+      });
 
-    if (!reviewTask.assignedTo) {
-      throw new BadRequestException('Review task has no reviewer');
-    }
+      if (!reviewTask) {
+        throw new NotFoundException('Review task not found');
+      }
 
-    if (dto.decision === ReviewDecision.MODIFY && !dto.reviewComment) {
-      throw new BadRequestException(
-        'reviewComment is required for MODIFY decision',
+      if (reviewTask.status !== ReviewStatus.IN_REVIEW) {
+        throw new BadRequestException('Only IN_REVIEW tasks can be resolved');
+      }
+
+      if (!reviewTask.assignedTo) {
+        throw new BadRequestException('Review task has no reviewer');
+      }
+
+      if (dto.decision === ReviewDecision.MODIFY && !dto.reviewComment) {
+        throw new BadRequestException(
+          'reviewComment is required for MODIFY decision',
+        );
+      }
+
+      const oldValue = {
+        status: reviewTask.status,
+        decision: reviewTask.decision,
+        reviewComment: reviewTask.reviewComment,
+      };
+
+      reviewTask.status = ReviewStatus.RESOLVED;
+      reviewTask.decision = dto.decision;
+      reviewTask.reviewComment = dto.reviewComment ?? null;
+      reviewTask.resolvedAt = new Date();
+
+      const savedTask = await reviewTaskRepo.save(reviewTask);
+
+      // Update lead status based on decision
+      const lead = await leadRepo.findOne({
+        where: { id: savedTask.leadId },
+      });
+
+      if (lead) {
+        if (savedTask.decision === ReviewDecision.APPROVE) {
+          lead.status = 'QUALIFIED' as typeof lead.status;
+        }
+
+        if (savedTask.decision === ReviewDecision.REJECT) {
+          lead.status = 'LOST' as typeof lead.status;
+        }
+
+        if (savedTask.decision === ReviewDecision.MODIFY) {
+          lead.status = 'QUALIFYING' as typeof lead.status;
+        }
+
+        await leadRepo.save(lead);
+      }
+
+      await auditLogRepo.save(
+        auditLogRepo.create({
+          userId: savedTask.assignedTo,
+          action: 'REVIEW_RESOLVED',
+          entityType: 'ReviewTask',
+          entityId: savedTask.id,
+          oldValue,
+          newValue: {
+            status: savedTask.status,
+            decision: savedTask.decision,
+            reviewComment: savedTask.reviewComment,
+          },
+          metadata: {
+            leadId: savedTask.leadId,
+          },
+          ipAddress: null,
+          userAgent: null,
+        }),
       );
-    }
 
-    const oldValue = {
-      status: reviewTask.status,
-      decision: reviewTask.decision,
-      reviewComment: reviewTask.reviewComment,
-    };
-
-    reviewTask.status = ReviewStatus.RESOLVED;
-    reviewTask.decision = dto.decision;
-    reviewTask.reviewComment = dto.reviewComment ?? null;
-    reviewTask.resolvedAt = new Date();
-
-    const savedTask = await this.reviewTaskRepository.save(reviewTask);
-
-    await this.updateLeadAfterReview(savedTask);
-
-    await this.auditLogRepository.save(
-      this.auditLogRepository.create({
-        userId: savedTask.assignedTo,
-        action: 'REVIEW_RESOLVED',
-        entityType: 'ReviewTask',
-        entityId: savedTask.id,
-        oldValue,
-        newValue: {
-          status: savedTask.status,
-          decision: savedTask.decision,
-          reviewComment: savedTask.reviewComment,
-        },
-        metadata: {
-          leadId: savedTask.leadId,
-        },
-        ipAddress: null,
-        userAgent: null,
-      }),
-    );
-
-    return savedTask;
+      return savedTask;
+    });
   }
 
   private async createNotification(
@@ -261,29 +300,5 @@ export class ReviewService {
         readAt: null,
       }),
     );
-  }
-
-  private async updateLeadAfterReview(reviewTask: ReviewTask): Promise<void> {
-    const lead = await this.leadRepository.findOne({
-      where: { id: reviewTask.leadId },
-    });
-
-    if (!lead) {
-      return;
-    }
-
-    if (reviewTask.decision === ReviewDecision.APPROVE) {
-      lead.status = 'QUALIFIED' as typeof lead.status;
-    }
-
-    if (reviewTask.decision === ReviewDecision.REJECT) {
-      lead.status = 'LOST' as typeof lead.status;
-    }
-
-    if (reviewTask.decision === ReviewDecision.MODIFY) {
-      lead.status = 'QUALIFYING' as typeof lead.status;
-    }
-
-    await this.leadRepository.save(lead);
   }
 }

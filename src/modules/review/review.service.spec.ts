@@ -4,7 +4,7 @@ import { ReviewDecision, ReviewStatus } from './enums/review.enum.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
 import { NotificationType } from '../notifications/enums/notification.enum.js';
-import type { Repository } from 'typeorm';
+import type { Repository, DataSource } from 'typeorm';
 import type { ReviewTask } from './entities/review-task.entity.js';
 import type { Lead } from '../leads/entities/lead.entity.js';
 import type { User } from '../users/entities/user.entity.js';
@@ -25,6 +25,7 @@ describe('ReviewService', () => {
   let workflowRunRepository: jest.Mocked<Partial<Repository<WorkflowRun>>>;
   let notificationRepository: jest.Mocked<Partial<Repository<Notification>>>;
   let auditLogRepository: jest.Mocked<Partial<Repository<AuditLog>>>;
+  let dataSource: jest.Mocked<Partial<DataSource>>;
 
   const mockLead: Lead = {
     id: 'lead-123',
@@ -178,6 +179,21 @@ describe('ReviewService', () => {
       Promise.resolve(lead),
     );
 
+    dataSource = {
+      transaction: jest.fn().mockImplementation((callback) => {
+        return callback({
+          getRepository: jest.fn().mockImplementation((entity) => {
+            const entityName =
+              typeof entity === 'function' ? entity.name : String(entity);
+            if (entityName === 'ReviewTask') return reviewTaskRepository;
+            if (entityName === 'Lead') return leadRepository;
+            if (entityName === 'AuditLog') return auditLogRepository;
+            return {};
+          }),
+        });
+      }),
+    };
+
     service = new ReviewService(
       reviewTaskRepository as Repository<ReviewTask>,
       leadRepository as Repository<Lead>,
@@ -185,6 +201,7 @@ describe('ReviewService', () => {
       workflowRunRepository as Repository<WorkflowRun>,
       notificationRepository as Repository<Notification>,
       auditLogRepository as Repository<AuditLog>,
+      dataSource as DataSource,
     );
   });
 
