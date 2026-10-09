@@ -68,6 +68,9 @@ services:
       - N8N_BASIC_AUTH_ACTIVE=false
 
       - NODE_ENV=production
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-1.5-pro}
+      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://host.docker.internal:3000}
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     volumes:

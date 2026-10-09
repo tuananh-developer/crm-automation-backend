@@ -92,9 +92,9 @@ export class LeadsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Soft delete a lead' })
+  @ApiOperation({ summary: 'Delete a lead' })
   @ApiParam({ name: 'id', description: 'UUID of the lead' })
-  @ApiResponse({ status: 200, description: 'Lead marked as deleted.' })
+  @ApiResponse({ status: 200, description: 'Lead removed successfully.' })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.leadsService.remove(id);

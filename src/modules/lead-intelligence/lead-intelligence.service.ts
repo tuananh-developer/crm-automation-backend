@@ -172,29 +172,45 @@ export class LeadIntelligenceService {
         dto.reason ||
         `AI qualification confidence (${(dto.confidence * 100).toFixed(1)}%) is below required threshold (80%). Manual review required.`;
 
-      const reviewTask = this.reviewTasksRepository.create({
-        leadId: lead.id,
-        workflowRunId: workflowRun?.id ?? null,
-        assignedTo: lead.ownerId ?? null,
-        status: ReviewStatus.PENDING,
-        reason,
+      // Check if a pending ReviewTask already exists for this lead (Idempotency Guard)
+      const existingPendingTask = await this.reviewTasksRepository.findOne({
+        where: {
+          leadId: lead.id,
+          status: ReviewStatus.PENDING,
+        },
       });
 
-      const savedReviewTask = await this.reviewTasksRepository.save(reviewTask);
-      reviewTaskId = savedReviewTask.id;
-
-      // If lead has an owner, notify them
-      if (lead.ownerId) {
-        const notification = this.notificationsRepository.create({
-          userId: lead.ownerId,
-          type: 'REVIEW_REQUIRED',
-          title: 'Review Required: Low Confidence AI Qualification',
-          content: `Lead ${lead.firstName} ${lead.lastName || ''} requires human review: ${reason}`,
+      if (!existingPendingTask) {
+        const reviewTask = this.reviewTasksRepository.create({
           leadId: lead.id,
-          reviewTaskId: savedReviewTask.id,
-          isRead: false,
+          workflowRunId: workflowRun?.id ?? null,
+          assignedTo: lead.ownerId ?? null,
+          status: ReviewStatus.PENDING,
+          reason,
         });
-        await this.notificationsRepository.save(notification);
+
+        const savedReviewTask =
+          await this.reviewTasksRepository.save(reviewTask);
+        reviewTaskId = savedReviewTask.id;
+
+        // If lead has an owner, notify them
+        if (lead.ownerId) {
+          const notification = this.notificationsRepository.create({
+            userId: lead.ownerId,
+            type: 'REVIEW_REQUIRED',
+            title: 'Review Required: Low Confidence AI Qualification',
+            content: `Lead ${lead.firstName} ${lead.lastName || ''} requires human review: ${reason}`,
+            leadId: lead.id,
+            reviewTaskId: savedReviewTask.id,
+            isRead: false,
+          });
+          await this.notificationsRepository.save(notification);
+        }
+      } else {
+        reviewTaskId = existingPendingTask.id;
+        this.logger.log(
+          `Reusing existing pending ReviewTask ${existingPendingTask.id} for lead ${lead.id}`,
+        );
       }
     } else {
       // Automatic acceptance

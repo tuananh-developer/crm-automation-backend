@@ -8,4 +8,4 @@ export const CRM_EVENTS = {
   FOLLOW_UP_TRIGGERED: 'lead.follow_up.triggered',
 } as const;
 
-export const DEFAULT_CRM_QUEUE = 'crm_automation_queue';
+export const DEFAULT_CRM_QUEUE = 'crm_events_queue';

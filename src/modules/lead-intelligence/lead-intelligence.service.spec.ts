@@ -100,6 +100,7 @@ describe('LeadIntelligenceService', () => {
     reviewTasksRepo = {
       create: jest.fn(),
       save: jest.fn(),
+      findOne: jest.fn().mockResolvedValue(null),
     };
 
     notificationsRepo = {
@@ -320,6 +321,62 @@ describe('LeadIntelligenceService', () => {
           reviewTaskId: 'review-task-123',
         }),
       );
+    });
+
+    it('should reuse existing pending ReviewTask on duplicate callback retry (Idempotency)', async () => {
+      const currentLead = { ...mockLead, status: LeadStatus.QUALIFYING };
+      const lowConfidenceQual = {
+        ...mockQualification,
+        confidence: 0.6,
+        status: QualificationStatus.NEEDS_REVIEW,
+      };
+
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(currentLead);
+      (qualificationsRepo.create as jest.Mock).mockReturnValue(
+        lowConfidenceQual,
+      );
+      (qualificationsRepo.save as jest.Mock).mockResolvedValue(
+        lowConfidenceQual,
+      );
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+      });
+      (workflowRunsRepo.save as jest.Mock).mockImplementation((w) =>
+        Promise.resolve(w),
+      );
+      (leadsRepo.save as jest.Mock).mockImplementation((l) =>
+        Promise.resolve(l),
+      );
+
+      const existingTask: ReviewTask = {
+        id: 'existing-task-999',
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        assignedTo: 'user-owner-123',
+        status: ReviewStatus.PENDING,
+        reason: 'Existing low confidence reason',
+        decision: null,
+        reviewComment: null,
+        createdAt: new Date(),
+        startedAt: null,
+        resolvedAt: null,
+      };
+
+      // Mock that a pending review task already exists
+      (reviewTasksRepo.findOne as jest.Mock).mockResolvedValue(existingTask);
+
+      const result = await service.handleQualificationCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: QualificationStatus.NEEDS_REVIEW,
+        confidence: 0.6,
+      });
+
+      expect(result.reviewRequired).toBe(true);
+      expect(result.reviewTaskId).toBe('existing-task-999');
+      // Must NOT create a new task or send duplicate notification
+      expect(reviewTasksRepo.create).not.toHaveBeenCalled();
+      expect(notificationsRepo.create).not.toHaveBeenCalled();
     });
   });
 

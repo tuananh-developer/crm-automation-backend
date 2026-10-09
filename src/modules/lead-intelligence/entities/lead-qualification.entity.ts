@@ -36,6 +36,13 @@ export class LeadQualification {
     precision: 5,
     scale: 4,
     nullable: true,
+    transformer: {
+      to: (value?: number | null) => value,
+      from: (value?: string | number | null) =>
+        value !== null && value !== undefined
+          ? parseFloat(value as string)
+          : null,
+    },
   })
   confidence!: number | null;
 
