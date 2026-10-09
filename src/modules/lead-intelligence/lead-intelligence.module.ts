@@ -10,6 +10,7 @@ import { ReviewTask } from '../review/entities/review-task.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
 import { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { LeadIntelligenceController } from './lead-intelligence.controller.js';
+import { EnrichmentController } from './enrichment.controller.js';
 import { ScoringController } from './scoring.controller.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
 
@@ -26,7 +27,11 @@ import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
       Notification,
     ]),
   ],
-  controllers: [LeadIntelligenceController, ScoringController],
+  controllers: [
+    LeadIntelligenceController,
+    EnrichmentController,
+    ScoringController,
+  ],
   providers: [LeadIntelligenceService, N8nAuthGuard],
   exports: [LeadIntelligenceService, TypeOrmModule],
 })
