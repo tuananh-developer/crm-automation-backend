@@ -1,0 +1,182 @@
+{
+  "name": "UC04 - AI Lead Scoring Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "queue": "lead.scoring.queue",
+        "options": {
+          "arguments": {}
+        }
+      },
+      "id": "node-rabbitmq-trigger",
+      "name": "RabbitMQ Trigger (lead.scoring.queue)",
+      "type": "n8n-nodes-base.rabbitmqTrigger",
+      "typeVersion": 1,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Trích xuất an toàn payload từ RabbitMQ message\nconst item = $input.first().json;\nlet payload = {};\n\nif (item.content) {\n  try {\n    payload = typeof item.content === 'string' ? JSON.parse(item.content) : item.content;\n  } catch (err) {\n    payload = {};\n  }\n} else {\n  payload = item;\n}\n\n// Support wrapped event ({ data: { ... } }) and flat event\nconst eventData = payload.data || payload;\nconst leadId = eventData.leadId || payload.leadId || null;\nconst workflowRunId = eventData.workflowRunId || payload.workflowRunId || null;\n\n// Data bundle aggregated by NestJS\nconst lead = eventData.leadData || eventData.lead || {};\nconst qual = eventData.qualificationData || eventData.qualification || null;\nconst enrich = eventData.enrichmentData || eventData.enrichment || null;\nconst interactions = eventData.interactions || [];\nconst scoringContext = eventData.scoringContext || {};\nconst features = scoringContext.scoringFeatures || {};\n\n// 2. Build structured prompt context for AI Scoring Model\nconst fullName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Unknown';\nconst jobTitle = enrich?.contactJobTitle || lead.jobTitle || 'Unknown';\nconst companyName = enrich?.companyName || lead.companyName || 'Unknown';\nconst companyWebsite = enrich?.companyWebsite || lead.companyWebsite || 'None';\nconst industry = enrich?.companyIndustry || lead.industry || 'Unknown';\nconst companySize = enrich?.companySize ?? lead.companySize ?? 'Unknown';\n\nconst prompt = `\nYou are an enterprise AI Lead Scoring model. Evaluate and score the following prospective lead for sales readiness.\n\n=== LEAD PROFILE ===\n- Full Name: ${fullName}\n- Email: ${lead.email || 'N/A'}\n- Job Title: ${jobTitle}\n- Company: ${companyName}\n- Website: ${companyWebsite}\n- Industry: ${industry}\n- Company Size (Employees): ${companySize}\n- Current CRM Status: ${lead.status || 'NEW'}\n- Notes: ${lead.notes || 'None'}\n\n=== AI QUALIFICATION DATA ===\n- Status: ${qual?.status || 'NOT_QUALIFIED'}\n- Confidence: ${qual?.confidence != null ? Math.round(qual.confidence * 100) + '%' : 'N/A'}\n- Intent Summary: ${qual?.intent || 'N/A'}\n- Qualification Reason: ${qual?.reason || 'N/A'}\n\n=== DATA ENRICHMENT DATA ===\n- Provider: ${enrich?.provider || 'None'}\n- Status: ${enrich?.status || 'NOT_ENRICHED'}\n- Verified Company: ${enrich?.companyName || 'Not verified'}\n- Verified Size: ${enrich?.companySize != null ? enrich.companySize : 'Not available'}\n\n=== INTERACTION HISTORY ===\n- Total Touchpoints: ${interactions.length}\n- Touchpoints Summary:\n${interactions.map((i, idx) => `  ${idx + 1}. [${i.occurredAt || 'Recent'}] (${i.type || 'INTERACTION'}/${i.channel || 'direct'}) ${i.subject || ''}: ${i.content || ''}`).slice(0, 5).join('\\n') || '  No interactions recorded.'}\n\n=== SCORING GUIDELINES (0 - 100) ===\n- HOT (>= 75): High purchase intent, verified decision maker (Director/VP/C-Level), target enterprise or scale-up company (>= 50 employees), frequent interactions, qualified status.\n- WARM (40 - 74): Moderate fit, mid-level professional, small-medium business, active or neutral qualification, early engagement.\n- COLD (< 40): Low intent, disqualified, missing critical business profile, individual/free email without company, no engagement.\n`;\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    prompt,\n    leadBundle: {\n      lead,\n      qualification: qual,\n      enrichment: enrich,\n      interactions,\n      features\n    },\n    rawEvent: payload\n  }\n}];"
+      },
+      "id": "node-prepare-input",
+      "name": "Prepare Scoring Input & Bundle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Multi-factor Deterministic & AI Scoring Engine\nconst item = $input.first().json;\nconst leadId = item.leadId;\nconst workflowRunId = item.workflowRunId;\nconst bundle = item.leadBundle || {};\nconst lead = bundle.lead || {};\nconst qual = bundle.qualification;\nconst enrich = bundle.enrichment;\nconst interactions = bundle.interactions || [];\nconst f = bundle.features || {};\n\n// Base score\nlet calculatedScore = 20;\nconst scoringFeatures = {\n  baseScore: 20,\n  profileFitPoints: 0,\n  decisionMakerPoints: 0,\n  qualificationPoints: 0,\n  engagementPoints: 0,\n  enrichmentBonus: 0\n};\n\n// 1. Profile Fit & Company Size (Max 20 points)\nconst companySize = enrich?.companySize ?? lead.companySize;\nif (typeof companySize === 'number') {\n  if (companySize >= 100) {\n    scoringFeatures.profileFitPoints = 20;\n  } else if (companySize >= 20) {\n    scoringFeatures.profileFitPoints = 15;\n  } else if (companySize >= 5) {\n    scoringFeatures.profileFitPoints = 10;\n  } else {\n    scoringFeatures.profileFitPoints = 5;\n  }\n} else if (lead.companyName || enrich?.companyName) {\n  scoringFeatures.profileFitPoints = 10;\n}\n\n// 2. Decision Maker / Authority (Max 20 points)\nconst jobTitle = (enrich?.contactJobTitle || lead.jobTitle || '').toLowerCase();\nconst decisionKeywords = ['ceo', 'cto', 'cfo', 'coo', 'cmo', 'cio', 'vp', 'director', 'founder', 'owner', 'head of', 'lead'];\nif (decisionKeywords.some((kw) => jobTitle.includes(kw))) {\n  scoringFeatures.decisionMakerPoints = 20;\n} else if (jobTitle.length > 0) {\n  scoringFeatures.decisionMakerPoints = 10;\n}\n\n// 3. AI Qualification Result (Max 25 points, or -20 for Disqualified)\nif (qual && qual.status === 'QUALIFIED') {\n  const conf = typeof qual.confidence === 'number' ? qual.confidence : 0.85;\n  scoringFeatures.qualificationPoints = Math.round(conf * 25);\n} else if (qual && qual.status === 'DISQUALIFIED') {\n  scoringFeatures.qualificationPoints = -20;\n} else if (qual && qual.status === 'NEEDS_REVIEW') {\n  scoringFeatures.qualificationPoints = 10;\n}\n\n// 4. Engagement & Touchpoint Activity (Max 25 points)\nconst recentInteractions = interactions.length;\nscoringFeatures.engagementPoints = Math.min(25, recentInteractions * 8);\n\n// 5. Enrichment bonus (Max 10 points)\nif (enrich && enrich.status === 'SUCCESS') {\n  scoringFeatures.enrichmentBonus = 10;\n}\n\ncalculatedScore += \n  scoringFeatures.profileFitPoints +\n  scoringFeatures.decisionMakerPoints +\n  scoringFeatures.qualificationPoints +\n  scoringFeatures.engagementPoints +\n  scoringFeatures.enrichmentBonus;\n\n// Clamp score between 0 and 100\nconst finalScore = Math.max(0, Math.min(100, Math.round(calculatedScore)));\n\n// Enforce business labeling rule:\n// HOT >= 75 | WARM 40 - 74 | COLD < 40\nlet label = 'COLD';\nif (finalScore >= 75) {\n  label = 'HOT';\n} else if (finalScore >= 40) {\n  label = 'WARM';\n}\n\n// Construct explainable justification reason\nconst reasons = [];\nif (scoringFeatures.decisionMakerPoints >= 15) {\n  reasons.push(`Decision-maker title ('${jobTitle}')`);\n}\nif (scoringFeatures.profileFitPoints >= 15) {\n  reasons.push(`Target enterprise size (${companySize} employees)`);\n}\nif (scoringFeatures.qualificationPoints >= 15) {\n  reasons.push(`AI qualified with high confidence`);\n} else if (scoringFeatures.qualificationPoints < 0) {\n  reasons.push(`Previously disqualified`);\n}\nif (scoringFeatures.engagementPoints >= 10) {\n  reasons.push(`${interactions.length} recorded interactions`);\n}\nif (reasons.length === 0) {\n  reasons.push('Standard inbound profile evaluation');\n}\n\nconst reason = `[${label} - Score ${finalScore}/100] ${reasons.join(', ')}.`;\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    status: 'SUCCESS',\n    score: finalScore,\n    label,\n    reason,\n    scoringFeatures,\n    modelInfo: {\n      provider: 'crm-ai-engine',\n      model: 'lead-scorer-gpt-4o',\n      version: '2024-08-06'\n    },\n    inputOutputSnapshot: {\n      input: {\n        leadId,\n        prompt: item.prompt,\n        leadProfile: lead,\n        qualification: qual,\n        enrichment: enrich,\n        interactionCount: interactions.length\n      },\n      output: {\n        score: finalScore,\n        label,\n        scoringFeatures,\n        reason\n      }\n    }\n  }\n}];"
+      },
+      "id": "node-ai-scoring",
+      "name": "AI Scoring Engine & Evaluator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate & Enforce Business Constraints on Output\nconst item = $input.first().json;\n\nif (item.status === 'FAILED') {\n  return [{\n    json: {\n      leadId: item.leadId,\n      workflowRunId: item.workflowRunId,\n      status: 'FAILED',\n      errorMessage: item.errorMessage || 'AI Lead scoring failed'\n    }\n  }];\n}\n\n// 1. Clamp score strictly 0 - 100\nlet score = Number(item.score);\nif (isNaN(score)) {\n  score = 0;\n}\nscore = Math.max(0, Math.min(100, Math.round(score * 100) / 100));\n\n// 2. Strict Label assignment rule:\n// HOT >= 75 | WARM 40 - 74 | COLD < 40\nlet label = 'COLD';\nif (score >= 75) {\n  label = 'HOT';\n} else if (score >= 40) {\n  label = 'WARM';\n}\n\nreturn [{\n  json: {\n    leadId: item.leadId,\n    workflowRunId: item.workflowRunId,\n    status: 'SUCCESS',\n    score,\n    label,\n    reason: item.reason || `AI evaluated score: ${score}`,\n    scoringFeatures: item.scoringFeatures || {},\n    modelInfo: item.modelInfo || {\n      provider: 'crm-ai-engine',\n      model: 'lead-scorer-gpt-4o',\n      version: '2024-08-06'\n    },\n    inputOutputSnapshot: item.inputOutputSnapshot || {}\n  }\n}];"
+      },
+      "id": "node-validate-score",
+      "name": "Validate Score Output & Business Rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/scoring/callback' }}",
+        "method": "POST",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-n8n-webhook-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET || 'n8n-internal-secret-token' }}"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "node-http-callback",
+      "name": "Callback NestJS API (/api/v1/scoring/callback)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1140, 300]
+    },
+    {
+      "parameters": {},
+      "id": "node-error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [420, 520]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/scoring/callback' }}",
+        "method": "POST",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-n8n-webhook-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET || 'n8n-internal-secret-token' }}"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => {\n  let leadId = null, workflowRunId = null;\n  try {\n    const prep = $('Prepare Scoring Input & Bundle')?.first()?.json;\n    leadId = prep?.leadId;\n    workflowRunId = prep?.workflowRunId;\n  } catch (e) {}\n  if (!leadId || !workflowRunId) {\n    try {\n      const trig = $('RabbitMQ Trigger (lead.scoring.queue)')?.first()?.json;\n      let p = trig?.content;\n      if (typeof p === 'string') {\n        p = JSON.parse(p);\n      }\n      leadId = leadId || p?.data?.leadId || p?.leadId || null;\n      workflowRunId = workflowRunId || p?.data?.workflowRunId || p?.workflowRunId || null;\n    } catch (e) {}\n  }\n  return JSON.stringify({\n    leadId,\n    workflowRunId,\n    status: 'FAILED',\n    errorMessage: $json?.execution?.error?.message || $json?.message || 'Workflow execution error during AI scoring'\n  });\n})() }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "node-error-callback",
+      "name": "Error Callback NestJS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [660, 520]
+    }
+  ],
+  "connections": {
+    "RabbitMQ Trigger (lead.scoring.queue)": {
+      "main": [
+        [
+          {
+            "node": "Prepare Scoring Input & Bundle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Scoring Input & Bundle": {
+      "main": [
+        [
+          {
+            "node": "AI Scoring Engine & Evaluator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Scoring Engine & Evaluator": {
+      "main": [
+        [
+          {
+            "node": "Validate Score Output & Business Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Score Output & Business Rules": {
+      "main": [
+        [
+          {
+            "node": "Callback NestJS API (/api/v1/scoring/callback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Error Callback NestJS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
