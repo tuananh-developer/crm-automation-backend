@@ -37,66 +37,69 @@ describe('FollowUpService', () => {
     N8N_FOLLOW_UP_WEBHOOK_PATH: 'follow-up-execute',
   };
 
-  const buildLead = (overrides: Partial<Lead> = {}): Lead => ({
-    id: 'lead-1',
-    firstName: 'John',
-    lastName: 'Doe',
-    email: 'john.doe@example.com',
-    phone: '+84901234567',
-    companyName: 'Acme Corp',
-    companyWebsite: 'https://acme.com',
-    jobTitle: 'VP Sales',
-    companySize: 50,
-    industry: 'Technology',
-    status: LeadStatus.QUALIFIED,
-    sourceId: 'source-1',
-    ownerId: null,
-    convertedCustomerId: null,
-    convertedBy: null,
-    convertedAt: null,
-    notes: 'Met at expo',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    ...overrides,
-  });
+  const buildLead = (overrides: Partial<Lead> = {}): Lead =>
+    ({
+      id: 'lead-1',
+      firstName: 'John',
+      lastName: 'Doe',
+      email: 'john.doe@example.com',
+      phone: '+84901234567',
+      companyName: 'Acme Corp',
+      companyWebsite: 'https://acme.com',
+      jobTitle: 'VP Sales',
+      companySize: 50,
+      industry: 'Technology',
+      status: LeadStatus.QUALIFIED,
+      sourceId: 'source-1',
+      ownerId: null,
+      convertedCustomerId: null,
+      convertedBy: null,
+      convertedAt: null,
+      notes: 'Met at expo',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...overrides,
+    }) as unknown as Lead;
 
-  const buildStep = (overrides: Partial<FollowUpStep> = {}): FollowUpStep => ({
-    id: 'step-1',
-    sequenceId: 'sequence-1',
-    stepOrder: 1,
-    delayMinutes: 0,
-    channel: 'EMAIL',
-    actionType: 'SEND_EMAIL',
-    subjectTemplate: 'Trao đổi về {{companyName}}',
-    contentTemplate:
-      'Xin chào {{firstName}},\nchúng tôi muốn trao đổi thêm với bạn về nhu cầu của {{companyName}}.',
-    conditions: null,
-    metadata: null,
-    actionConfig: null,
-    isActive: true,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    ...overrides,
-  });
+  const buildStep = (overrides: Partial<FollowUpStep> = {}): FollowUpStep =>
+    ({
+      id: 'step-1',
+      sequenceId: 'sequence-1',
+      stepOrder: 1,
+      delayMinutes: 0,
+      channel: 'EMAIL',
+      actionType: 'SEND_EMAIL',
+      subjectTemplate: 'Trao đổi về {{companyName}}',
+      contentTemplate:
+        'Xin chào {{firstName}},\nchúng tôi muốn trao đổi thêm với bạn về nhu cầu của {{companyName}}.',
+      conditions: null,
+      metadata: null,
+      actionConfig: null,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...overrides,
+    }) as unknown as FollowUpStep;
 
   const buildEnrollment = (
     overrides: Partial<LeadFollowUpEnrollment> = {},
-  ): LeadFollowUpEnrollment => ({
-    id: 'enrollment-1',
-    leadId: 'lead-1',
-    sequenceId: 'sequence-1',
-    currentStepId: 'step-1',
-    status: EnrollmentStatus.ACTIVE,
-    startedAt: new Date(),
-    pausedAt: null,
-    completedAt: null,
-    cancelledAt: null,
-    assignedBy: 'user-1',
-    cancellationReason: null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    ...overrides,
-  });
+  ): LeadFollowUpEnrollment =>
+    ({
+      id: 'enrollment-1',
+      leadId: 'lead-1',
+      sequenceId: 'sequence-1',
+      currentStepId: 'step-1',
+      status: EnrollmentStatus.ACTIVE,
+      startedAt: new Date(),
+      pausedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      assignedBy: 'user-1',
+      cancellationReason: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...overrides,
+    }) as unknown as LeadFollowUpEnrollment;
 
   const dto = { enrollmentId: 'enrollment-1' };
 
