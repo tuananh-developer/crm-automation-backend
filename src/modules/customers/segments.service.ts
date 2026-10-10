@@ -87,12 +87,12 @@ export class SegmentsService {
     }
 
     if (query.isActive !== undefined) {
-      qb.andWhere('segment.is_active = :isActive', {
+      qb.andWhere('segment.isActive = :isActive', {
         isActive: query.isActive,
       });
     }
 
-    qb.orderBy('segment.created_at', 'DESC')
+    qb.orderBy('segment.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
@@ -228,7 +228,7 @@ export class SegmentsService {
       .leftJoinAndSelect('assignment.customer', 'customer')
       .leftJoinAndSelect('assignment.segment', 'segment')
       .leftJoinAndSelect('assignment.assignedByUser', 'assignedByUser')
-      .where('assignment.segment_id = :segmentId', { segmentId });
+      .where('assignment.segmentId = :segmentId', { segmentId });
 
     if (query.search) {
       qb.andWhere(
@@ -237,7 +237,7 @@ export class SegmentsService {
       );
     }
 
-    qb.orderBy('assignment.assigned_at', 'DESC')
+    qb.orderBy('assignment.assignedAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
@@ -560,8 +560,8 @@ export class SegmentsService {
 
     const score = await this.leadScoresRepository
       .createQueryBuilder('score')
-      .where('score.lead_id IN (:...leadIds)', { leadIds })
-      .orderBy('score.created_at', 'DESC')
+      .where('score.leadId IN (:...leadIds)', { leadIds })
+      .orderBy('score.createdAt', 'DESC')
       .getOne();
 
     return score ? Number(score.score) : null;

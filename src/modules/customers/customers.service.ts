@@ -45,7 +45,7 @@ export class CustomersService {
       qb.andWhere('customer.status = :status', { status: query.status });
     }
 
-    qb.orderBy('customer.created_at', 'DESC')
+    qb.orderBy('customer.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
