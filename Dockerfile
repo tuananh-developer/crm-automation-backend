@@ -4,7 +4,7 @@ FROM node:24-alpine AS builder
 # Cập nhật và vá ngay các lỗ hổng hệ điều hành của Alpine
 RUN apk update && apk upgrade --no-cache
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9 --activate
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml ./
@@ -12,7 +12,7 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 RUN pnpm run build
-RUN pnpm prune --prod
+RUN pnpm prune --prod --ignore-scripts
 
 # Stage 2: Production runner
 FROM node:24-alpine AS runner
