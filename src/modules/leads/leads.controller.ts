@@ -109,7 +109,10 @@ export class LeadsController {
   })
   @ApiBody({ type: ConvertLeadDto })
   @ApiResponse({ status: 201, description: 'Chuyển đổi lead thành công.' })
-  @ApiResponse({ status: 400, description: 'Lead không ở trạng thái QUALIFIED.' })
+  @ApiResponse({
+    status: 400,
+    description: 'Lead không ở trạng thái QUALIFIED.',
+  })
   @ApiResponse({ status: 404, description: 'Lead hoặc User không tồn tại.' })
   @ApiResponse({
     status: 409,

@@ -43,4 +43,3 @@ export interface FollowUpTriggeredEventData {
   stepId?: string;
   scheduledAt?: string;
 }
-

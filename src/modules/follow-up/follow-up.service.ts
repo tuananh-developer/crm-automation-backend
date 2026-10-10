@@ -8,13 +8,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  DataSource,
-  In,
-  LessThanOrEqual,
-  MoreThan,
-  Repository,
-} from 'typeorm';
+import { DataSource, In, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
 import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
 import { FollowUpExecution } from './entities/follow-up-execution.entity.js';
