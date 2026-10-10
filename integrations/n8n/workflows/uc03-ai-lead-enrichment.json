@@ -65,7 +65,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY || 'd493d664cd36eec250ebda5aa9c7604cfa2556591c963fcbb1b3382be6402571' }}"
             }
           ]
         },
@@ -102,7 +102,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY || 'd493d664cd36eec250ebda5aa9c7604cfa2556591c963fcbb1b3382be6402571' }}"
             }
           ]
         },
