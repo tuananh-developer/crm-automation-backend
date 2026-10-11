@@ -20,6 +20,8 @@ import type {
   CrmEvent,
   LeadCreatedEventData,
   LeadQualificationRequestedEventData,
+  LeadEnrichmentRequestedEventData,
+  LeadScoringRequestedEventData,
 } from './rabbitmq.interface.js';
 
 @Injectable()
@@ -59,8 +61,25 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
           });
           await channel.assertQueue(queueName, { durable: true });
           await channel.bindQueue(queueName, CRM_EXCHANGE, 'lead.*');
+
+          // Assert dedicated queue for AI Lead Enrichment (UC03)
+          await channel.assertQueue('lead.enrichment.queue', { durable: true });
+          await channel.bindQueue(
+            'lead.enrichment.queue',
+            CRM_EXCHANGE,
+            CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
+          );
+
+          // Assert dedicated queue for AI Lead Scoring (UC04)
+          await channel.assertQueue('lead.scoring.queue', { durable: true });
+          await channel.bindQueue(
+            'lead.scoring.queue',
+            CRM_EXCHANGE,
+            CRM_EVENTS.LEAD_SCORING_REQUESTED,
+          );
+
           this.logger.log(
-            `Exchange '${CRM_EXCHANGE}' and queue '${queueName}' asserted and bound`,
+            `Exchange '${CRM_EXCHANGE}', default queue '${queueName}', 'lead.enrichment.queue', and 'lead.scoring.queue' asserted and bound`,
           );
         },
       });
@@ -97,9 +116,9 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       return fullUrl;
     }
 
-    const host = this.configService.get<string>('RABBITMQ_HOST', 'localhost');
-    const port = this.configService.get<number>('RABBITMQ_PORT', 5672);
-    const user = this.configService.get<string>('RABBITMQ_USER', 'guest');
+    const host = this.configService.get<string>('RABBITMQ_HOST');
+    const port = this.configService.get<number>('RABBITMQ_PORT');
+    const user = this.configService.get<string>('RABBITMQ_USER');
     const password = this.configService.get<string>(
       'RABBITMQ_PASSWORD',
       'guest',
@@ -161,6 +180,24 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
   ): Promise<CrmEvent<LeadQualificationRequestedEventData>> {
     return this.publishEvent<LeadQualificationRequestedEventData>(
       CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED,
+      data,
+    );
+  }
+
+  async publishLeadEnrichmentRequested(
+    data: LeadEnrichmentRequestedEventData,
+  ): Promise<CrmEvent<LeadEnrichmentRequestedEventData>> {
+    return this.publishEvent<LeadEnrichmentRequestedEventData>(
+      CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
+      data,
+    );
+  }
+
+  async publishLeadScoringRequested(
+    data: LeadScoringRequestedEventData,
+  ): Promise<CrmEvent<LeadScoringRequestedEventData>> {
+    return this.publishEvent<LeadScoringRequestedEventData>(
+      CRM_EVENTS.LEAD_SCORING_REQUESTED,
       data,
     );
   }

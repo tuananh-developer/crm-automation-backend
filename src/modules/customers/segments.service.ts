@@ -67,7 +67,14 @@ export class SegmentsService {
       updatedBy: null,
     });
 
-    return this.segmentsRepository.save(segment);
+    const saved = await this.segmentsRepository.save(segment);
+
+    // Attach creator relation from already-fetched user and strip password hash
+    return this.withoutUserHashes({
+      ...saved,
+      creator: user,
+      updater: null,
+    });
   }
 
   async findAll(query: QuerySegmentDto) {
@@ -98,16 +105,25 @@ export class SegmentsService {
 
     const [data, total] = await qb.getManyAndCount();
 
-    const dataWithCount = await Promise.all(
-      data.map(async (segment) => {
-        const customerCount = await this.customerSegmentsRepository.count({
-          where: { segmentId: segment.id },
-        });
+    let countMap = new Map<string, number>();
 
-        return this.withoutUserHashes({
-          ...segment,
-          customerCount,
-        });
+    if (data.length > 0) {
+      const segmentIds = data.map((s) => s.id);
+      const counts = await this.customerSegmentsRepository
+        .createQueryBuilder('cs')
+        .select('cs.segmentId', 'segmentId')
+        .addSelect('COUNT(*)', 'count')
+        .where('cs.segmentId IN (:...segmentIds)', { segmentIds })
+        .groupBy('cs.segmentId')
+        .getRawMany<{ segmentId: string; count: string }>();
+
+      countMap = new Map(counts.map((c) => [c.segmentId, Number(c.count)]));
+    }
+
+    const dataWithCount = data.map((segment) =>
+      this.withoutUserHashes({
+        ...segment,
+        customerCount: countMap.get(segment.id) ?? 0,
       }),
     );
 
@@ -148,6 +164,10 @@ export class SegmentsService {
   async update(id: string, dto: UpdateSegmentDto): Promise<Segment> {
     const segment = await this.segmentsRepository.findOne({
       where: { id },
+      relations: {
+        creator: true,
+        updater: true,
+      },
     });
 
     if (!segment) {
@@ -166,6 +186,8 @@ export class SegmentsService {
       }
     }
 
+    let updater: User | null = segment.updater ?? null;
+
     if (dto.createdBy) {
       const user = await this.usersRepository.findOne({
         where: { id: dto.createdBy },
@@ -178,6 +200,7 @@ export class SegmentsService {
       }
 
       segment.updatedBy = dto.createdBy;
+      updater = user;
     }
 
     if (dto.name !== undefined) {
@@ -196,7 +219,14 @@ export class SegmentsService {
       segment.isActive = dto.isActive;
     }
 
-    return this.segmentsRepository.save(segment);
+    const saved = await this.segmentsRepository.save(segment);
+
+    // Strip password hashes
+    return this.withoutUserHashes({
+      ...saved,
+      creator: segment.creator,
+      updater,
+    });
   }
 
   async remove(id: string) {

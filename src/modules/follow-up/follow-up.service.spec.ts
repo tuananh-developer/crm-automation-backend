@@ -7,6 +7,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
 import { FollowUpService } from './follow-up.service.js';
 import { EnrollmentStatus, ExecutionStatus } from './enums/follow-up.enum.js';
+import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
 import { FollowUpExecution } from './entities/follow-up-execution.entity.js';
 import { LeadFollowUpEnrollment } from './entities/lead-follow-up-enrollment.entity.js';
@@ -21,6 +22,7 @@ describe('FollowUpService', () => {
   let enrollmentsRepository: jest.Mocked<
     Partial<Repository<LeadFollowUpEnrollment>>
   >;
+  let sequencesRepository: jest.Mocked<Partial<Repository<FollowUpSequence>>>;
   let stepsRepository: jest.Mocked<Partial<Repository<FollowUpStep>>>;
   let executionsRepository: jest.Mocked<Partial<Repository<FollowUpExecution>>>;
   let leadsRepository: jest.Mocked<Partial<Repository<Lead>>>;
@@ -70,6 +72,7 @@ describe('FollowUpService', () => {
       'Xin chào {{firstName}},\nchúng tôi muốn trao đổi thêm với bạn về nhu cầu của {{companyName}}.',
     conditions: null,
     metadata: null,
+    actionConfig: null,
     isActive: true,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -104,6 +107,10 @@ describe('FollowUpService', () => {
       find: jest.fn(),
     };
 
+    sequencesRepository = {
+      findOne: jest.fn(),
+      find: jest.fn(),
+    };
     stepsRepository = {
       findOne: jest.fn(),
       find: jest.fn(),
@@ -154,6 +161,9 @@ describe('FollowUpService', () => {
         if (entity === LeadFollowUpEnrollment) {
           return enrollmentsRepository;
         }
+        if (entity === FollowUpSequence) {
+          return sequencesRepository;
+        }
         if (entity === FollowUpStep) {
           return stepsRepository;
         }
@@ -186,6 +196,7 @@ describe('FollowUpService', () => {
 
     service = new FollowUpService(
       enrollmentsRepository as Repository<LeadFollowUpEnrollment>,
+      sequencesRepository as Repository<FollowUpSequence>,
       stepsRepository as Repository<FollowUpStep>,
       executionsRepository as Repository<FollowUpExecution>,
       leadsRepository as Repository<Lead>,
@@ -589,6 +600,63 @@ describe('FollowUpService', () => {
       expect(executionsRepository.find).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { enrollmentId: 'enrollment-1' },
+        }),
+      );
+    });
+  });
+
+  describe('processPendingExecutions', () => {
+    it('should query PENDING and RETRYING executions with ACTIVE enrollment status', async () => {
+      (executionsRepository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.processPendingExecutions();
+
+      expect(executionsRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            enrollment: { status: EnrollmentStatus.ACTIVE },
+          }),
+          relations: { enrollment: { lead: true } },
+          take: 50,
+        }),
+      );
+    });
+
+    it('should trigger execute for each found pending/retrying execution', async () => {
+      const pendingExec = {
+        id: 'exec-1',
+        enrollmentId: 'enrollment-1',
+        stepId: 'step-1',
+        status: ExecutionStatus.PENDING,
+      } as FollowUpExecution;
+
+      (executionsRepository.find as jest.Mock).mockResolvedValue([pendingExec]);
+      const executeSpy = jest
+        .spyOn(service, 'execute')
+        .mockResolvedValue({} as any);
+
+      await service.processPendingExecutions();
+
+      expect(executeSpy).toHaveBeenCalledWith({
+        enrollmentId: 'enrollment-1',
+        stepId: 'step-1',
+      });
+      executeSpy.mockRestore();
+    });
+  });
+
+  describe('handleStaleRunningExecutions', () => {
+    it('should query stale RUNNING executions older than timeout threshold', async () => {
+      (executionsRepository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.handleStaleRunningExecutions();
+
+      expect(executionsRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: ExecutionStatus.RUNNING,
+          }),
+          relations: { enrollment: { lead: true } },
         }),
       );
     });
