@@ -15,6 +15,10 @@ import {
   CRM_EVENTS,
   CRM_EXCHANGE,
   DEFAULT_CRM_QUEUE,
+  LEAD_ENRICHMENT_QUEUE,
+  LEAD_INTAKE_QUEUE,
+  LEAD_QUALIFICATION_QUEUE,
+  LEAD_SCORING_QUEUE,
 } from './rabbitmq.constants.js';
 import type {
   CrmEvent,
@@ -62,24 +66,42 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
           await channel.assertQueue(queueName, { durable: true });
           await channel.bindQueue(queueName, CRM_EXCHANGE, 'lead.*');
 
-          // Assert dedicated queue for AI Lead Enrichment (UC03)
-          await channel.assertQueue('lead.enrichment.queue', { durable: true });
+          // Assert dedicated queue for Lead Intake & Assignment (UC01)
+          await channel.assertQueue(LEAD_INTAKE_QUEUE, { durable: true });
           await channel.bindQueue(
-            'lead.enrichment.queue',
+            LEAD_INTAKE_QUEUE,
+            CRM_EXCHANGE,
+            CRM_EVENTS.LEAD_CREATED,
+          );
+
+          // Assert dedicated queue for AI Lead Qualification (UC02)
+          await channel.assertQueue(LEAD_QUALIFICATION_QUEUE, {
+            durable: true,
+          });
+          await channel.bindQueue(
+            LEAD_QUALIFICATION_QUEUE,
+            CRM_EXCHANGE,
+            CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED,
+          );
+
+          // Assert dedicated queue for AI Lead Enrichment (UC03)
+          await channel.assertQueue(LEAD_ENRICHMENT_QUEUE, { durable: true });
+          await channel.bindQueue(
+            LEAD_ENRICHMENT_QUEUE,
             CRM_EXCHANGE,
             CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
           );
 
           // Assert dedicated queue for AI Lead Scoring (UC04)
-          await channel.assertQueue('lead.scoring.queue', { durable: true });
+          await channel.assertQueue(LEAD_SCORING_QUEUE, { durable: true });
           await channel.bindQueue(
-            'lead.scoring.queue',
+            LEAD_SCORING_QUEUE,
             CRM_EXCHANGE,
             CRM_EVENTS.LEAD_SCORING_REQUESTED,
           );
 
           this.logger.log(
-            `Exchange '${CRM_EXCHANGE}', default queue '${queueName}', 'lead.enrichment.queue', and 'lead.scoring.queue' asserted and bound`,
+            `Exchange '${CRM_EXCHANGE}', queues ('${queueName}', '${LEAD_INTAKE_QUEUE}', '${LEAD_QUALIFICATION_QUEUE}', '${LEAD_ENRICHMENT_QUEUE}', '${LEAD_SCORING_QUEUE}') asserted and bound`,
           );
         },
       });

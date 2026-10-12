@@ -1,0 +1,432 @@
+{
+  "name": "UC01 - Lead Intake & Assignment",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📥 1. EVENT INGESTION & VALIDATION\nLắng nghe sự kiện lead.created từ RabbitMQ (hàng đợi riêng lead.intake.queue), chuẩn hóa payload và kiểm tra tính hợp lệ.",
+        "height": 480,
+        "width": 560,
+        "color": 4
+      },
+      "id": "sticky_ingestion",
+      "name": "Sticky Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [60, 100]
+    },
+    {
+      "parameters": {
+        "content": "## 🔍 2. LEAD RETRIEVAL & OWNERSHIP CHECK\nTruy vấn thông tin chi tiết Lead qua NestJS API, kiểm tra trạng thái Lead và xác định xem Lead đã có Sales Owner hay chưa.",
+        "height": 480,
+        "width": 600,
+        "color": 6
+      },
+      "id": "sticky_lead_check",
+      "name": "Sticky Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [660, 100]
+    },
+    {
+      "parameters": {
+        "content": "## 👥 3. ASSIGNMENT & PIPELINE DISPATCH\nNếu chưa có owner: lấy danh sách Sales Rep khả dụng và gán owner qua PATCH /leads/:id. Sau đó kích hoạt AI Qualification.",
+        "height": 480,
+        "width": 860,
+        "color": 2
+      },
+      "id": "sticky_assignment",
+      "name": "Sticky Note 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1300, 100]
+    },
+    {
+      "parameters": {
+        "content": "## 🛡️ 4. AUDIT & ERROR RESILIENCE\nGhi nhận kết quả thực thi và bắt lỗi tự động qua Error Trigger mà không làm gián đoạn hệ thống.",
+        "height": 260,
+        "width": 640,
+        "color": 5
+      },
+      "id": "sticky_audit",
+      "name": "Sticky Note 4",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [660, 620]
+    },
+    {
+      "parameters": {
+        "queue": "lead.intake.queue",
+        "options": {
+          "arguments": {}
+        }
+      },
+      "id": "node_rmq_trigger",
+      "name": "📥 RabbitMQ Ingestion (lead.created)",
+      "type": "n8n-nodes-base.rabbitmqTrigger",
+      "typeVersion": 1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Trích xuất và chuẩn hóa payload từ RabbitMQ message\nconst raw = $input.first().json;\nlet payload = {};\n\nif (raw.content) {\n  if (typeof raw.content === 'string') {\n    try {\n      payload = JSON.parse(raw.content);\n    } catch (e) {\n      payload = { text: raw.content };\n    }\n  } else if (typeof raw.content === 'object') {\n    payload = raw.content;\n  }\n} else {\n  payload = raw;\n}\n\n// 2. Xác định eventType và leadId\nconst eventType = payload.eventType || raw.eventType || raw.fields?.routingKey || 'unknown';\nconst data = payload.data || payload;\nconst leadId = data.leadId || payload.leadId || null;\n\n// 3. Kiểm tra tính hợp lệ của sự kiện\nconst isLeadCreated = eventType === 'lead.created' || (!payload.eventType && !!leadId);\nconst isValid = Boolean(leadId && isLeadCreated);\n\nreturn [{\n  json: {\n    eventId: payload.eventId || 'evt-' + Date.now(),\n    eventType,\n    leadId,\n    isValid,\n    receivedAt: new Date().toISOString(),\n    rawPayload: payload\n  }\n}];"
+      },
+      "id": "node_norm_event",
+      "name": "⚙️ Normalize Event Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.isValid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node_if_valid",
+      "name": "⚖️ Is Valid Lead Created Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const meta = $('⚙️ Normalize Event Payload').first().json;\n\nreturn [{\n  json: {\n    auditStatus: 'EVENT_SKIPPED_SAFELY',\n    eventId: meta.eventId,\n    receivedEventType: meta.eventType,\n    leadId: meta.leadId || 'N/A',\n    reason: meta.leadId ? `Event type '${meta.eventType}' does not trigger Lead Intake (expected 'lead.created')` : 'Payload missing leadId identifier.',\n    actionTaken: 'Safely acknowledged and dropped without processing',\n    loggedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node_audit_skipped",
+      "name": "📋 Audit: Event Skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 480]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/leads/' + $json.leadId }}",
+        "method": "GET",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "node_fetch_lead",
+      "name": "🔍 Fetch Lead Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [720, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $input.first().json;\nconst meta = $('⚙️ Normalize Event Payload').first().json;\n\n// Kiểm tra trạng thái và owner hiện tại của Lead\nconst hasOwner = Boolean(lead.ownerId || (lead.owner && lead.owner.id));\nconst isEligible = lead.status === 'NEW' || !lead.status;\nconst needsAssignment = isEligible && !hasOwner;\n\nreturn [{\n  json: {\n    leadId: lead.id,\n    status: lead.status || 'NEW',\n    currentOwnerId: lead.ownerId || (lead.owner ? lead.owner.id : null),\n    currentOwnerName: lead.owner ? lead.owner.name : null,\n    hasOwner,\n    isEligible,\n    needsAssignment,\n    leadSnapshot: {\n      firstName: lead.firstName,\n      lastName: lead.lastName,\n      email: lead.email,\n      companyName: lead.companyName,\n      sourceId: lead.sourceId\n    },\n    inspectedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node_inspect_ownership",
+      "name": "🔎 Inspect Status & Ownership",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.needsAssignment }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node_if_needs_assign",
+      "name": "⚖️ Needs Owner Assignment?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1180, 240]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/users' }}",
+        "method": "GET",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "node_fetch_users",
+      "name": "👥 Fetch Available Users",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1380, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Chọn Sales Owner phù hợp dựa trên danh sách users từ Backend\nconst usersRes = $input.first().json;\nconst inspect = $('🔎 Inspect Status & Ownership').first().json;\n\nconst users = Array.isArray(usersRes) ? usersRes : (usersRes.data || []);\n// Ưu tiên người dùng có role = 'SALES' và status = 'ACTIVE'\nconst activeSales = users.filter(u => u.role === 'SALES' && u.status === 'ACTIVE');\n\nlet selectedUser = null;\nlet assignReason = '';\n\nif (activeSales.length > 0) {\n  // Round-robin phân bổ dựa trên hash ID của Lead để đảm bảo cân bằng và idempotent\n  const hash = inspect.leadId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);\n  selectedUser = activeSales[hash % activeSales.length];\n  assignReason = 'Assigned to active sales representative via automated round-robin';\n} else if (users.length > 0) {\n  // Fallback: Gán cho bất kỳ user nào đang active\n  selectedUser = users.find(u => u.status === 'ACTIVE') || users[0];\n  assignReason = 'Fallback assignment to default workspace member (no active sales rep found)';\n} else {\n  assignReason = 'No users available in workspace';\n}\n\nreturn [{\n  json: {\n    leadId: inspect.leadId,\n    hasOwner: false,\n    newOwnerId: selectedUser ? selectedUser.id : null,\n    newOwnerName: selectedUser ? selectedUser.name : 'Unassigned',\n    newOwnerEmail: selectedUser ? selectedUser.email : null,\n    assignmentReason: assignReason,\n    canAssign: Boolean(selectedUser && selectedUser.id)\n  }\n}];"
+      },
+      "id": "node_resolve_sales",
+      "name": "🎯 Resolve Sales Assignee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1580, 180]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/leads/' + $json.leadId }}",
+        "method": "PATCH",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"ownerId\": {{ JSON.stringify($json.newOwnerId) }}\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "node_patch_lead_owner",
+      "name": "✏️ Update Lead Owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1780, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nhánh giữ nguyên Owner đã có: không thay đổi owner tùy tiện (Step 9)\nconst inspect = $('🔎 Inspect Status & Ownership').first().json;\n\nreturn [{\n  json: {\n    leadId: inspect.leadId,\n    hasOwner: true,\n    retainedOwnerId: inspect.currentOwnerId,\n    retainedOwnerName: inspect.currentOwnerName || 'Existing Owner',\n    assignmentReason: 'Existing owner retained without modification',\n    canAssign: false\n  }\n}];"
+      },
+      "id": "node_retain_owner",
+      "name": "🛡️ Retain Existing Owner",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1380, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Gom 2 luồng (vừa gán mới hoặc giữ nguyên owner) trước khi chuyển sang Post-Processing\nlet leadId = null;\nlet ownerId = null;\nlet ownerName = null;\nlet actionTaken = '';\n\ntry {\n  const patchNode = $('✏️ Update Lead Owner').first();\n  if (patchNode) {\n    const resolved = $('🎯 Resolve Sales Assignee').first().json;\n    leadId = resolved.leadId;\n    ownerId = resolved.newOwnerId;\n    ownerName = resolved.newOwnerName;\n    actionTaken = 'OWNER_ASSIGNED';\n  }\n} catch (e) {}\n\nif (!leadId) {\n  try {\n    const retainedNode = $('🛡️ Retain Existing Owner').first().json;\n    leadId = retainedNode.leadId;\n    ownerId = retainedNode.retainedOwnerId;\n    ownerName = retainedNode.retainedOwnerName;\n    actionTaken = 'OWNER_RETAINED';\n  } catch (e) {}\n}\n\nreturn [{\n  json: {\n    leadId,\n    ownerId,\n    ownerName,\n    actionTaken,\n    readyForQualification: Boolean(leadId),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node_prep_post_process",
+      "name": "🔄 Prepare Post-Processing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 240]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/lead-intelligence/qualify/' + $json.leadId }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "node_trigger_qualify",
+      "name": "🚀 Trigger AI Qualification Pipeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "continueOnFail": true,
+      "position": [2180, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prep = $('🔄 Prepare Post-Processing').first().json;\nconst qualifyRes = $input.first().json;\n\nconst qualificationTriggered = !qualifyRes.error && (qualifyRes.statusCode ? qualifyRes.statusCode < 400 : true);\n\nreturn [{\n  json: {\n    auditStatus: 'LEAD_INTAKE_SUCCESS',\n    leadId: prep.leadId,\n    ownerId: prep.ownerId,\n    ownerName: prep.ownerName,\n    ownerAction: prep.actionTaken,\n    qualificationPipelineTriggered: qualificationTriggered,\n    backendResponse: qualifyRes,\n    completedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node_audit_success",
+      "name": "✅ Audit: Lead Intake Succeeded",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2380, 240]
+    },
+    {
+      "parameters": {},
+      "id": "node_error_trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [720, 720]
+    },
+    {
+      "parameters": {
+        "jsCode": "const errorData = $input.first().json;\n\nreturn [{\n  json: {\n    auditStatus: 'LEAD_INTAKE_FAILED',\n    errorMessage: errorData.execution?.error?.message || errorData.message || 'Workflow execution error',\n    context: errorData.execution?.error?.context || null,\n    failedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node_audit_error",
+      "name": "⚠️ Audit: Execution Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 720]
+    }
+  ],
+  "connections": {
+    "📥 RabbitMQ Ingestion (lead.created)": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Normalize Event Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Normalize Event Payload": {
+      "main": [
+        [
+          {
+            "node": "⚖️ Is Valid Lead Created Event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚖️ Is Valid Lead Created Event?": {
+      "main": [
+        [
+          {
+            "node": "🔍 Fetch Lead Details",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📋 Audit: Event Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Fetch Lead Details": {
+      "main": [
+        [
+          {
+            "node": "🔎 Inspect Status & Ownership",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔎 Inspect Status & Ownership": {
+      "main": [
+        [
+          {
+            "node": "⚖️ Needs Owner Assignment?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚖️ Needs Owner Assignment?": {
+      "main": [
+        [
+          {
+            "node": "👥 Fetch Available Users",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🛡️ Retain Existing Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "👥 Fetch Available Users": {
+      "main": [
+        [
+          {
+            "node": "🎯 Resolve Sales Assignee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🎯 Resolve Sales Assignee": {
+      "main": [
+        [
+          {
+            "node": "✏️ Update Lead Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✏️ Update Lead Owner": {
+      "main": [
+        [
+          {
+            "node": "🔄 Prepare Post-Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🛡️ Retain Existing Owner": {
+      "main": [
+        [
+          {
+            "node": "🔄 Prepare Post-Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔄 Prepare Post-Processing": {
+      "main": [
+        [
+          {
+            "node": "🚀 Trigger AI Qualification Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚀 Trigger AI Qualification Pipeline": {
+      "main": [
+        [
+          {
+            "node": "✅ Audit: Lead Intake Succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Audit: Execution Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
