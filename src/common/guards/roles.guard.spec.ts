@@ -6,7 +6,7 @@ import { RolesGuard } from './roles.guard.js';
 
 describe('RolesGuard', () => {
   let guard: RolesGuard;
-  let reflector: jest.Mocked<Reflector>;
+  let reflector: Reflector;
 
   const mockUser: AuthenticatedUser = {
     id: 'user-1',
@@ -20,9 +20,8 @@ describe('RolesGuard', () => {
   };
 
   beforeEach(() => {
-    reflector = {
-      getAllAndOverride: jest.fn(),
-    };
+    reflector = new Reflector();
+    jest.spyOn(reflector, 'getAllAndOverride');
 
     guard = new RolesGuard(reflector);
   });
@@ -39,7 +38,7 @@ describe('RolesGuard', () => {
     }) as unknown as ExecutionContext;
 
   it('allows access when no roles are required', () => {
-    reflector.getAllAndOverride.mockReturnValue(undefined);
+    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(undefined);
 
     const context = createMockContext(mockUser);
     const result = guard.canActivate(context);
@@ -48,10 +47,9 @@ describe('RolesGuard', () => {
   });
 
   it('allows access when user role matches one of the required roles', () => {
-    reflector.getAllAndOverride.mockReturnValue([
-      UserRole.ADMIN,
-      UserRole.SALES,
-    ]);
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue([UserRole.ADMIN, UserRole.SALES]);
 
     const context = createMockContext(mockUser);
     const result = guard.canActivate(context);
@@ -60,7 +58,9 @@ describe('RolesGuard', () => {
   });
 
   it('throws ForbiddenException when user lacks the required role', () => {
-    reflector.getAllAndOverride.mockReturnValue([UserRole.ADMIN]);
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue([UserRole.ADMIN]);
 
     const context = createMockContext(mockUser);
 
@@ -68,7 +68,9 @@ describe('RolesGuard', () => {
   });
 
   it('throws ForbiddenException when user is not attached to the request', () => {
-    reflector.getAllAndOverride.mockReturnValue([UserRole.SALES]);
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue([UserRole.SALES]);
 
     const context = createMockContext(null);
 

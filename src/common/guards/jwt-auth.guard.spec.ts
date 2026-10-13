@@ -4,12 +4,11 @@ import { JwtAuthGuard } from './jwt-auth.guard.js';
 
 describe('JwtAuthGuard', () => {
   let guard: JwtAuthGuard;
-  let reflector: jest.Mocked<Reflector>;
+  let reflector: Reflector;
 
   beforeEach(() => {
-    reflector = {
-      getAllAndOverride: jest.fn(),
-    };
+    reflector = new Reflector();
+    jest.spyOn(reflector, 'getAllAndOverride');
 
     guard = new JwtAuthGuard(reflector);
   });
@@ -24,13 +23,15 @@ describe('JwtAuthGuard', () => {
     }) as unknown as ExecutionContext;
 
   it('allows access directly when route is decorated with @Public()', () => {
-    reflector.getAllAndOverride.mockReturnValue(true);
+    const spy = jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue(true);
 
     const context = createMockContext();
     const result = guard.canActivate(context);
 
     expect(result).toBe(true);
-    expect(reflector.getAllAndOverride).toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
   });
 
   it('handleRequest returns user when user is present and no error occurred', () => {

@@ -3,3 +3,5 @@ export * from './guards/index.js';
 export * from './filters/index.js';
 export * from './interceptors/index.js';
 export * from './types/index.js';
+export * from './dto/index.js';
+export * from './pipes/index.js';
