@@ -87,4 +87,29 @@ describe('LeadsController', () => {
     expect(service.remove).toHaveBeenCalledWith('lead-123');
     expect(result.success).toBe(true);
   });
+
+  it('should call service.convert with id and dto (UC08)', async () => {
+    const dto = { userId: 'user-123' };
+    const convertResult = {
+      lead: {
+        ...mockLead,
+        status: LeadStatus.CONVERTED,
+        convertedCustomerId: 'cust-123',
+      },
+      customer: {
+        id: 'cust-123',
+        name: 'John Doe',
+        email: 'john.doe@example.com',
+      } as any,
+      customerCreated: true,
+      matchedBy: null,
+      message: "Lead 'lead-123' has been converted to new customer 'cust-123'",
+    };
+    service.convert = jest.fn().mockResolvedValue(convertResult);
+
+    const result = await controller.convert('lead-123', dto);
+
+    expect(service.convert).toHaveBeenCalledWith('lead-123', dto);
+    expect(result).toEqual(convertResult);
+  });
 });
