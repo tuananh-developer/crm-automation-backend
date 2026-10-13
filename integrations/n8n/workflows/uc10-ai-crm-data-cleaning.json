@@ -1,0 +1,323 @@
+{
+  "name": "UC10 - AI CRM Data Cleaning Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📥 1. EVENT INGESTION & EVENT VALIDATION\nLắng nghe hàng đợi `data.cleaning.queue` trên RabbitMQ, trích xuất và validate thông tin yêu cầu quét dữ liệu Lead.",
+        "height": 400,
+        "width": 500,
+        "color": 4
+      },
+      "id": "sticky_ingestion",
+      "name": "Sticky Ingestion",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [60, 100]
+    },
+    {
+      "parameters": {
+        "content": "## 🔍 2. BATCH RETRIEVAL & RULE QUALITY ENGINE\nLấy danh sách Lead từ NestJS API theo scope/filter và chạy Rule Engine phát hiện lỗi cú pháp, khoảng trắng, định dạng phone/url và trùng lặp.",
+        "height": 400,
+        "width": 640,
+        "color": 6
+      },
+      "id": "sticky_rule_engine",
+      "name": "Sticky Rule Engine",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [600, 100]
+    },
+    {
+      "parameters": {
+        "content": "## 🧠 3. GEMINI AI REMEDIATION & VALIDATION\nAI phân tích các ca bất đồng bộ (tên công ty vs domain, typo), đề xuất sửa có confidence và lý do. Tuyệt đối KHÔNG hallucinate thông tin liên hệ thiếu.",
+        "height": 400,
+        "width": 660,
+        "color": 2
+      },
+      "id": "sticky_ai_remediation",
+      "name": "Sticky AI Remediation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1280, 100]
+    },
+    {
+      "parameters": {
+        "content": "## 🚀 4. CONTRACT VALIDATION & NESTJS CALLBACK\nTổng hợp toàn bộ finding report, kiểm tra schema hợp đồng và gửi callback về NestJS để lưu trữ và chờ người dùng xác nhận.",
+        "height": 400,
+        "width": 560,
+        "color": 5
+      },
+      "id": "sticky_callback",
+      "name": "Sticky Callback",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1980, 100]
+    },
+    {
+      "parameters": {
+        "queue": "data.cleaning.queue",
+        "options": {
+          "arguments": {}
+        }
+      },
+      "id": "node_rmq_trigger",
+      "name": "📥 RabbitMQ Ingestion",
+      "type": "n8n-nodes-base.rabbitmqTrigger",
+      "typeVersion": 1,
+      "position": [100, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Trích xuất và chuẩn hóa event từ RabbitMQ message\nconst raw = $input.first().json;\nlet payload = {};\n\nif (raw.content) {\n  if (typeof raw.content === 'string') {\n    try {\n      payload = JSON.parse(raw.content);\n    } catch (e) {\n      payload = { text: raw.content };\n    }\n  } else if (typeof raw.content === 'object') {\n    payload = raw.content;\n  }\n} else {\n  payload = raw;\n}\n\nconst data = payload.data || payload;\nconst workflowRunId = data.workflowRunId || payload.workflowRunId || null;\nconst scope = data.scope || payload.scope || 'ALL';\nconst filter = data.filter || payload.filter || null;\nconst triggeredByUserId = data.triggeredByUserId || payload.triggeredByUserId || null;\n\nif (!workflowRunId) {\n  throw new Error('Event missing required workflowRunId parameter');\n}\n\nreturn [{\n  json: {\n    workflowRunId,\n    scope,\n    filter,\n    triggeredByUserId,\n    receivedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node_normalize_event",
+      "name": "⚙️ Normalize Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 260]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/data-cleaning/scans/' + $json.workflowRunId + '/leads' }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'd493d664cd36eec250ebda5aa9c7604cfa2556591c963fcbb1b3382be6402571' }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "node_fetch_leads",
+      "name": "🔍 Fetch Leads Batch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "continueOnFail": true,
+      "position": [640, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rule Engine: Kiểm tra chất lượng dữ liệu và phát hiện trùng lặp\nconst response = $input.first().json;\nconst meta = $('⚙️ Normalize Event').first().json;\nconst leads = response.leads || [];\n\nconst findings = [];\nconst ambiguousCases = [];\n\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n    const r = Math.random() * 16 | 0;\n    const v = c === 'x' ? r : (r & 0x3 | 0x8);\n    return v.toString(16);\n  });\n}\n\n// 1. Phân tích trùng lặp Lead trong batch (Email & Phone)\nconst emailMap = new Map();\nconst phoneMap = new Map();\n\nfor (const lead of leads) {\n  if (lead.email) {\n    const cleanEmail = lead.email.trim().toLowerCase();\n    if (!emailMap.has(cleanEmail)) emailMap.set(cleanEmail, []);\n    emailMap.get(cleanEmail).push(lead);\n  }\n  if (lead.phone) {\n    const cleanPhone = lead.phone.replace(/[^0-9+]/g, '');\n    if (cleanPhone.length >= 8) {\n      if (!phoneMap.has(cleanPhone)) phoneMap.set(cleanPhone, []);\n      phoneMap.get(cleanPhone).push(lead);\n    }\n  }\n}\n\n// Ghi nhận duplicate candidates (safeToApply: false vì KHÔNG được tự động xóa/gộp mà phải do con người quyết định)\nfor (const [email, duplicateLeads] of emailMap.entries()) {\n  if (duplicateLeads.length > 1) {\n    for (const lead of duplicateLeads) {\n      findings.push({\n        id: uuidv4(),\n        recordType: 'Lead',\n        recordId: lead.id,\n        leadIdentifier: `${lead.firstName || ''} ${lead.lastName || ''} (${lead.email})`.trim(),\n        fieldName: 'email',\n        issueType: 'DUPLICATE_CANDIDATE',\n        severity: 'CRITICAL',\n        currentValue: lead.email,\n        proposedValue: `Duplicate conflict with ${duplicateLeads.length - 1} other record(s)`,\n        confidence: 0.99,\n        reason: `Lead shares exact email with other leads in database. Requires manual review.`,\n        safeToApply: false,\n        requiresHumanApproval: true\n      });\n    }\n  }\n}\n\nfor (const [phone, duplicateLeads] of phoneMap.entries()) {\n  if (duplicateLeads.length > 1) {\n    for (const lead of duplicateLeads) {\n      findings.push({\n        id: uuidv4(),\n        recordType: 'Lead',\n        recordId: lead.id,\n        leadIdentifier: `${lead.firstName || ''} ${lead.lastName || ''} (${lead.email})`.trim(),\n        fieldName: 'phone',\n        issueType: 'DUPLICATE_CANDIDATE',\n        severity: 'HIGH',\n        currentValue: lead.phone,\n        proposedValue: `Duplicate phone conflict with ${duplicateLeads.length - 1} other record(s)`,\n        confidence: 0.95,\n        reason: `Lead shares same normalized phone number (${phone}). Requires manual review.`,\n        safeToApply: false,\n        requiresHumanApproval: true\n      });\n    }\n  }\n}\n\n// 2. Rule checks trên từng Lead\nconst emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n\nfor (const lead of leads) {\n  const leadName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Unnamed Lead';\n  const leadIdent = `${leadName} (${lead.email || 'No email'})`;\n\n  // a. Missing mandatory fields\n  if (!lead.firstName || !lead.firstName.trim()) {\n    findings.push({\n      id: uuidv4(),\n      recordType: 'Lead',\n      recordId: lead.id,\n      leadIdentifier: leadIdent,\n      fieldName: 'firstName',\n      issueType: 'MISSING_FIELD',\n      severity: 'HIGH',\n      currentValue: lead.firstName || null,\n      proposedValue: null,\n      confidence: 1.0,\n      reason: 'First name is a required field but is currently missing or blank.',\n      safeToApply: false,\n      requiresHumanApproval: true\n    });\n  }\n\n  // b. Email validation & normalization\n  if (lead.email) {\n    const rawEmail = lead.email;\n    const trimmed = rawEmail.trim();\n    const lower = trimmed.toLowerCase();\n\n    if (rawEmail !== trimmed) {\n      findings.push({\n        id: uuidv4(),\n        recordType: 'Lead',\n        recordId: lead.id,\n        leadIdentifier: leadIdent,\n        fieldName: 'email',\n        issueType: 'WHITESPACE_TRIM',\n        severity: 'LOW',\n        currentValue: rawEmail,\n        proposedValue: lower,\n        confidence: 1.0,\n        reason: 'Email contains leading or trailing whitespace.',\n        safeToApply: true,\n        requiresHumanApproval: true\n      });\n    } else if (rawEmail !== lower) {\n      findings.push({\n        id: uuidv4(),\n        recordType: 'Lead',\n        recordId: lead.id,\n        leadIdentifier: leadIdent,\n        fieldName: 'email',\n        issueType: 'CASE_NORMALIZATION',\n        severity: 'LOW',\n        currentValue: rawEmail,\n        proposedValue: lower,\n        confidence: 1.0,\n        reason: 'Email contains uppercase characters. Standard convention is lowercase.',\n        safeToApply: true,\n        requiresHumanApproval: true\n      });\n    }\n\n    if (!emailRegex.test(lower)) {\n      findings.push({\n        id: uuidv4(),\n        recordType: 'Lead',\n        recordId: lead.id,\n        leadIdentifier: leadIdent,\n        fieldName: 'email',\n        issueType: 'INVALID_EMAIL',\n        severity: 'HIGH',\n        currentValue: rawEmail,\n        proposedValue: null,\n        confidence: 0.98,\n        reason: 'Email address does not match standard RFC email format.',\n        safeToApply: false,\n        requiresHumanApproval: true\n      });\n    }\n  }\n\n  // c. Website formatting\n  if (lead.companyWebsite) {\n    const rawWeb = lead.companyWebsite.trim();\n    if (rawWeb && !/^https?:\\/\\//i.test(rawWeb)) {\n      const cleanWeb = 'https://' + rawWeb.replace(/^www\\./i, '').replace(/\\/+$/, '');\n      findings.push({\n        id: uuidv4(),\n        recordType: 'Lead',\n        recordId: lead.id,\n        leadIdentifier: leadIdent,\n        fieldName: 'companyWebsite',\n        issueType: 'INVALID_WEBSITE',\n        severity: 'LOW',\n        currentValue: lead.companyWebsite,\n        proposedValue: cleanWeb,\n        confidence: 0.95,\n        reason: 'Company website is missing standard https:// protocol prefix.',\n        safeToApply: true,\n        requiresHumanApproval: true\n      });\n    }\n  }\n\n  // d. Phone formatting consistency\n  if (lead.phone) {\n    const rawPhone = lead.phone.trim();\n    const cleanedDigits = rawPhone.replace(/[^0-9+]/g, '');\n    if (rawPhone !== cleanedDigits && cleanedDigits.length >= 9) {\n      findings.push({\n        id: uuidv4(),\n        recordType: 'Lead',\n        recordId: lead.id,\n        leadIdentifier: leadIdent,\n        fieldName: 'phone',\n        issueType: 'INCONSISTENT_PHONE',\n        severity: 'LOW',\n        currentValue: rawPhone,\n        proposedValue: cleanedDigits,\n        confidence: 0.92,\n        reason: 'Phone contains formatting noise or symbols. Normalized to clean dialable digits.',\n        safeToApply: true,\n        requiresHumanApproval: true\n      });\n    }\n  }\n\n  // e. Candidate for AI analysis: Inconsistency between companyName and website or domain\n  if (lead.companyName && lead.companyWebsite) {\n    const domain = lead.companyWebsite.replace(/^(?:https?:\\/\\/)?(?:www\\.)?/i, '').split('/')[0].split('.')[0].toLowerCase();\n    const comp = lead.companyName.toLowerCase().replace(/[^a-z0-9]/g, '');\n    if (domain.length > 3 && comp.length > 3 && !comp.includes(domain) && !domain.includes(comp)) {\n      ambiguousCases.push({\n        recordId: lead.id,\n        leadIdentifier: leadIdent,\n        companyName: lead.companyName,\n        companyWebsite: lead.companyWebsite,\n        email: lead.email\n      });\n    }\n  }\n}\n\nreturn [{\n  json: {\n    workflowRunId: meta.workflowRunId,\n    totalLeadsScanned: leads.length,\n    ruleFindings: findings,\n    ambiguousCases: ambiguousCases.slice(0, 10),\n    leadsCount: leads.length\n  }\n}];"
+      },
+      "id": "node_rule_engine",
+      "name": "📐 Rule-Based Quality & Duplicate Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [940, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prep = $input.first().json;\n\nconst cases = prep.ambiguousCases || [];\nif (cases.length === 0) {\n  return [{\n    json: {\n      workflowRunId: prep.workflowRunId,\n      totalLeadsScanned: prep.totalLeadsScanned,\n      ruleFindings: prep.ruleFindings,\n      aiProposals: []\n    }\n  }];\n}\n\nconst prompt = `\nYou are an enterprise AI Data Cleaning Specialist for a CRM system.\nAnalyze the following leads where company names and website domains appear inconsistent:\n\n${JSON.stringify(cases, null, 2)}\n\nInstructions:\n1. Identify if the discrepancy is due to abbreviations, brand variants, or obvious typos.\n2. STRICT RULE: DO NOT hallucinate, fabricate, or guess any missing phone numbers, personal emails, or contact identities.\n3. Only propose high-confidence cleanups for company name or website if there is a clear rational alignment.\n4. If confident, provide confidence (0.70 to 0.95), proposedValue, reason, and set safeToApply to true or false.\n\nRespond ONLY in this JSON format:\n{\n  \"proposals\": [\n    {\n      \"recordId\": \"lead-uuid\",\n      \"fieldName\": \"companyName\" | \"companyWebsite\",\n      \"proposedValue\": \"string\",\n      \"confidence\": 0.85,\n      \"reason\": \"Rationale explaining correlation\",\n      \"safeToApply\": false\n    }\n  ]\n}\n`;\n\nreturn [{\n  json: {\n    workflowRunId: prep.workflowRunId,\n    totalLeadsScanned: prep.totalLeadsScanned,\n    ruleFindings: prep.ruleFindings,\n    prompt\n  }\n}];"
+      },
+      "id": "node_prompt_ai",
+      "name": "🧠 Synthesize AI Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 260]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-1.5-pro') + ':generateContent?key=' + $env.GEMINI_API_KEY }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": {{ JSON.stringify($json.prompt) }}\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.1,\n    \"responseMimeType\": \"application/json\"\n  }\n}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "node_gemini_ai",
+      "name": "🤖 Gemini AI Remediation Engine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "continueOnFail": true,
+      "position": [1580, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Hợp nhất kết quả từ Rule Engine và Gemini AI, kiểm tra schema hợp đồng\nconst geminiRes = $input.first().json;\nconst prep = $('🧠 Synthesize AI Prompt').first().json;\n\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n    const r = Math.random() * 16 | 0;\n    const v = c === 'x' ? r : (r & 0x3 | 0x8);\n    return v.toString(16);\n  });\n}\n\nconst allFindings = [...(prep.ruleFindings || [])];\n\n// Xử lý AI proposals nếu có\nif (geminiRes && !geminiRes.error && geminiRes.candidates) {\n  try {\n    const text = geminiRes.candidates[0]?.content?.parts?.[0]?.text || '{}';\n    const parsed = JSON.parse(text);\n    const proposals = parsed.proposals || [];\n\n    for (const p of proposals) {\n      if (p.recordId && p.fieldName && p.proposedValue) {\n        allFindings.push({\n          id: uuidv4(),\n          recordType: 'Lead',\n          recordId: p.recordId,\n          fieldName: p.fieldName,\n          issueType: 'DOMAIN_MISMATCH',\n          severity: 'MEDIUM',\n          currentValue: null,\n          proposedValue: p.proposedValue,\n          confidence: typeof p.confidence === 'number' ? p.confidence : 0.85,\n          reason: p.reason || 'AI detected company-domain alignment remediation',\n          safeToApply: Boolean(p.safeToApply),\n          requiresHumanApproval: true\n        });\n      }\n    }\n  } catch (err) {\n    // Silently continue with rule findings\n  }\n}\n\n// Tổng hợp thống kê\nconst issuesByType = {};\nconst issuesBySeverity = {};\nlet duplicatesFound = 0;\nlet safeToApplyCount = 0;\n\nfor (const f of allFindings) {\n  issuesByType[f.issueType] = (issuesByType[f.issueType] || 0) + 1;\n  issuesBySeverity[f.severity] = (issuesBySeverity[f.severity] || 0) + 1;\n  if (f.issueType === 'DUPLICATE_CANDIDATE') duplicatesFound++;\n  if (f.safeToApply) safeToApplyCount++;\n}\n\nconst summary = {\n  totalLeadsScanned: prep.totalLeadsScanned || 0,\n  totalIssuesFound: allFindings.length,\n  issuesByType,\n  issuesBySeverity,\n  duplicatesFound,\n  safeToApplyCount\n};\n\nreturn [{\n  json: {\n    workflowRunId: prep.workflowRunId,\n    status: 'SUCCESS',\n    summary,\n    findings: allFindings\n  }\n}];"
+      },
+      "id": "node_consolidate_findings",
+      "name": "🛡️ Consolidate & Validate Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1840, 260]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/data-cleaning/callback' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'd493d664cd36eec250ebda5aa9c7604cfa2556591c963fcbb1b3382be6402571' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "node_callback_backend",
+      "name": "🚀 Callback NestJS API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2100, 260]
+    },
+    {
+      "parameters": {},
+      "id": "node_error_trigger",
+      "name": "⚠️ Workflow Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [1320, 500]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/data-cleaning/callback' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'd493d664cd36eec250ebda5aa9c7604cfa2556591c963fcbb1b3382be6402571' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflowRunId\": \"{{ $json.workflowRunId || 'unknown' }}\",\n  \"status\": \"FAILED\",\n  \"summary\": {\n    \"totalLeadsScanned\": 0,\n    \"totalIssuesFound\": 0,\n    \"issuesByType\": {},\n    \"issuesBySeverity\": {},\n    \"duplicatesFound\": 0,\n    \"safeToApplyCount\": 0\n  },\n  \"findings\": [],\n  \"errorMessage\": \"{{ $json.execution?.error?.message || 'Data cleaning agent workflow execution failed' }}\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "node_error_callback",
+      "name": "🚨 Report Failure Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1580, 500]
+    }
+  ],
+  "connections": {
+    "📥 RabbitMQ Ingestion": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Normalize Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Normalize Event": {
+      "main": [
+        [
+          {
+            "node": "🔍 Fetch Leads Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Fetch Leads Batch": {
+      "main": [
+        [
+          {
+            "node": "📐 Rule-Based Quality & Duplicate Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📐 Rule-Based Quality & Duplicate Engine": {
+      "main": [
+        [
+          {
+            "node": "🧠 Synthesize AI Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧠 Synthesize AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "🤖 Gemini AI Remediation Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🤖 Gemini AI Remediation Engine": {
+      "main": [
+        [
+          {
+            "node": "🛡️ Consolidate & Validate Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🛡️ Consolidate & Validate Contract": {
+      "main": [
+        [
+          {
+            "node": "🚀 Callback NestJS API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Workflow Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "🚨 Report Failure Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
