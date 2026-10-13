@@ -6,7 +6,7 @@ Thư mục này chứa các workflow JSON của **n8n** để chạy tự độn
 
 | File | Use Case | Mô tả | Trạng thái |
 |---|---|---|---|
-| [`uc02-ai-lead-qualification.json`](./uc02-ai-lead-qualification.json) | **UC02 - AI Lead Qualification** | Lắng nghe event RabbitMQ `lead.qualification.requested`, lấy dữ liệu Lead từ NestJS API, gọi LLM phân tích B2B ICP & intent, áp dụng quy tắc confidence (>= 0.80 tự động duyệt, < 0.80 tạo Review Task), gọi callback về NestJS. | ✅ Hoàn thành (Mẫu chuẩn) |
+| [`uc02-ai-lead-qualification.json`](../../integrations/n8n/workflows/uc02-ai-lead-qualification.json) | **UC02 - AI Lead Qualification** | Lắng nghe event RabbitMQ `lead.qualification.requested`, lấy dữ liệu Lead từ NestJS API, gọi LLM phân tích B2B ICP & intent, áp dụng quy tắc confidence (>= 0.80 tự động duyệt, < 0.80 tạo Review Task), gọi callback về NestJS. | ✅ Hoàn thành (Mẫu chuẩn) |
 | `uc03-ai-lead-enrichment.json` | **UC03 - AI Lead Enrichment** | Làm giàu thông tin công ty từ domain/email qua external API. (Member 2 phụ trách) | ⏳ Sắp làm |
 | `uc04-ai-lead-scoring.json` | **UC04 - AI Lead Scoring** | Chấm điểm Lead từ 0 - 100, gắn nhãn HOT/WARM/COLD. (Member 2 phụ trách) | ⏳ Sắp làm |
 | `uc06-follow-up-execution.json` | **UC06 - Execute Follow-up** | Nhận Webhook từ NestJS (`POST /follow-up-execute`), validate payload, build message từ template, gửi Email/Message qua Communication Service, trả kết quả `success`/`error` về backend để lưu `FollowUpExecution` và retry. | ✅ Hoàn thành |
@@ -18,7 +18,7 @@ Thư mục này chứa các workflow JSON của **n8n** để chạy tự độn
 
 1. **Mở n8n UI** (mặc định: `http://localhost:5678`).
 2. Vào **Workflows** → Bấm **`+ Add Workflow`** (hoặc menu `...` ở góc phải) → Chọn **`Import from File...`**.
-3. Chọn file `docs/n8n/uc02-ai-lead-qualification.json`.
+3. Chọn file `../../integrations/n8n/workflows/uc02-ai-lead-qualification.json`.
 4. Cấu hình Credentials:
    - **RabbitMQ Credentials:** Host `crm_rabbitmq` (hoặc `localhost`), User `guest`, Pass `guest`, Port `5672`.
    - **OpenAI Credentials (hoặc LLM Provider):** Nhập API Key của bạn.
