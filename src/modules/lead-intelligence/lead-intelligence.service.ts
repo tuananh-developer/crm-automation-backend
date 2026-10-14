@@ -30,8 +30,11 @@ import {
   QualificationCallbackDto,
   ScoringCallbackDto,
   TriggerEnrichmentDto,
+  TriggerEnrichmentResponseDto,
   TriggerQualificationDto,
+  TriggerQualificationResponseDto,
   TriggerScoringDto,
+  TriggerScoringResponseDto,
 } from './dto/index.js';
 
 export const CONFIDENCE_THRESHOLD = 0.8;
@@ -66,7 +69,7 @@ export class LeadIntelligenceService {
   async triggerQualification(
     leadId: string,
     dto?: TriggerQualificationDto,
-  ): Promise<{ message: string; workflowRunId: string; leadId: string }> {
+  ): Promise<TriggerQualificationResponseDto> {
     const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
     if (!lead) {
       throw new NotFoundException(`Lead with ID '${leadId}' not found`);
@@ -306,12 +309,7 @@ export class LeadIntelligenceService {
   async triggerEnrichment(
     leadId: string,
     dto?: TriggerEnrichmentDto,
-  ): Promise<{
-    message: string;
-    workflowRunId: string;
-    enrichmentId: string;
-    leadId: string;
-  }> {
+  ): Promise<TriggerEnrichmentResponseDto> {
     const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
     if (!lead) {
       throw new NotFoundException(`Lead with ID '${leadId}' not found`);
@@ -814,7 +812,7 @@ export class LeadIntelligenceService {
   async triggerScoring(
     leadId: string,
     dto?: TriggerScoringDto,
-  ): Promise<{ message: string; workflowRunId: string; leadId: string }> {
+  ): Promise<TriggerScoringResponseDto> {
     const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
     if (!lead) {
       throw new NotFoundException(`Lead with ID '${leadId}' not found`);

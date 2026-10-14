@@ -18,8 +18,16 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { LeadIntelligenceService } from './lead-intelligence.service.js';
-import { EnrichmentCallbackDto, TriggerEnrichmentDto } from './dto/index.js';
+import {
+  EnrichmentCallbackDto,
+  EnrichmentCallbackResponseDto,
+  EnrichmentResponseDto,
+  MockEnrichmentResponseDto,
+  TriggerEnrichmentDto,
+  TriggerEnrichmentResponseDto,
+} from './dto/index.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
+import { EnrichmentMapper } from './mappers/index.js';
 
 @ApiTags('Lead Enrichment')
 @Controller('enrichment')
@@ -58,6 +66,7 @@ export class EnrichmentController {
   @ApiResponse({
     status: 200,
     description: 'Mock enrichment payload returned successfully.',
+    type: MockEnrichmentResponseDto,
   })
   @HttpCode(HttpStatus.OK)
   mockEnrichment(
@@ -65,7 +74,7 @@ export class EnrichmentController {
     @Query('email') email?: string,
     @Query('provider') provider?: string,
     @Query('fail') fail?: string,
-  ) {
+  ): MockEnrichmentResponseDto {
     return this.leadIntelligenceService.mockEnrichment({
       domain,
       email,
@@ -85,12 +94,13 @@ export class EnrichmentController {
   @ApiResponse({
     status: 202,
     description: 'Enrichment request accepted and queued.',
+    type: TriggerEnrichmentResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  triggerEnrichment(
+  async triggerEnrichment(
     @Param('leadId', ParseUUIDPipe) leadId: string,
     @Body() dto?: TriggerEnrichmentDto,
-  ) {
+  ): Promise<TriggerEnrichmentResponseDto> {
     return this.leadIntelligenceService.triggerEnrichment(leadId, dto);
   }
 
@@ -105,6 +115,7 @@ export class EnrichmentController {
   @ApiResponse({
     status: 200,
     description: 'Enrichment callback processed successfully.',
+    type: EnrichmentCallbackResponseDto,
   })
   @ApiResponse({
     status: 401,
@@ -114,8 +125,12 @@ export class EnrichmentController {
     status: 404,
     description: 'Lead or enrichment record not found.',
   })
-  handleCallback(@Body() dto: EnrichmentCallbackDto) {
-    return this.leadIntelligenceService.handleEnrichmentCallback(dto);
+  async handleCallback(
+    @Body() dto: EnrichmentCallbackDto,
+  ): Promise<EnrichmentCallbackResponseDto> {
+    const result =
+      await this.leadIntelligenceService.handleEnrichmentCallback(dto);
+    return EnrichmentMapper.toCallbackResponseDto(result);
   }
 
   @Get('lead/:leadId')
@@ -124,9 +139,14 @@ export class EnrichmentController {
   @ApiResponse({
     status: 200,
     description: 'List of all enrichment records for the lead.',
+    type: [EnrichmentResponseDto],
   })
-  getEnrichmentsByLead(@Param('leadId', ParseUUIDPipe) leadId: string) {
-    return this.leadIntelligenceService.getEnrichmentsByLead(leadId);
+  async getEnrichmentsByLead(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<EnrichmentResponseDto[]> {
+    const records =
+      await this.leadIntelligenceService.getEnrichmentsByLead(leadId);
+    return EnrichmentMapper.toResponseDtoList(records);
   }
 
   @Get('lead/:leadId/latest')
@@ -135,12 +155,17 @@ export class EnrichmentController {
   @ApiResponse({
     status: 200,
     description: 'Latest enrichment result details.',
+    type: EnrichmentResponseDto,
   })
   @ApiResponse({
     status: 404,
     description: 'No enrichment found for this lead.',
   })
-  getLatestEnrichment(@Param('leadId', ParseUUIDPipe) leadId: string) {
-    return this.leadIntelligenceService.getLatestEnrichment(leadId);
+  async getLatestEnrichment(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<EnrichmentResponseDto | null> {
+    const record =
+      await this.leadIntelligenceService.getLatestEnrichment(leadId);
+    return record ? EnrichmentMapper.toResponseDto(record) : null;
   }
 }
