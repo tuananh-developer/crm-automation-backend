@@ -67,7 +67,7 @@ pnpm dev             # Khởi động Web App tại http://localhost:3001
 ### 🔹 Bước 3: UC03 - Làm giàu dữ liệu Lead bằng AI & External API (AI Lead Enrichment)
 - **Giao diện:** Trang chi tiết Lead $\rightarrow$ Khối **"Company Enrichment"**.
 - **Hành động:** Hệ thống tự động kích hoạt truy vấn hoặc nhân viên bấm **"Re-enrich"**.
-- **Kết quả:** 
+- **Kết quả:**
   - Tự động bổ sung thông tin: Ngành nghề (`Cloud Infrastructure`), Doanh thu ước tính, Trang LinkedIn công ty, Website chính thức.
   - Cập nhật trực quan trên Lead Detail Card.
 
