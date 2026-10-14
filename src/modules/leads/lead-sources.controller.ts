@@ -16,7 +16,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { LeadsService } from './leads.service.js';
-import { CreateLeadSourceDto } from './dto/index.js';
+import { CreateLeadSourceDto, LeadSourceResponseDto } from './dto/index.js';
 
 @ApiTags('Lead Sources')
 @Controller('lead-sources')
@@ -25,17 +25,27 @@ export class LeadSourcesController {
 
   @Get()
   @ApiOperation({ summary: 'Get all lead sources' })
-  @ApiResponse({ status: 200, description: 'List of all active lead sources.' })
-  findAll() {
+  @ApiResponse({
+    status: 200,
+    description: 'List of all active lead sources.',
+    type: [LeadSourceResponseDto],
+  })
+  async findAll(): Promise<LeadSourceResponseDto[]> {
     return this.leadsService.findAllSources();
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get lead source by ID' })
   @ApiParam({ name: 'id', description: 'UUID of the lead source' })
-  @ApiResponse({ status: 200, description: 'Lead source details.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lead source details.',
+    type: LeadSourceResponseDto,
+  })
   @ApiResponse({ status: 404, description: 'Lead source not found.' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<LeadSourceResponseDto> {
     return this.leadsService.findSourceOne(id);
   }
 
@@ -46,9 +56,15 @@ export class LeadSourcesController {
   @ApiResponse({
     status: 201,
     description: 'Lead source created successfully.',
+    type: LeadSourceResponseDto,
   })
-  @ApiResponse({ status: 409, description: 'Lead source name already exists.' })
-  create(@Body() dto: CreateLeadSourceDto) {
+  @ApiResponse({
+    status: 409,
+    description: 'Lead source name already exists.',
+  })
+  async create(
+    @Body() dto: CreateLeadSourceDto,
+  ): Promise<LeadSourceResponseDto> {
     return this.leadsService.createSource(dto);
   }
 }

@@ -20,9 +20,12 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { LeadsService } from './leads.service.js';
+import { PaginatedResponseDto } from '../../common/index.js';
 import {
   ConvertLeadDto,
+  ConvertLeadResponseDto,
   CreateLeadDto,
+  LeadResponseDto,
   QueryLeadDto,
   UpdateLeadDto,
 } from './dto/index.js';
@@ -44,6 +47,7 @@ export class LeadsController {
   @ApiResponse({
     status: 201,
     description: 'The lead has been successfully created.',
+    type: LeadResponseDto,
   })
   @ApiResponse({
     status: 400,
@@ -58,7 +62,7 @@ export class LeadsController {
     description:
       'Too many requests. Rate limit exceeded (maximum 10 requests per minute).',
   })
-  create(@Body() createLeadDto: CreateLeadDto) {
+  async create(@Body() createLeadDto: CreateLeadDto): Promise<LeadResponseDto> {
     return this.leadsService.create(createLeadDto);
   }
 
@@ -68,17 +72,29 @@ export class LeadsController {
     description:
       'Retrieve leads with optional filtering by status, search, and pagination.',
   })
-  @ApiResponse({ status: 200, description: 'Paginated list of leads.' })
-  findAll(@Query() query: QueryLeadDto) {
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of leads.',
+    type: PaginatedResponseDto,
+  })
+  async findAll(
+    @Query() query: QueryLeadDto,
+  ): Promise<PaginatedResponseDto<LeadResponseDto>> {
     return this.leadsService.findAll(query);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get lead details by ID' })
   @ApiParam({ name: 'id', description: 'UUID of the lead' })
-  @ApiResponse({ status: 200, description: 'Lead found.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lead found.',
+    type: LeadResponseDto,
+  })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<LeadResponseDto> {
     return this.leadsService.findOne(id);
   }
 
@@ -86,12 +102,16 @@ export class LeadsController {
   @ApiOperation({ summary: 'Update an existing lead' })
   @ApiParam({ name: 'id', description: 'UUID of the lead' })
   @ApiBody({ type: UpdateLeadDto })
-  @ApiResponse({ status: 200, description: 'Lead updated successfully.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lead updated successfully.',
+    type: LeadResponseDto,
+  })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  update(
+  async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateLeadDto: UpdateLeadDto,
-  ) {
+  ): Promise<LeadResponseDto> {
     return this.leadsService.update(id, updateLeadDto);
   }
 
@@ -108,7 +128,11 @@ export class LeadsController {
     format: 'uuid',
   })
   @ApiBody({ type: ConvertLeadDto })
-  @ApiResponse({ status: 201, description: 'Chuyển đổi lead thành công.' })
+  @ApiResponse({
+    status: 201,
+    description: 'Chuyển đổi lead thành công.',
+    type: ConvertLeadResponseDto,
+  })
   @ApiResponse({
     status: 400,
     description: 'Lead không ở trạng thái QUALIFIED.',
@@ -119,10 +143,10 @@ export class LeadsController {
     description:
       'Lead đã được chuyển đổi trước đó hoặc trùng lặp khách hàng mơ hồ.',
   })
-  convert(
+  async convert(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() convertLeadDto: ConvertLeadDto,
-  ) {
+  ): Promise<ConvertLeadResponseDto> {
     return this.leadsService.convert(id, convertLeadDto);
   }
 
@@ -132,7 +156,9 @@ export class LeadsController {
   @ApiParam({ name: 'id', description: 'UUID of the lead' })
   @ApiResponse({ status: 200, description: 'Lead removed successfully.' })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  remove(@Param('id', ParseUUIDPipe) id: string) {
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<{ success: boolean; message: string }> {
     return this.leadsService.remove(id);
   }
 }

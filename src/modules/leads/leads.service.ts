@@ -14,13 +14,18 @@ import { Customer } from '../customers/entities/customer.entity.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import { LeadStatus } from './enums/lead.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import type { PaginatedResponseDto } from '../../common/index.js';
 import {
   ConvertLeadDto,
+  ConvertLeadResponseDto,
   CreateLeadDto,
   CreateLeadSourceDto,
+  LeadResponseDto,
+  LeadSourceResponseDto,
   QueryLeadDto,
   UpdateLeadDto,
 } from './dto/index.js';
+import { LeadMapper } from './mappers/lead.mapper.js';
 
 export type CustomerMatchSource = 'EMAIL' | 'PHONE';
 
@@ -51,7 +56,7 @@ export class LeadsService {
     private readonly rabbitmqService: RabbitMQService,
   ) {}
 
-  async create(dto: CreateLeadDto): Promise<Lead> {
+  async create(dto: CreateLeadDto): Promise<LeadResponseDto> {
     const normalizedEmail = dto.email.trim().toLowerCase();
 
     // 1. Check duplicate lead by email
@@ -103,7 +108,7 @@ export class LeadsService {
       // 5. Publish lead.created event to RabbitMQ
       await this.rabbitmqService.publishLeadCreated(savedLead.id);
 
-      return savedLead;
+      return LeadMapper.toResponseDto(savedLead);
     } catch (error: unknown) {
       if (
         error instanceof QueryFailedError &&
@@ -121,10 +126,9 @@ export class LeadsService {
     }
   }
 
-  async findAll(query: QueryLeadDto): Promise<{
-    data: Lead[];
-    meta: { page: number; limit: number; total: number; totalPages: number };
-  }> {
+  async findAll(
+    query: QueryLeadDto,
+  ): Promise<PaginatedResponseDto<LeadResponseDto>> {
     const page = query.page && query.page > 0 ? query.page : 1;
     const limit = query.limit && query.limit > 0 ? query.limit : 10;
     const skip = (page - 1) * limit;
@@ -174,17 +178,24 @@ export class LeadsService {
     const totalPages = Math.ceil(total / limit) || 1;
 
     return {
-      data,
+      data: LeadMapper.toResponseDtoList(data),
       meta: {
         page,
         limit,
         total,
         totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1,
       },
     };
   }
 
-  async findOne(id: string): Promise<Lead> {
+  async findOne(id: string): Promise<LeadResponseDto> {
+    const lead = await this.findLeadEntity(id);
+    return LeadMapper.toResponseDto(lead);
+  }
+
+  async findLeadEntity(id: string): Promise<Lead> {
     const lead = await this.leadsRepository.findOne({
       where: { id },
       relations: {
@@ -204,8 +215,8 @@ export class LeadsService {
     return lead;
   }
 
-  async update(id: string, dto: UpdateLeadDto): Promise<Lead> {
-    const lead = await this.findOne(id);
+  async update(id: string, dto: UpdateLeadDto): Promise<LeadResponseDto> {
+    const lead = await this.findLeadEntity(id);
 
     // If updating email, check uniqueness
     if (dto.email) {
@@ -274,11 +285,11 @@ export class LeadsService {
 
     const updated = await this.leadsRepository.save(lead);
     this.logger.log(`Updated lead ${updated.id}`);
-    return updated;
+    return LeadMapper.toResponseDto(updated);
   }
 
   async remove(id: string): Promise<{ success: boolean; message: string }> {
-    const lead = await this.findOne(id);
+    const lead = await this.findLeadEntity(id);
     await this.leadsRepository.remove(lead);
     this.logger.log(`Deleted lead ${id}`);
     return {
@@ -289,7 +300,10 @@ export class LeadsService {
 
   // --- Lead Conversion (UC08) ---
 
-  async convert(id: string, dto: ConvertLeadDto): Promise<ConvertLeadResult> {
+  async convert(
+    id: string,
+    dto: ConvertLeadDto,
+  ): Promise<ConvertLeadResponseDto> {
     const user = await this.usersRepository.findOne({
       where: { id: dto.userId },
     });
@@ -415,12 +429,14 @@ export class LeadsService {
       `Converted lead ${id} to customer ${result.customer.id} (customer created: ${result.customerCreated})`,
     );
 
-    return {
+    const convertResult: ConvertLeadResult = {
       ...result,
       message: result.customerCreated
         ? `Lead '${id}' has been converted to new customer '${result.customer.id}'`
         : `Lead '${id}' has been converted to existing customer '${result.customer.id}'`,
     };
+
+    return LeadMapper.toConvertResponseDto(convertResult);
   }
 
   private async findDuplicateCustomer(
@@ -487,21 +503,22 @@ export class LeadsService {
 
   // --- Lead Sources Management ---
 
-  async findAllSources(): Promise<LeadSource[]> {
-    return this.leadSourcesRepository.find({
+  async findAllSources(): Promise<LeadSourceResponseDto[]> {
+    const sources = await this.leadSourcesRepository.find({
       order: { name: 'ASC' },
     });
+    return LeadMapper.toSourceResponseDtoList(sources);
   }
 
-  async findSourceOne(id: string): Promise<LeadSource> {
+  async findSourceOne(id: string): Promise<LeadSourceResponseDto> {
     const source = await this.leadSourcesRepository.findOne({ where: { id } });
     if (!source) {
       throw new NotFoundException(`LeadSource with ID '${id}' not found`);
     }
-    return source;
+    return LeadMapper.toSourceResponseDto(source);
   }
 
-  async createSource(dto: CreateLeadSourceDto): Promise<LeadSource> {
+  async createSource(dto: CreateLeadSourceDto): Promise<LeadSourceResponseDto> {
     const trimmedName = dto.name.trim();
     const existing = await this.leadSourcesRepository.findOne({
       where: { name: trimmedName },
@@ -519,7 +536,8 @@ export class LeadsService {
     });
 
     try {
-      return await this.leadSourcesRepository.save(source);
+      const saved = await this.leadSourcesRepository.save(source);
+      return LeadMapper.toSourceResponseDto(saved);
     } catch (error: unknown) {
       if (
         error instanceof QueryFailedError &&

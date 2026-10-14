@@ -1,13 +1,13 @@
 import { LeadsController } from './leads.controller.js';
 import type { LeadsService } from './leads.service.js';
 import { LeadStatus } from './enums/lead.enum.js';
-import type { Lead } from './entities/lead.entity.js';
+import type { LeadResponseDto } from './dto/index.js';
 
 describe('LeadsController', () => {
   let controller: LeadsController;
   let service: jest.Mocked<Partial<LeadsService>>;
 
-  const mockLead: Lead = {
+  const mockLead: LeadResponseDto = {
     id: 'lead-123',
     firstName: 'John',
     lastName: 'Doe',
@@ -20,7 +20,9 @@ describe('LeadsController', () => {
     industry: null,
     status: LeadStatus.NEW,
     sourceId: 'source-123',
+    source: null,
     ownerId: null,
+    owner: null,
     convertedCustomerId: null,
     convertedBy: null,
     convertedAt: null,
@@ -34,7 +36,14 @@ describe('LeadsController', () => {
       create: jest.fn().mockResolvedValue(mockLead),
       findAll: jest.fn().mockResolvedValue({
         data: [mockLead],
-        meta: { page: 1, limit: 10, total: 1, totalPages: 1 },
+        meta: {
+          page: 1,
+          limit: 10,
+          total: 1,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPreviousPage: false,
+        },
       }),
       findOne: jest.fn().mockResolvedValue(mockLead),
       update: jest.fn().mockResolvedValue({ ...mockLead, firstName: 'Jane' }),
