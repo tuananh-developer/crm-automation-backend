@@ -111,7 +111,6 @@ describe('FollowUpService', () => {
       findOne: jest.fn(),
       find: jest.fn(),
     };
-
     stepsRepository = {
       findOne: jest.fn(),
       find: jest.fn(),
