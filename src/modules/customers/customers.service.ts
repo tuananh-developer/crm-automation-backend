@@ -5,11 +5,9 @@ import { Customer } from './entities/customer.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { QueryCustomerDto } from './dto/index.js';
-
-/** Customer detail with the lead it was converted from and its segments. */
-export type CustomerDetail = Customer & {
-  segmentCount: number;
-};
+import { CustomerResponseDto } from './dto/customer-response.dto.js';
+import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
+import { CustomerMapper } from './mappers/customer.mapper.js';
 
 @Injectable()
 export class CustomersService {
@@ -24,7 +22,9 @@ export class CustomersService {
     private readonly segmentsRepository: Repository<Segment>,
   ) {}
 
-  async findAll(query: QueryCustomerDto) {
+  async findAll(
+    query: QueryCustomerDto,
+  ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
@@ -36,7 +36,7 @@ export class CustomersService {
 
     if (query.search) {
       qb.andWhere(
-        '(LOWER(customer.name) LIKE LOWER(:search) OR LOWER(customer.email) LIKE LOWER(:search) OR LOWER(customer.company_name) LIKE LOWER(:search))',
+        '(LOWER(customer.name) LIKE LOWER(:search) OR LOWER(customer.email) LIKE LOWER(:search) OR LOWER(customer.companyName) LIKE LOWER(:search))',
         { search: `%${query.search}%` },
       );
     }
@@ -52,17 +52,7 @@ export class CustomersService {
     const [data, total] = await qb.getManyAndCount();
 
     return {
-      data: data.map((customer) => ({
-        ...this.withoutCreatorHash(customer),
-        segments: (customer.customerSegments ?? []).map((assignment) => ({
-          id: assignment.segment?.id ?? assignment.segmentId,
-          name: assignment.segment?.name ?? null,
-          assignmentType: assignment.assignmentType,
-          confidence: assignment.confidence,
-          assignedReason: assignment.assignedReason,
-          assignedAt: assignment.assignedAt,
-        })),
-      })),
+      data: CustomerMapper.toResponseDtoArray(data),
       meta: {
         page,
         limit,
@@ -72,7 +62,7 @@ export class CustomersService {
     };
   }
 
-  async findOne(id: string): Promise<CustomerDetail> {
+  async findOne(id: string): Promise<CustomerResponseDto> {
     const customer = await this.customersRepository.findOne({
       where: { id },
       relations: {
@@ -89,21 +79,10 @@ export class CustomersService {
       throw new NotFoundException(`Customer with ID '${id}' not found`);
     }
 
-    return {
-      ...this.withoutCreatorHash(customer),
-      segmentCount: customer.customerSegments?.length ?? 0,
-    };
-  }
-
-  /** `creator` is a User relation; its password hash must never be exposed. */
-  private withoutCreatorHash(customer: Customer): Customer {
-    if (!customer.creator) {
-      return customer;
-    }
-
-    const { passwordHash, ...safeCreator } = customer.creator;
-    void passwordHash;
-
-    return { ...customer, creator: safeCreator as Customer['creator'] };
+    return CustomerMapper.toResponseDto(
+      Object.assign(customer, {
+        segmentCount: customer.customerSegments?.length ?? 0,
+      }),
+    );
   }
 }

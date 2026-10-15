@@ -29,6 +29,12 @@ import {
   UpdateStepDto,
 } from './dto/index.js';
 import {
+  FollowUpSequenceResponseDto,
+  SequenceLeadEnrollmentResponseDto,
+} from './dto/sequence-response.dto.js';
+import { FollowUpStepResponseDto } from './dto/follow-up-step-response.dto.js';
+import { LeadFollowUpEnrollmentResponseDto } from './dto/lead-follow-up-enrollment-response.dto.js';
+import {
   EnrollmentStatus,
   FollowUpSequenceStatus,
 } from './enums/follow-up.enum.js';
@@ -51,12 +57,15 @@ export class SequencesController {
   @ApiResponse({
     status: 201,
     description: 'Sequence successfully created.',
+    type: FollowUpSequenceResponseDto,
   })
   @ApiResponse({
     status: 409,
     description: 'Sequence with this name already exists.',
   })
-  createSequence(@Body() dto: CreateSequenceDto) {
+  createSequence(
+    @Body() dto: CreateSequenceDto,
+  ): Promise<FollowUpSequenceResponseDto> {
     return this.sequencesService.createSequence(dto);
   }
 
@@ -74,8 +83,12 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'List of sequences returned successfully.',
+    type: FollowUpSequenceResponseDto,
+    isArray: true,
   })
-  findAllSequences(@Query('status') status?: FollowUpSequenceStatus) {
+  findAllSequences(
+    @Query('status') status?: FollowUpSequenceStatus,
+  ): Promise<FollowUpSequenceResponseDto[]> {
     return this.sequencesService.findAllSequences(status);
   }
 
@@ -107,12 +120,14 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'List of enrollments returned successfully.',
+    type: LeadFollowUpEnrollmentResponseDto,
+    isArray: true,
   })
   findAllEnrollments(
     @Query('leadId') leadId?: string,
     @Query('sequenceId') sequenceId?: string,
     @Query('status') status?: EnrollmentStatus,
-  ) {
+  ): Promise<LeadFollowUpEnrollmentResponseDto[]> {
     return this.sequencesService.findAllEnrollments({
       leadId,
       sequenceId,
@@ -129,9 +144,13 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'List of lead enrollments returned successfully.',
+    type: LeadFollowUpEnrollmentResponseDto,
+    isArray: true,
   })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  findEnrollmentsByLead(@Param('leadId', ParseUUIDPipe) leadId: string) {
+  findEnrollmentsByLead(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<LeadFollowUpEnrollmentResponseDto[]> {
     return this.sequencesService.findEnrollmentsByLead(leadId);
   }
 
@@ -145,9 +164,12 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'Enrollment details returned successfully.',
+    type: LeadFollowUpEnrollmentResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Enrollment not found.' })
-  findEnrollmentById(@Param('id', ParseUUIDPipe) id: string) {
+  findEnrollmentById(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<LeadFollowUpEnrollmentResponseDto> {
     return this.sequencesService.findEnrollmentById(id);
   }
 
@@ -162,6 +184,7 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'Enrollment successfully cancelled.',
+    type: LeadFollowUpEnrollmentResponseDto,
   })
   @ApiResponse({
     status: 400,
@@ -171,7 +194,7 @@ export class SequencesController {
   cancelEnrollment(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto?: CancelEnrollmentDto,
-  ) {
+  ): Promise<LeadFollowUpEnrollmentResponseDto> {
     return this.sequencesService.cancelEnrollment(id, dto);
   }
 
@@ -184,13 +207,16 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'Enrollment successfully paused.',
+    type: LeadFollowUpEnrollmentResponseDto,
   })
   @ApiResponse({
     status: 400,
     description: 'Cannot pause an enrollment that is not active.',
   })
   @ApiResponse({ status: 404, description: 'Enrollment not found.' })
-  pauseEnrollment(@Param('id', ParseUUIDPipe) id: string) {
+  pauseEnrollment(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<LeadFollowUpEnrollmentResponseDto> {
     return this.sequencesService.pauseEnrollment(id);
   }
 
@@ -204,13 +230,16 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'Enrollment successfully resumed.',
+    type: LeadFollowUpEnrollmentResponseDto,
   })
   @ApiResponse({
     status: 400,
     description: 'Only PAUSED enrollments can be resumed.',
   })
   @ApiResponse({ status: 404, description: 'Enrollment not found.' })
-  resumeEnrollment(@Param('id', ParseUUIDPipe) id: string) {
+  resumeEnrollment(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<LeadFollowUpEnrollmentResponseDto> {
     return this.sequencesService.resumeEnrollment(id);
   }
 
@@ -225,6 +254,7 @@ export class SequencesController {
   @ApiResponse({
     status: 201,
     description: 'Lead successfully enrolled into sequence.',
+    type: SequenceLeadEnrollmentResponseDto,
   })
   @ApiResponse({
     status: 400,
@@ -234,7 +264,9 @@ export class SequencesController {
     status: 409,
     description: 'Lead is already actively enrolled in this sequence.',
   })
-  enrollLeadDirect(@Body() dto: EnrollLeadDto) {
+  enrollLeadDirect(
+    @Body() dto: EnrollLeadDto,
+  ): Promise<SequenceLeadEnrollmentResponseDto> {
     return this.sequencesService.enrollLead(dto);
   }
 
@@ -249,9 +281,12 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'Sequence details returned successfully.',
+    type: FollowUpSequenceResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Sequence not found.' })
-  findSequenceById(@Param('id', ParseUUIDPipe) id: string) {
+  findSequenceById(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<FollowUpSequenceResponseDto> {
     return this.sequencesService.findSequenceById(id);
   }
 
@@ -265,12 +300,13 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'Sequence updated successfully.',
+    type: FollowUpSequenceResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Sequence not found.' })
   updateSequence(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSequenceDto,
-  ) {
+  ): Promise<FollowUpSequenceResponseDto> {
     return this.sequencesService.updateSequence(id, dto);
   }
 
@@ -283,9 +319,12 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'Sequence archived successfully.',
+    type: FollowUpSequenceResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Sequence not found.' })
-  deleteSequence(@Param('id', ParseUUIDPipe) id: string) {
+  deleteSequence(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<FollowUpSequenceResponseDto> {
     return this.sequencesService.updateSequence(id, {
       status: FollowUpSequenceStatus.ARCHIVED,
       isActive: false,
@@ -304,12 +343,13 @@ export class SequencesController {
   @ApiResponse({
     status: 201,
     description: 'Step created successfully.',
+    type: FollowUpStepResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Parent sequence not found.' })
   createStep(
     @Param('id', ParseUUIDPipe) sequenceId: string,
     @Body() dto: CreateStepDto,
-  ) {
+  ): Promise<FollowUpStepResponseDto> {
     return this.sequencesService.createStep(sequenceId, dto);
   }
 
@@ -322,9 +362,13 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'List of steps returned successfully.',
+    type: FollowUpStepResponseDto,
+    isArray: true,
   })
   @ApiResponse({ status: 404, description: 'Sequence not found.' })
-  findStepsBySequence(@Param('id', ParseUUIDPipe) sequenceId: string) {
+  findStepsBySequence(
+    @Param('id', ParseUUIDPipe) sequenceId: string,
+  ): Promise<FollowUpStepResponseDto[]> {
     return this.sequencesService.findStepsBySequence(sequenceId);
   }
 
@@ -340,12 +384,13 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'Step updated successfully.',
+    type: FollowUpStepResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Step not found.' })
   updateStep(
     @Param('stepId', ParseUUIDPipe) stepId: string,
     @Body() dto: UpdateStepDto,
-  ) {
+  ): Promise<FollowUpStepResponseDto> {
     return this.sequencesService.updateStep(stepId, dto);
   }
 
@@ -359,12 +404,13 @@ export class SequencesController {
   @ApiResponse({
     status: 200,
     description: 'Step updated successfully.',
+    type: FollowUpStepResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Step not found.' })
   updateStepDirect(
     @Param('stepId', ParseUUIDPipe) stepId: string,
     @Body() dto: UpdateStepDto,
-  ) {
+  ): Promise<FollowUpStepResponseDto> {
     return this.sequencesService.updateStep(stepId, dto);
   }
 
@@ -380,6 +426,7 @@ export class SequencesController {
   @ApiResponse({
     status: 201,
     description: 'Lead successfully enrolled.',
+    type: SequenceLeadEnrollmentResponseDto,
   })
   @ApiResponse({
     status: 400,
@@ -392,7 +439,7 @@ export class SequencesController {
   enrollLead(
     @Param('id', ParseUUIDPipe) sequenceId: string,
     @Body() dto: EnrollLeadDto,
-  ) {
+  ): Promise<SequenceLeadEnrollmentResponseDto> {
     return this.sequencesService.enrollLead({
       ...dto,
       sequenceId,

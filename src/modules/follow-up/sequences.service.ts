@@ -30,6 +30,15 @@ import {
   UpdateSequenceDto,
   UpdateStepDto,
 } from './dto/index.js';
+import { FollowUpSequenceMapper } from './mappers/sequence.mapper';
+import { LeadFollowUpEnrollmentMapper } from './mappers/lead-follow-up-enrollment.mapper';
+import { FollowUpStepMapper } from './mappers/follow-up-step.mapper';
+import { FollowUpStepResponseDto } from './dto/follow-up-step-response.dto.js';
+import {
+  FollowUpSequenceResponseDto,
+  SequenceLeadEnrollmentResponseDto,
+} from './dto/sequence-response.dto.js';
+import { LeadFollowUpEnrollmentResponseDto } from './dto/lead-follow-up-enrollment-response.dto.js';
 
 @Injectable()
 export class SequencesService {
@@ -57,7 +66,9 @@ export class SequencesService {
 
   // ── Sequence Management ───────────────────────────────────────────────────
 
-  async createSequence(dto: CreateSequenceDto): Promise<FollowUpSequence> {
+  async createSequence(
+    dto: CreateSequenceDto,
+  ): Promise<FollowUpSequenceResponseDto> {
     const existing = await this.sequencesRepository.findOne({
       where: { name: dto.name },
     });
@@ -99,23 +110,25 @@ export class SequencesService {
 
     const saved = await this.sequencesRepository.save(sequence);
     this.logger.log(`Created FollowUpSequence ${saved.id} ("${saved.name}")`);
-    return saved;
+    return FollowUpSequenceMapper.toResponseDto(saved);
   }
 
   async findAllSequences(
     status?: FollowUpSequenceStatus,
-  ): Promise<FollowUpSequence[]> {
+  ): Promise<FollowUpSequenceResponseDto[]> {
     const where = status ? { status } : {};
-    return this.sequencesRepository.find({
+    const sequences = await this.sequencesRepository.find({
       where,
       order: { createdAt: 'DESC' },
       relations: {
         steps: true,
       },
     });
+
+    return FollowUpSequenceMapper.toResponseDtoArray(sequences);
   }
 
-  async findSequenceById(id: string): Promise<FollowUpSequence> {
+  async findSequenceById(id: string): Promise<FollowUpSequenceResponseDto> {
     const sequence = await this.sequencesRepository.findOne({
       where: { id },
       relations: {
@@ -139,14 +152,22 @@ export class SequencesService {
       sequence.steps.sort((a, b) => a.stepOrder - b.stepOrder);
     }
 
-    return sequence;
+    return FollowUpSequenceMapper.toResponseDto(sequence);
   }
 
   async updateSequence(
     id: string,
     dto: UpdateSequenceDto,
-  ): Promise<FollowUpSequence> {
-    const sequence = await this.findSequenceById(id);
+  ): Promise<FollowUpSequenceResponseDto> {
+    const sequence = await this.sequencesRepository.findOne({
+      where: { id },
+      relations: { steps: true },
+    });
+    if (!sequence) {
+      throw new NotFoundException(
+        `Follow-up sequence with ID '${id}' not found`,
+      );
+    }
 
     if (dto.name && dto.name !== sequence.name) {
       const existing = await this.sequencesRepository.findOne({
@@ -178,7 +199,7 @@ export class SequencesService {
     this.logger.log(
       `Updated FollowUpSequence ${updated.id} ("${updated.name}")`,
     );
-    return updated;
+    return FollowUpSequenceMapper.toResponseDto(updated);
   }
 
   // ── Step Management ───────────────────────────────────────────────────────
@@ -186,7 +207,7 @@ export class SequencesService {
   async createStep(
     sequenceId: string,
     dto: CreateStepDto,
-  ): Promise<FollowUpStep> {
+  ): Promise<FollowUpStepResponseDto> {
     const sequence = await this.findSequenceById(sequenceId);
 
     const existingStep = await this.stepsRepository.findOne({
@@ -236,18 +257,25 @@ export class SequencesService {
     this.logger.log(
       `Created Step ${saved.id} (order=${saved.stepOrder}) for sequence ${sequence.id}`,
     );
-    return saved;
+    return FollowUpStepMapper.toResponseDto(saved);
   }
 
-  async findStepsBySequence(sequenceId: string): Promise<FollowUpStep[]> {
+  async findStepsBySequence(
+    sequenceId: string,
+  ): Promise<FollowUpStepResponseDto[]> {
     await this.findSequenceById(sequenceId); // validate existence
-    return this.stepsRepository.find({
+    const steps = await this.stepsRepository.find({
       where: { sequenceId },
       order: { stepOrder: 'ASC' },
     });
+
+    return FollowUpStepMapper.toResponseDtoArray(steps);
   }
 
-  async updateStep(stepId: string, dto: UpdateStepDto): Promise<FollowUpStep> {
+  async updateStep(
+    stepId: string,
+    dto: UpdateStepDto,
+  ): Promise<FollowUpStepResponseDto> {
     const step = await this.stepsRepository.findOne({
       where: { id: stepId },
     });
@@ -292,7 +320,8 @@ export class SequencesService {
     }
     if (dto.isActive !== undefined) step.isActive = dto.isActive;
 
-    return this.stepsRepository.save(step);
+    const updated = await this.stepsRepository.save(step);
+    return FollowUpStepMapper.toResponseDto(updated);
   }
 
   // ── Lead Follow-Up Enrollment (UC05) ──────────────────────────────────────
@@ -311,11 +340,9 @@ export class SequencesService {
    *     - Append Interaction record to log lead activity.
    *  6. Publish `lead.follow_up.triggered` event to RabbitMQ.
    */
-  async enrollLead(dto: EnrollLeadDto): Promise<{
-    message: string;
-    enrollment: LeadFollowUpEnrollment;
-    firstStep: FollowUpStep;
-  }> {
+  async enrollLead(
+    dto: EnrollLeadDto,
+  ): Promise<SequenceLeadEnrollmentResponseDto> {
     // 1. Validate Lead
     const lead = await this.leadsRepository.findOne({
       where: { id: dto.leadId },
@@ -376,7 +403,7 @@ export class SequencesService {
         currentStepId: firstStep.id,
         status: EnrollmentStatus.ACTIVE,
         startedAt: new Date(),
-        assignedBy: dto.assignedBy ?? lead.ownerId ?? null,
+        assignedBy: dto.assignedBy ?? null,
       });
       const savedEnrollment = await repos.enrollmentRepo.save(enrollment);
 
@@ -388,13 +415,12 @@ export class SequencesService {
         stepId: firstStep.id,
         status: ExecutionStatus.PENDING,
         scheduledAt: scheduledDate,
-        requestPayload: {
-          recipientEmail: lead.email,
-          recipientName: `${lead.firstName} ${lead.lastName || ''}`.trim(),
-          channel: firstStep.channel,
-          actionType: firstStep.actionType,
-          subject: firstStep.subjectTemplate,
-        },
+        startedAt: null,
+        completedAt: null,
+        providerMessageId: null,
+        requestPayload: null,
+        responsePayload: null,
+        errorMessage: null,
         retryCount: 0,
       });
       await repos.executionRepo.save(execution);
@@ -407,7 +433,7 @@ export class SequencesService {
         subject: 'Follow-up Sequence Enrollment',
         content: `Enrolled in follow-up sequence: ${sequence.name} (Step ${firstStep.stepOrder}: ${firstStep.actionType})`,
         occurredAt: new Date(),
-        createdBy: dto.assignedBy ?? lead.ownerId ?? null,
+        createdBy: dto.assignedBy ?? null,
       });
       await repos.interactionRepo.save(interaction);
 
@@ -452,8 +478,11 @@ export class SequencesService {
 
     return {
       message: 'Lead successfully enrolled into follow-up sequence',
-      enrollment: savedEnrollment,
-      firstStep,
+      enrollment: Object.assign(
+        LeadFollowUpEnrollmentMapper.toResponseDto(savedEnrollment),
+        { executionCount: 1 },
+      ),
+      firstStep: FollowUpStepMapper.toResponseDto(firstStep),
     };
   }
 
@@ -461,24 +490,29 @@ export class SequencesService {
     leadId?: string;
     sequenceId?: string;
     status?: EnrollmentStatus;
-  }): Promise<LeadFollowUpEnrollment[]> {
+  }): Promise<LeadFollowUpEnrollmentResponseDto[]> {
     const where: FindOptionsWhere<LeadFollowUpEnrollment> = {};
     if (query?.leadId) where.leadId = query.leadId;
     if (query?.sequenceId) where.sequenceId = query.sequenceId;
     if (query?.status) where.status = query.status;
 
-    return this.enrollmentsRepository.find({
+    const enrollments = await this.enrollmentsRepository.find({
       where,
       order: { createdAt: 'DESC' },
       relations: {
         lead: true,
         sequence: true,
         currentStep: true,
+        executions: true,
       },
     });
+
+    return LeadFollowUpEnrollmentMapper.toResponseDtoArray(enrollments);
   }
 
-  async findEnrollmentById(id: string): Promise<LeadFollowUpEnrollment> {
+  async findEnrollmentById(
+    id: string,
+  ): Promise<LeadFollowUpEnrollmentResponseDto> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
       relations: {
@@ -499,18 +533,18 @@ export class SequencesService {
       );
     }
 
-    return enrollment;
+    return LeadFollowUpEnrollmentMapper.toResponseDto(enrollment);
   }
 
   async findEnrollmentsByLead(
     leadId: string,
-  ): Promise<LeadFollowUpEnrollment[]> {
+  ): Promise<LeadFollowUpEnrollmentResponseDto[]> {
     const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
     if (!lead) {
       throw new NotFoundException(`Lead with ID '${leadId}' not found`);
     }
 
-    return this.enrollmentsRepository.find({
+    const enrollments = await this.enrollmentsRepository.find({
       where: { leadId },
       order: { createdAt: 'DESC' },
       relations: {
@@ -519,13 +553,23 @@ export class SequencesService {
         executions: true,
       },
     });
+
+    return LeadFollowUpEnrollmentMapper.toResponseDtoArray(enrollments);
   }
 
   async cancelEnrollment(
     id: string,
     dto?: CancelEnrollmentDto,
-  ): Promise<LeadFollowUpEnrollment> {
-    const enrollment = await this.findEnrollmentById(id);
+  ): Promise<LeadFollowUpEnrollmentResponseDto> {
+    const enrollment = await this.enrollmentsRepository.findOne({
+      where: { id },
+      relations: { executions: true },
+    });
+    if (!enrollment) {
+      throw new NotFoundException(
+        `Lead follow-up enrollment with ID '${id}' not found`,
+      );
+    }
 
     if (enrollment.status === EnrollmentStatus.COMPLETED) {
       throw new BadRequestException(
@@ -550,11 +594,21 @@ export class SequencesService {
 
     const saved = await this.enrollmentsRepository.save(enrollment);
     this.logger.log(`Cancelled LeadFollowUpEnrollment ${saved.id}`);
-    return saved;
+    return LeadFollowUpEnrollmentMapper.toResponseDto(saved);
   }
 
-  async pauseEnrollment(id: string): Promise<LeadFollowUpEnrollment> {
-    const enrollment = await this.findEnrollmentById(id);
+  async pauseEnrollment(
+    id: string,
+  ): Promise<LeadFollowUpEnrollmentResponseDto> {
+    const enrollment = await this.enrollmentsRepository.findOne({
+      where: { id },
+      relations: { executions: true },
+    });
+    if (!enrollment) {
+      throw new NotFoundException(
+        `Lead follow-up enrollment with ID '${id}' not found`,
+      );
+    }
 
     if (
       enrollment.status === EnrollmentStatus.COMPLETED ||
@@ -569,11 +623,21 @@ export class SequencesService {
     enrollment.pausedAt = new Date();
     const saved = await this.enrollmentsRepository.save(enrollment);
     this.logger.log(`Paused LeadFollowUpEnrollment ${saved.id}`);
-    return saved;
+    return LeadFollowUpEnrollmentMapper.toResponseDto(saved);
   }
 
-  async resumeEnrollment(id: string): Promise<LeadFollowUpEnrollment> {
-    const enrollment = await this.findEnrollmentById(id);
+  async resumeEnrollment(
+    id: string,
+  ): Promise<LeadFollowUpEnrollmentResponseDto> {
+    const enrollment = await this.enrollmentsRepository.findOne({
+      where: { id },
+      relations: { executions: true },
+    });
+    if (!enrollment) {
+      throw new NotFoundException(
+        `Lead follow-up enrollment with ID '${id}' not found`,
+      );
+    }
 
     if (enrollment.status !== EnrollmentStatus.PAUSED) {
       throw new BadRequestException('Only PAUSED enrollments can be resumed');
@@ -583,14 +647,14 @@ export class SequencesService {
     enrollment.pausedAt = null;
     const saved = await this.enrollmentsRepository.save(enrollment);
     this.logger.log(`Resumed LeadFollowUpEnrollment ${saved.id}`);
-    return saved;
+    return LeadFollowUpEnrollmentMapper.toResponseDto(saved);
   }
 
   async updateEnrollmentStatus(
     id: string,
     status: EnrollmentStatus,
     reason?: string,
-  ): Promise<LeadFollowUpEnrollment> {
+  ): Promise<LeadFollowUpEnrollmentResponseDto> {
     if (status === EnrollmentStatus.CANCELLED) {
       return this.cancelEnrollment(id, { cancellationReason: reason });
     }
@@ -600,8 +664,17 @@ export class SequencesService {
     if (status === EnrollmentStatus.ACTIVE) {
       return this.resumeEnrollment(id);
     }
-    const enrollment = await this.findEnrollmentById(id);
+    const enrollment = await this.enrollmentsRepository.findOne({
+      where: { id },
+    });
+    if (!enrollment) {
+      throw new NotFoundException(
+        `Lead follow-up enrollment with ID '${id}' not found`,
+      );
+    }
     enrollment.status = status;
-    return this.enrollmentsRepository.save(enrollment);
+    return LeadFollowUpEnrollmentMapper.toResponseDto(
+      await this.enrollmentsRepository.save(enrollment),
+    );
   }
 }

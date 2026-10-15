@@ -31,7 +31,7 @@ export class UpdateStepDto {
 
   @IsOptional()
   @IsObject()
-  actionConfig?: Record<string, any>;
+  actionConfig?: Record<string, unknown>;
 
   @IsOptional()
   @IsString()
@@ -43,11 +43,11 @@ export class UpdateStepDto {
 
   @IsOptional()
   @IsObject()
-  conditions?: Record<string, any>;
+  conditions?: Record<string, unknown>;
 
   @IsOptional()
   @IsObject()
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 
   @IsOptional()
   @IsBoolean()

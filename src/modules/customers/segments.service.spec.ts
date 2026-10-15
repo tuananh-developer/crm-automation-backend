@@ -1,12 +1,17 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { SegmentsService } from './segments.service.js';
-import type { Repository } from 'typeorm';
+import { In } from 'typeorm';
+import type { DeepPartial, Repository } from 'typeorm';
 import type { Customer } from './entities/customer.entity.js';
 import type { Segment } from './entities/segment.entity.js';
-import type { CustomerSegment } from './entities/customer-segment.entity.js';
+import { CustomerSegment } from './entities/customer-segment.entity.js';
 import type { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
+import { ScoreLabel } from '../lead-intelligence/enums/lead-intelligence.enum.js';
+import { Lead } from '../leads/entities/lead.entity.js';
 import type { User } from '../users/entities/user.entity.js';
 import { SegmentAssignmentType } from './enums/customer.enum.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
+import type { CreateSegmentDto } from './dto/create-segment.dto.js';
 
 describe('SegmentsService', () => {
   let service: SegmentsService;
@@ -15,7 +20,6 @@ describe('SegmentsService', () => {
   let customerSegmentsRepository: jest.Mocked<
     Partial<Repository<CustomerSegment>>
   >;
-  let leadScoresRepository: jest.Mocked<Partial<Repository<LeadScore>>>;
   let usersRepository: jest.Mocked<Partial<Repository<User>>>;
 
   const mockUser: User = {
@@ -23,8 +27,8 @@ describe('SegmentsService', () => {
     name: 'Admin',
     email: 'admin@example.com',
     passwordHash: 'secret-hash',
-    role: 'ADMIN' as any,
-    status: 'ACTIVE' as any,
+    role: UserRole.ADMIN,
+    status: UserStatus.ACTIVE,
     lastLoginAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -70,6 +74,19 @@ describe('SegmentsService', () => {
     updatedAt: new Date(),
   };
 
+  const mockCriteria: CreateSegmentDto['criteria'] = {
+    logic: 'AND',
+    conditions: [
+      {
+        id: 'industry-technology',
+        field: 'industry',
+        operator: 'equals',
+        value: 'Technology',
+      },
+    ],
+    assignmentType: 'RULE',
+  };
+
   const createQueryBuilder = () => ({
     leftJoinAndSelect: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
@@ -107,18 +124,17 @@ describe('SegmentsService', () => {
       findOne: jest.fn(),
       create: jest
         .fn()
-        .mockImplementation((dto) => (dto ?? {}) as CustomerSegment) as any,
+        .mockImplementation((dto: DeepPartial<CustomerSegment>) =>
+          Object.assign(new CustomerSegment(), dto),
+        ),
       save: jest
         .fn()
-        .mockImplementation((item) => Promise.resolve(item)) as any,
+        .mockImplementation((item: CustomerSegment) => Promise.resolve(item)),
       remove: jest
         .fn()
-        .mockImplementation((item) => Promise.resolve(item)) as any,
+        .mockImplementation((item: CustomerSegment) => Promise.resolve(item)),
       count: jest.fn().mockResolvedValue(5),
       createQueryBuilder: jest.fn().mockReturnValue(countQb),
-    };
-    leadScoresRepository = {
-      createQueryBuilder: jest.fn(),
     };
     usersRepository = {
       findOne: jest.fn(),
@@ -128,7 +144,6 @@ describe('SegmentsService', () => {
       customersRepository as Repository<Customer>,
       segmentsRepository as Repository<Segment>,
       customerSegmentsRepository as Repository<CustomerSegment>,
-      leadScoresRepository as Repository<LeadScore>,
       usersRepository as Repository<User>,
     );
   });
@@ -143,11 +158,11 @@ describe('SegmentsService', () => {
       const result = await service.create({
         name: 'Enterprise Tech',
         createdBy: 'user-1',
-        criteria: mockSegment.criteria as any,
+        criteria: mockCriteria,
       });
 
       expect(result.id).toBe('segment-1');
-      expect((result.creator as any)?.passwordHash).toBeUndefined();
+      expect(result.creator).not.toHaveProperty('passwordHash');
     });
 
     it('rejects duplicate segment name', async () => {
@@ -158,7 +173,7 @@ describe('SegmentsService', () => {
         service.create({
           name: 'Enterprise Tech',
           createdBy: 'user-1',
-          criteria: mockSegment.criteria as any,
+          criteria: mockCriteria,
         }),
       ).rejects.toBeInstanceOf(ConflictException);
     });
@@ -175,7 +190,7 @@ describe('SegmentsService', () => {
       expect(customerSegmentsRepository.createQueryBuilder).toHaveBeenCalled();
       expect(result.data).toHaveLength(1);
       expect(result.data[0].customerCount).toBe(42);
-      expect((result.data[0].creator as any)?.passwordHash).toBeUndefined();
+      expect(result.data[0].creator).not.toHaveProperty('passwordHash');
     });
   });
 
@@ -259,6 +274,136 @@ describe('SegmentsService', () => {
       expect(result.total).toBe(2);
       expect(result.matched).toBe(1);
       expect(customerSegmentsRepository.save).toHaveBeenCalled();
+    });
+
+    it('uses the newest preloaded lead score when evaluating a batch', async () => {
+      const scoreSegment: Segment = {
+        ...mockSegment,
+        criteria: {
+          logic: 'AND',
+          conditions: [
+            {
+              id: 'high-score',
+              field: 'score',
+              operator: 'greater_than_or_equal',
+              value: '80',
+            },
+          ],
+        },
+      };
+      const leadScores: LeadScore[] = [
+        {
+          id: 'score-old',
+          leadId: 'lead-1',
+          workflowRunId: null,
+          score: 95,
+          label: ScoreLabel.HOT,
+          reason: null,
+          modelProvider: null,
+          modelName: null,
+          modelVersion: null,
+          scoringFeatures: null,
+          inputSnapshot: null,
+          outputSnapshot: null,
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+        {
+          id: 'score-new',
+          leadId: 'lead-1',
+          workflowRunId: null,
+          score: 70,
+          label: ScoreLabel.WARM,
+          reason: null,
+          modelProvider: null,
+          modelName: null,
+          modelVersion: null,
+          scoringFeatures: null,
+          inputSnapshot: null,
+          outputSnapshot: null,
+          createdAt: new Date('2026-02-01T00:00:00.000Z'),
+        },
+      ];
+      const customerWithScores: Customer = {
+        ...mockCustomer,
+        convertedLeads: [
+          Object.assign(new Lead(), { id: 'lead-1', scores: leadScores }),
+        ],
+      };
+
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(scoreSegment);
+      (customersRepository.find as jest.Mock).mockResolvedValue([
+        customerWithScores,
+      ]);
+      (customerSegmentsRepository.find as jest.Mock).mockResolvedValue([]);
+
+      const result = await service.evaluateAll('segment-1', {
+        assignmentType: SegmentAssignmentType.RULE,
+      });
+
+      expect(result.matched).toBe(0);
+      expect(customerSegmentsRepository.find).toHaveBeenCalledTimes(1);
+      expect(customerSegmentsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('treats an explicitly empty customer ID list as an empty batch', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+
+      const result = await service.evaluateAll('segment-1', {
+        assignmentType: SegmentAssignmentType.RULE,
+        customerIds: [],
+      });
+
+      expect(result.total).toBe(0);
+      expect(result.processed).toBe(0);
+      expect(result.matched).toBe(0);
+      expect(customersRepository.find).not.toHaveBeenCalled();
+      expect(customerSegmentsRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('deduplicates explicit customer IDs before fetching the batch', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customersRepository.find as jest.Mock).mockResolvedValue([mockCustomer]);
+      (customerSegmentsRepository.find as jest.Mock).mockResolvedValue([]);
+
+      const result = await service.evaluateAll('segment-1', {
+        assignmentType: SegmentAssignmentType.RULE,
+        customerIds: ['customer-1', 'customer-1'],
+      });
+
+      expect(result.total).toBe(1);
+      expect(customersRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: [{ id: 'customer-1' }] }),
+      );
+    });
+
+    it('processes 51 customers in batches of 50 and 1', async () => {
+      const customers = Array.from({ length: 51 }, (_, index) => ({
+        ...mockCustomer,
+        id: `customer-${index}`,
+      }));
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customersRepository.find as jest.Mock).mockResolvedValue(customers);
+      (customerSegmentsRepository.find as jest.Mock).mockResolvedValue([]);
+
+      const result = await service.evaluateAll('segment-1', {
+        assignmentType: SegmentAssignmentType.RULE,
+      });
+
+      expect(result.processed).toBe(51);
+      expect(result.matched).toBe(51);
+      expect(customerSegmentsRepository.find).toHaveBeenNthCalledWith(1, {
+        where: {
+          segmentId: 'segment-1',
+          customerId: In(customers.slice(0, 50).map(({ id }) => id)),
+        },
+      });
+      expect(customerSegmentsRepository.find).toHaveBeenNthCalledWith(2, {
+        where: {
+          segmentId: 'segment-1',
+          customerId: In(['customer-50']),
+        },
+      });
+      expect(customerSegmentsRepository.save).toHaveBeenCalledTimes(2);
     });
   });
 });

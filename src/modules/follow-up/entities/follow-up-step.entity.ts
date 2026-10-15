@@ -46,12 +46,12 @@ export class FollowUpStep {
   contentTemplate!: string | null;
 
   @Column({ name: 'conditions', type: 'jsonb', nullable: true })
-  conditions!: Record<string, any> | null;
+  conditions!: Record<string, unknown> | null;
 
   @Column({ name: 'metadata', type: 'jsonb', nullable: true })
-  metadata!: Record<string, any> | null;
+  metadata!: Record<string, unknown> | null;
 
-  get actionConfig(): Record<string, any> | null {
+  get actionConfig(): Record<string, unknown> | null {
     return this.metadata ?? this.conditions ?? null;
   }
 

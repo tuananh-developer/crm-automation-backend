@@ -7,3 +7,7 @@ export * from './update-enrollment.dto.js';
 export * from './cancel-enrollment.dto.js';
 export * from './execute-follow-up.dto.js';
 export * from './query-follow-up-execution.dto.js';
+export * from './sequence-response.dto.js';
+export * from './follow-up-step-response.dto.js';
+export * from './lead-follow-up-enrollment-response.dto.js';
+export * from './follow-up-execution-response.dto.js';
