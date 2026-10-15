@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import { NotFoundException } from '@nestjs/common';
 import { CustomersService } from './customers.service.js';
 import type { Repository } from 'typeorm';

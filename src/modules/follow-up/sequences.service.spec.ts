@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import {
   BadRequestException,
   ConflictException,
@@ -19,6 +20,7 @@ import type { Lead } from '../leads/entities/lead.entity.js';
 import type { User } from '../users/entities/user.entity.js';
 import type { Interaction } from '../leads/entities/interaction.entity.js';
 import type { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('SequencesService', () => {
   let service: SequencesService;
@@ -36,8 +38,8 @@ describe('SequencesService', () => {
     name: 'Sales Rep',
     email: 'rep@crm.local',
     passwordHash: 'hash',
-    role: 'SALES' as any,
-    status: 'ACTIVE' as any,
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
     lastLoginAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),

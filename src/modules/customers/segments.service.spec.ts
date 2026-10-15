@@ -1,12 +1,15 @@
+import { jest } from '@jest/globals';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { SegmentsService } from './segments.service.js';
-import type { Repository } from 'typeorm';
+import type { DeepPartial, Repository } from 'typeorm';
 import type { Customer } from './entities/customer.entity.js';
 import type { Segment } from './entities/segment.entity.js';
-import type { CustomerSegment } from './entities/customer-segment.entity.js';
+import { CustomerSegment } from './entities/customer-segment.entity.js';
 import type { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import type { User } from '../users/entities/user.entity.js';
 import { SegmentAssignmentType } from './enums/customer.enum.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
+import type { CreateSegmentDto } from './dto/create-segment.dto.js';
 
 describe('SegmentsService', () => {
   let service: SegmentsService;
@@ -23,8 +26,8 @@ describe('SegmentsService', () => {
     name: 'Admin',
     email: 'admin@example.com',
     passwordHash: 'secret-hash',
-    role: 'ADMIN' as any,
-    status: 'ACTIVE' as any,
+    role: UserRole.ADMIN,
+    status: UserStatus.ACTIVE,
     lastLoginAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -70,6 +73,19 @@ describe('SegmentsService', () => {
     updatedAt: new Date(),
   };
 
+  const mockCriteria: CreateSegmentDto['criteria'] = {
+    logic: 'AND',
+    conditions: [
+      {
+        id: 'industry-technology',
+        field: 'industry',
+        operator: 'equals',
+        value: 'Technology',
+      },
+    ],
+    assignmentType: 'RULE',
+  };
+
   const createQueryBuilder = () => ({
     leftJoinAndSelect: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
@@ -107,13 +123,15 @@ describe('SegmentsService', () => {
       findOne: jest.fn(),
       create: jest
         .fn()
-        .mockImplementation((dto) => (dto ?? {}) as CustomerSegment) as any,
+        .mockImplementation((dto: DeepPartial<CustomerSegment>) =>
+          Object.assign(new CustomerSegment(), dto),
+        ),
       save: jest
         .fn()
-        .mockImplementation((item) => Promise.resolve(item)) as any,
+        .mockImplementation((item: CustomerSegment) => Promise.resolve(item)),
       remove: jest
         .fn()
-        .mockImplementation((item) => Promise.resolve(item)) as any,
+        .mockImplementation((item: CustomerSegment) => Promise.resolve(item)),
       count: jest.fn().mockResolvedValue(5),
       createQueryBuilder: jest.fn().mockReturnValue(countQb),
     };
@@ -143,11 +161,11 @@ describe('SegmentsService', () => {
       const result = await service.create({
         name: 'Enterprise Tech',
         createdBy: 'user-1',
-        criteria: mockSegment.criteria as any,
+        criteria: mockCriteria,
       });
 
       expect(result.id).toBe('segment-1');
-      expect((result.creator as any)?.passwordHash).toBeUndefined();
+      expect(result.creator).not.toHaveProperty('passwordHash');
     });
 
     it('rejects duplicate segment name', async () => {
@@ -158,7 +176,7 @@ describe('SegmentsService', () => {
         service.create({
           name: 'Enterprise Tech',
           createdBy: 'user-1',
-          criteria: mockSegment.criteria as any,
+          criteria: mockCriteria,
         }),
       ).rejects.toBeInstanceOf(ConflictException);
     });
@@ -175,7 +193,7 @@ describe('SegmentsService', () => {
       expect(customerSegmentsRepository.createQueryBuilder).toHaveBeenCalled();
       expect(result.data).toHaveLength(1);
       expect(result.data[0].customerCount).toBe(42);
-      expect((result.data[0].creator as any)?.passwordHash).toBeUndefined();
+      expect(result.data[0].creator).not.toHaveProperty('passwordHash');
     });
   });
 

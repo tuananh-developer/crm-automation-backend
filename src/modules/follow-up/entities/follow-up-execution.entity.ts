@@ -53,10 +53,10 @@ export class FollowUpExecution {
   providerMessageId!: string | null;
 
   @Column({ name: 'request_payload', type: 'jsonb', nullable: true })
-  requestPayload!: Record<string, any> | null;
+  requestPayload!: Record<string, unknown> | null;
 
   @Column({ name: 'response_payload', type: 'jsonb', nullable: true })
-  responsePayload!: Record<string, any> | null;
+  responsePayload!: Record<string, unknown> | null;
 
   @Column({ name: 'error_message', type: 'text', nullable: true })
   errorMessage!: string | null;

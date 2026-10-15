@@ -13,6 +13,10 @@ import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
 import { FollowUpExecution } from './entities/follow-up-execution.entity.js';
 import { LeadFollowUpEnrollment } from './entities/lead-follow-up-enrollment.entity.js';
+import { LeadFollowUpEnrollmentResponseDto } from './dto/lead-follow-up-enrollment-response.dto';
+import { FollowUpExecutionResponseDto } from './dto/follow-up-execution-response.dto.js';
+import { FollowUpExecutionMapper } from './mappers/follow-up-execution.mapper.js';
+import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
 import {
   FollowUpSequenceStatus,
   EnrollmentStatus,
@@ -50,11 +54,6 @@ export interface ExecuteFollowUpResult {
   message: string;
 }
 
-export interface EnrollLeadResult {
-  enrollment: LeadFollowUpEnrollment;
-  execution: FollowUpExecution | null;
-  message: string;
-}
 @Injectable()
 export class FollowUpService {
   private readonly logger = new Logger(FollowUpService.name);
@@ -224,7 +223,7 @@ export class FollowUpService {
       response =
         await this.n8nClientService.triggerWebhook<N8nFollowUpResponse>(
           this.getWebhookPath(),
-          execution.requestPayload as Record<string, any>,
+          execution.requestPayload as Record<string, unknown>,
         );
     } catch (error: unknown) {
       return this.handleFailure(
@@ -249,7 +248,7 @@ export class FollowUpService {
         enrollment,
         step,
         errorMessage,
-        response as Record<string, any> | null,
+        response as Record<string, unknown> | null,
         maxRetries,
       );
     }
@@ -259,15 +258,29 @@ export class FollowUpService {
 
   async findExecutions(
     query: QueryFollowUpExecutionDto,
-  ): Promise<FollowUpExecution[]> {
-    return this.executionsRepository.find({
+  ): Promise<PaginatedResponseDto<FollowUpExecutionResponseDto>> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const [executions, total] = await this.executionsRepository.findAndCount({
       where: {
         ...(query.enrollmentId ? { enrollmentId: query.enrollmentId } : {}),
         ...(query.stepId ? { stepId: query.stepId } : {}),
         ...(query.status ? { status: query.status } : {}),
       },
       order: { createdAt: 'DESC' },
+      take: limit,
+      skip: (page - 1) * limit,
     });
+
+    return {
+      data: FollowUpExecutionMapper.toResponseDtoArray(executions),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -416,7 +429,9 @@ export class FollowUpService {
     }
   }
 
-  async enrollLead(dto: EnrollLeadDto): Promise<EnrollLeadResult> {
+  async enrollLead(
+    dto: EnrollLeadDto,
+  ): Promise<LeadFollowUpEnrollmentResponseDto> {
     const lead = await this.leadsRepository.findOne({
       where: { id: dto.leadId },
     });
@@ -500,7 +515,7 @@ export class FollowUpService {
         retryCount: 0,
       });
 
-      const savedExecution = await executionsRepository.save(execution);
+      await executionsRepository.save(execution);
 
       await auditLogRepository.save(
         auditLogRepository.create({
@@ -526,20 +541,34 @@ export class FollowUpService {
         }),
       );
 
-      return {
-        enrollment: savedEnrollment,
-        execution: savedExecution,
-        message: `Lead '${dto.leadId}' enrolled in sequence '${dto.sequenceId}'. First step scheduled.`,
-      };
+      const responseDto = new LeadFollowUpEnrollmentResponseDto();
+      responseDto.id = savedEnrollment.id;
+      responseDto.leadId = savedEnrollment.leadId;
+      responseDto.sequenceId = savedEnrollment.sequenceId;
+      responseDto.currentStepId = savedEnrollment.currentStepId ?? null;
+      responseDto.status = savedEnrollment.status;
+      responseDto.startedAt = savedEnrollment.startedAt;
+      responseDto.pausedAt = savedEnrollment.pausedAt ?? null;
+      responseDto.completedAt = savedEnrollment.completedAt ?? null;
+      responseDto.cancelledAt = savedEnrollment.cancelledAt ?? null;
+      responseDto.assignedBy = savedEnrollment.assignedBy ?? null;
+      responseDto.cancellationReason =
+        savedEnrollment.cancellationReason ?? null;
+      responseDto.createdAt = savedEnrollment.createdAt;
+      responseDto.updatedAt = savedEnrollment.updatedAt;
+      responseDto.executionCount = 1;
+      // Optional relations: we are not loading them, so leave undefined
+      // lead, sequence, currentStep, assignedByUser are optional and we leave them undefined
+      return responseDto;
     });
   }
-
   async pauseEnrollment(
     id: string,
     dto: UpdateEnrollmentDto,
   ): Promise<LeadFollowUpEnrollment> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
+      relations: { executions: true },
     });
 
     if (!enrollment) {
@@ -597,6 +626,7 @@ export class FollowUpService {
   async resumeEnrollment(id: string): Promise<LeadFollowUpEnrollment> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
+      relations: { executions: true },
     });
 
     if (!enrollment) {
@@ -650,6 +680,7 @@ export class FollowUpService {
   ): Promise<LeadFollowUpEnrollment> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
+      relations: { executions: true },
     });
 
     if (!enrollment) {
@@ -727,7 +758,7 @@ export class FollowUpService {
       execution.status = ExecutionStatus.SUCCESS;
       execution.completedAt = completedAt;
       execution.providerMessageId = response.providerMessageId ?? null;
-      execution.responsePayload = response as Record<string, any>;
+      execution.responsePayload = response as Record<string, unknown>;
       execution.errorMessage = null;
 
       const savedExecution = await executionsRepository.save(execution);
@@ -822,7 +853,7 @@ export class FollowUpService {
     enrollment: LeadFollowUpEnrollment,
     step: FollowUpStep,
     errorMessage: string,
-    responsePayload: Record<string, any> | null,
+    responsePayload: Record<string, unknown> | null,
     maxRetries: number,
   ): Promise<ExecuteFollowUpResult> {
     const failedAt = new Date();
@@ -1029,18 +1060,20 @@ export class FollowUpService {
       return [];
     }
 
-    const conditionList = (
-      Array.isArray(conditions)
-        ? conditions
-        : Array.isArray(conditions.conditions)
-          ? conditions.conditions
-          : [conditions]
-    ) as unknown[];
+    const conditionList: unknown[] = Array.isArray(conditions)
+      ? conditions
+      : Array.isArray(conditions.conditions)
+        ? conditions.conditions
+        : [conditions];
 
     const failed: string[] = [];
 
     for (const entry of conditionList) {
-      const condition = entry as Record<string, unknown>;
+      if (!this.isRecord(entry)) {
+        continue;
+      }
+
+      const condition = entry;
       const field = condition?.field;
       const operator =
         typeof condition?.operator === 'string' ? condition.operator : 'equals';
@@ -1067,22 +1100,70 @@ export class FollowUpService {
     lead: Lead,
     customer: Customer | null,
   ): unknown {
-    if (field.startsWith('lead.') || field.startsWith('customer.')) {
-      const [scope, property] = field.split('.');
-      const source = scope === 'customer' ? customer : lead;
-      return source
-        ? (source as unknown as Record<string, unknown>)[property]
+    const leadFields: Record<string, unknown> = {
+      id: lead.id,
+      firstName: lead.firstName,
+      lastName: lead.lastName,
+      email: lead.email,
+      phone: lead.phone,
+      companyName: lead.companyName,
+      companyWebsite: lead.companyWebsite,
+      jobTitle: lead.jobTitle,
+      companySize: lead.companySize,
+      industry: lead.industry,
+      status: lead.status,
+      sourceId: lead.sourceId,
+      ownerId: lead.ownerId,
+      convertedCustomerId: lead.convertedCustomerId,
+      convertedBy: lead.convertedBy,
+      convertedAt: lead.convertedAt,
+      notes: lead.notes,
+      createdAt: lead.createdAt,
+      updatedAt: lead.updatedAt,
+    };
+    const customerFields: Record<string, unknown> = customer
+      ? {
+          id: customer.id,
+          name: customer.name,
+          email: customer.email,
+          phone: customer.phone,
+          companyName: customer.companyName,
+          companyWebsite: customer.companyWebsite,
+          jobTitle: customer.jobTitle,
+          companySize: customer.companySize,
+          industry: customer.industry,
+          status: customer.status,
+          createdBy: customer.createdBy,
+          updatedBy: customer.updatedBy,
+          notes: customer.notes,
+          createdAt: customer.createdAt,
+          updatedAt: customer.updatedAt,
+        }
+      : {};
+
+    const separatorIndex = field.indexOf('.');
+    if (separatorIndex >= 0) {
+      const scope = field.slice(0, separatorIndex);
+      const property = field.slice(separatorIndex + 1);
+      const fields =
+        scope === 'lead'
+          ? leadFields
+          : scope === 'customer'
+            ? customerFields
+            : null;
+      return fields && Object.hasOwn(fields, property)
+        ? fields[property]
         : null;
     }
 
-    const leadValue = (lead as unknown as Record<string, unknown>)[field];
-    if (leadValue !== undefined && leadValue !== null) {
-      return leadValue;
+    if (Object.hasOwn(leadFields, field) && leadFields[field] != null) {
+      return leadFields[field];
     }
+    return Object.hasOwn(customerFields, field) ? customerFields[field] : null;
+  }
 
-    return customer
-      ? (customer as unknown as Record<string, unknown>)[field]
-      : null;
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 
   private compare(

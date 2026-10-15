@@ -40,6 +40,8 @@ class SegmentCriterionDto {
 }
 
 class SegmentCriteriaDto {
+  [key: string]: unknown;
+
   @IsString()
   @IsIn(['AND', 'OR'])
   logic!: 'AND' | 'OR';

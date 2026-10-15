@@ -18,6 +18,15 @@ import {
   QuerySegmentDto,
   UpdateSegmentDto,
 } from './dto/index.js';
+import { SegmentResponseDto } from './dto/segment-response.dto.js';
+import {
+  EvaluateSegmentBulkResponseDto,
+  EvaluateSegmentResponseDto,
+} from './dto/segment-response.dto.js';
+import { CustomerResponseDto } from './dto/customer-response.dto.js';
+import { CustomerMapper } from './mappers/customer.mapper.js';
+import { SegmentMapper } from './mappers/segment.mapper.js';
+import { PaginatedResponseDto } from '../../common/index.js';
 import { SegmentAssignmentType } from './enums/customer.enum.js';
 
 @Injectable()
@@ -39,7 +48,7 @@ export class SegmentsService {
     private readonly usersRepository: Repository<User>,
   ) {}
 
-  async create(dto: CreateSegmentDto): Promise<Segment> {
+  async create(dto: CreateSegmentDto): Promise<SegmentResponseDto> {
     const user = await this.usersRepository.findOne({
       where: { id: dto.createdBy },
     });
@@ -69,15 +78,14 @@ export class SegmentsService {
 
     const saved = await this.segmentsRepository.save(segment);
 
-    // Attach creator relation from already-fetched user and strip password hash
-    return this.withoutUserHashes({
-      ...saved,
-      creator: user,
-      updater: null,
-    });
+    saved.creator = user;
+    saved.updater = null;
+    return SegmentMapper.toResponseDto(saved);
   }
 
-  async findAll(query: QuerySegmentDto) {
+  async findAll(
+    query: QuerySegmentDto,
+  ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
@@ -121,14 +129,13 @@ export class SegmentsService {
     }
 
     const dataWithCount = data.map((segment) =>
-      this.withoutUserHashes({
-        ...segment,
+      Object.assign(segment, {
         customerCount: countMap.get(segment.id) ?? 0,
       }),
     );
 
     return {
-      data: dataWithCount,
+      data: SegmentMapper.toResponseDtoArray(dataWithCount),
       meta: {
         page,
         limit,
@@ -138,7 +145,7 @@ export class SegmentsService {
     };
   }
 
-  async findOne(id: string): Promise<Segment & { customerCount: number }> {
+  async findOne(id: string): Promise<SegmentResponseDto> {
     const segment = await this.segmentsRepository.findOne({
       where: { id },
       relations: {
@@ -155,13 +162,12 @@ export class SegmentsService {
       where: { segmentId: id },
     });
 
-    return this.withoutUserHashes({
-      ...segment,
-      customerCount,
-    });
+    return SegmentMapper.toResponseDto(
+      Object.assign(segment, { customerCount }),
+    );
   }
 
-  async update(id: string, dto: UpdateSegmentDto): Promise<Segment> {
+  async update(id: string, dto: UpdateSegmentDto): Promise<SegmentResponseDto> {
     const segment = await this.segmentsRepository.findOne({
       where: { id },
       relations: {
@@ -221,12 +227,9 @@ export class SegmentsService {
 
     const saved = await this.segmentsRepository.save(segment);
 
-    // Strip password hashes
-    return this.withoutUserHashes({
-      ...saved,
-      creator: segment.creator,
-      updater,
-    });
+    saved.creator = segment.creator;
+    saved.updater = updater;
+    return SegmentMapper.toResponseDto(saved);
   }
 
   async remove(id: string) {
@@ -247,7 +250,10 @@ export class SegmentsService {
     };
   }
 
-  async getCustomers(segmentId: string, query: QuerySegmentDto) {
+  async getCustomers(
+    segmentId: string,
+    query: QuerySegmentDto,
+  ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     await this.ensureSegmentExists(segmentId);
 
     const page = query.page ?? 1;
@@ -256,8 +262,9 @@ export class SegmentsService {
     const qb = this.customerSegmentsRepository
       .createQueryBuilder('assignment')
       .leftJoinAndSelect('assignment.customer', 'customer')
+      .leftJoinAndSelect('assignment.customer.creator', 'customerCreator')
+      .leftJoinAndSelect('assignment.customer.updater', 'customerUpdater')
       .leftJoinAndSelect('assignment.segment', 'segment')
-      .leftJoinAndSelect('assignment.assignedByUser', 'assignedByUser')
       .where('assignment.segmentId = :segmentId', { segmentId });
 
     if (query.search) {
@@ -267,14 +274,18 @@ export class SegmentsService {
       );
     }
 
-    qb.orderBy('assignment.assignedAt', 'DESC')
+    qb.orderBy('customer.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
     const [data, total] = await qb.getManyAndCount();
 
+    const customers = data.flatMap((assignment) =>
+      assignment.customer ? [assignment.customer] : [],
+    );
+
     return {
-      data,
+      data: CustomerMapper.toResponseDtoArray(customers),
       meta: {
         page,
         limit,
@@ -283,10 +294,12 @@ export class SegmentsService {
       },
     };
   }
-
-  async evaluateCustomer(segmentId: string, dto: EvaluateSegmentDto) {
+  async evaluateCustomer(
+    segmentId: string,
+    dto: EvaluateSegmentDto,
+  ): Promise<EvaluateSegmentResponseDto> {
+    await this.ensureSegmentExists(segmentId);
     const segment = await this.getSegmentForEvaluation(segmentId);
-
     const customer = await this.customersRepository.findOne({
       where: { id: dto.customerId },
       relations: {
@@ -336,8 +349,8 @@ export class SegmentsService {
         segmentId: segment.id,
         segmentName: segment.name,
         assignmentType: saved.assignmentType,
-        confidence: saved.confidence,
-        assignmentReason: saved.assignedReason,
+        confidence: saved.confidence as number,
+        assignmentReason: saved.assignedReason as string,
         assignedAt: saved.assignedAt,
         assignedBy: saved.assignedBy,
         status: 'COMPLETED',
@@ -363,8 +376,10 @@ export class SegmentsService {
       matched: false,
     };
   }
-
-  async evaluateAll(segmentId: string, dto: EvaluateSegmentBulkDto) {
+  async evaluateAll(
+    segmentId: string,
+    dto: EvaluateSegmentBulkDto,
+  ): Promise<EvaluateSegmentBulkResponseDto> {
     const segment = await this.getSegmentForEvaluation(segmentId);
 
     if (dto.assignmentType === SegmentAssignmentType.AI) {
@@ -450,30 +465,6 @@ export class SegmentsService {
       message: `Evaluated ${customers.length} customer(s)`,
     };
   }
-
-  /**
-   * `creator` / `updater` are User relations; their password hash must never
-   * leave the API.
-   */
-  private withoutUserHashes<
-    T extends { creator?: User | null; updater?: User | null },
-  >(segment: T): T {
-    const strip = (user?: User | null) => {
-      if (!user) return user;
-
-      const { passwordHash, ...safeUser } = user;
-      void passwordHash;
-
-      return safeUser as User;
-    };
-
-    return {
-      ...segment,
-      creator: strip(segment.creator),
-      updater: strip(segment.updater),
-    };
-  }
-
   private async ensureSegmentExists(id: string) {
     const segment = await this.segmentsRepository.findOne({
       where: { id },

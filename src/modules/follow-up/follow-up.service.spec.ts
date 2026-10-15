@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import {
   BadRequestException,
   ConflictException,
@@ -6,6 +7,7 @@ import {
 import type { ConfigService } from '@nestjs/config';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
 import { FollowUpService } from './follow-up.service.js';
+import type { ExecuteFollowUpResult } from './follow-up.service.js';
 import { EnrollmentStatus, ExecutionStatus } from './enums/follow-up.enum.js';
 import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
@@ -121,6 +123,7 @@ describe('FollowUpService', () => {
       create: jest.fn(),
       save: jest.fn(),
       find: jest.fn(),
+      findAndCount: jest.fn(),
     };
 
     leadsRepository = {
@@ -137,14 +140,13 @@ describe('FollowUpService', () => {
     };
 
     (executionsRepository.create as jest.Mock).mockImplementation(
-      (data: Partial<FollowUpExecution>) =>
-        ({ id: 'execution-1', ...data }) as FollowUpExecution,
+      (data: Partial<FollowUpExecution>) => ({ id: 'execution-1', ...data }),
     );
     (executionsRepository.save as jest.Mock).mockImplementation(
       (execution: FollowUpExecution) => Promise.resolve(execution),
     );
     (auditLogRepository.create as jest.Mock).mockImplementation(
-      (data: Partial<AuditLog>) => data as AuditLog,
+      (data: Partial<AuditLog>) => data,
     );
     (auditLogRepository.save as jest.Mock).mockImplementation(
       (auditLog: AuditLog) => Promise.resolve(auditLog),
@@ -587,19 +589,28 @@ describe('FollowUpService', () => {
   });
 
   describe('findExecutions', () => {
-    it('should return the execution history of an enrollment', async () => {
-      (executionsRepository.find as jest.Mock).mockResolvedValue([
-        { id: 'execution-1' },
+    it('should return paginated execution history of an enrollment', async () => {
+      (executionsRepository.findAndCount as jest.Mock).mockResolvedValue([
+        [{ id: 'execution-1' }],
+        1,
       ]);
 
       const result = await service.findExecutions({
         enrollmentId: 'enrollment-1',
       });
 
-      expect(result).toEqual([{ id: 'execution-1' }]);
-      expect(executionsRepository.find).toHaveBeenCalledWith(
+      expect(result.data).toHaveLength(1);
+      expect(result.meta).toEqual({
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      });
+      expect(executionsRepository.findAndCount).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { enrollmentId: 'enrollment-1' },
+          take: 20,
+          skip: 0,
         }),
       );
     });
@@ -631,9 +642,27 @@ describe('FollowUpService', () => {
       } as FollowUpExecution;
 
       (executionsRepository.find as jest.Mock).mockResolvedValue([pendingExec]);
-      const executeSpy = jest
-        .spyOn(service, 'execute')
-        .mockResolvedValue({} as any);
+      const executeSpy = jest.spyOn(service, 'execute').mockResolvedValue({
+        execution: {
+          id: 'execution-1',
+          enrollmentId: 'enrollment-1',
+          stepId: 'step-1',
+          status: ExecutionStatus.SUCCESS,
+          scheduledAt: null,
+          startedAt: null,
+          completedAt: null,
+          providerMessageId: null,
+          requestPayload: null,
+          responsePayload: null,
+          errorMessage: null,
+          retryCount: 0,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        status: ExecutionStatus.SUCCESS,
+        retryCount: 0,
+        message: 'Follow-up executed successfully',
+      } satisfies ExecuteFollowUpResult);
 
       await service.processPendingExecutions();
 

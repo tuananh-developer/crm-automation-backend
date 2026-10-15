@@ -25,7 +25,7 @@ export class Segment {
   description!: string | null;
 
   @Column({ name: 'criteria', type: 'jsonb', nullable: true })
-  criteria!: Record<string, any> | null;
+  criteria!: Record<string, unknown> | null;
 
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive!: boolean;
