@@ -7,6 +7,7 @@ import {
   Min,
   MaxLength,
 } from 'class-validator';
+import { ExecutionStatus } from '../enums/follow-up.enum.js';
 import type { FollowUpExecution } from '../entities/follow-up-execution.entity.js';
 
 export class FollowUpStepResponseDto {
@@ -23,7 +24,7 @@ export class FollowUpStepResponseDto {
   @Min(0)
   stepOrder!: number;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: 'Thời gian chờ trước khi thực hiện bước (phút)',
   })
   @IsInt()
@@ -40,37 +41,60 @@ export class FollowUpStepResponseDto {
   @MaxLength(50)
   actionType!: string;
 
-  @ApiPropertyOptional({ description: 'Chủ đề mẫu' })
+  @ApiProperty({ type: String, nullable: true, description: 'Chủ đề mẫu' })
   subjectTemplate!: string | null;
 
-  @ApiPropertyOptional({ description: 'Nội dung mẫu' })
+  @ApiProperty({ type: String, nullable: true, description: 'Nội dung mẫu' })
   contentTemplate!: string | null;
 
-  @ApiPropertyOptional({ description: 'Điều kiện thực hiện (JSON)' })
+  @ApiProperty({
+    type: 'object',
+    nullable: true,
+    additionalProperties: true,
+    description: 'Điều kiện thực hiện (JSON)',
+  })
   conditions!: Record<string, unknown> | null;
 
-  @ApiPropertyOptional({ description: 'Siêu dữ liệu (JSON)' })
+  @ApiProperty({
+    type: 'object',
+    nullable: true,
+    additionalProperties: true,
+    description: 'Siêu dữ liệu (JSON)',
+  })
   metadata!: Record<string, unknown> | null;
 
-  @ApiPropertyOptional({ description: 'Cấu hình hành động' })
+  @ApiProperty({
+    type: 'object',
+    nullable: true,
+    additionalProperties: true,
+    description: 'Cấu hình hành động',
+  })
   actionConfig!: Record<string, unknown> | null;
 
-  @ApiPropertyOptional({ description: 'Có đang hoạt động không' })
+  @ApiProperty({ description: 'Có đang hoạt động không' })
   @IsOptional()
   isActive!: boolean;
 
-  @ApiPropertyOptional({ description: 'Thời gian tạo' })
+  @ApiProperty({ description: 'Thời gian tạo' })
   createdAt!: Date;
 
-  @ApiPropertyOptional({ description: 'Thời gian cập nhật' })
+  @ApiProperty({ description: 'Thời gian cập nhật' })
   updatedAt!: Date;
 
   // Execution information (optional, only included when specifically requested)
-  @ApiPropertyOptional({ description: 'Thực thi gần nhất của bước này' })
-  latestExecution?: Partial<FollowUpExecution> & {
-    id: string;
-    status: string;
-    createdAt: Date;
-    updatedAt: Date;
-  };
+  @ApiPropertyOptional({
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      status: { type: 'string', enum: Object.values(ExecutionStatus) },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time' },
+    },
+    required: ['id', 'status', 'createdAt', 'updatedAt'],
+    description: 'Thực thi gần nhất của bước này',
+  })
+  latestExecution?: Pick<
+    FollowUpExecution,
+    'id' | 'status' | 'createdAt' | 'updatedAt'
+  >;
 }

@@ -33,21 +33,33 @@ export class FollowUpSequenceResponseDto {
   @MaxLength(150)
   name!: string;
 
-  @ApiPropertyOptional({ description: 'Mô tả chuỗi follow-up' })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'Mô tả chuỗi follow-up',
+  })
   description!: string | null;
 
-  @ApiPropertyOptional({ description: 'Trạng thái chuỗi follow-up' })
+  @ApiProperty({
+    enum: FollowUpSequenceStatus,
+    description: 'Trạng thái chuỗi follow-up',
+  })
   @IsOptional()
   status!: FollowUpSequenceStatus;
 
-  @ApiPropertyOptional({ description: 'Có đang hoạt động không' })
+  @ApiProperty({ description: 'Có đang hoạt động không' })
   isActive!: boolean;
 
-  @ApiPropertyOptional({ description: 'ID người tạo' })
+  @ApiProperty({ description: 'ID người tạo' })
   @IsUUID()
   createdBy!: string;
 
-  @ApiPropertyOptional({ description: 'ID người cập nhật' })
+  @ApiProperty({
+    type: String,
+    format: 'uuid',
+    nullable: true,
+    description: 'ID người cập nhật',
+  })
   @IsUUID()
   updatedBy!: string | null;
 
@@ -56,19 +68,19 @@ export class FollowUpSequenceResponseDto {
   creator?: UserResponseDto;
 
   @ApiPropertyOptional({ type: () => UserResponseDto })
-  updater?: UserResponseDto | null;
+  updater?: UserResponseDto;
 
-  @ApiPropertyOptional({ description: 'Thời gian tạo' })
+  @ApiProperty({ description: 'Thời gian tạo' })
   createdAt!: Date;
 
-  @ApiPropertyOptional({ description: 'Thời gian cập nhật' })
+  @ApiProperty({ description: 'Thời gian cập nhật' })
   updatedAt!: Date;
 
   // Steps in the sequence
   @ApiPropertyOptional({ type: () => [FollowUpStepResponseDto] })
   steps?: FollowUpStepResponseDto[];
 
-  @ApiPropertyOptional({ description: 'Số lượng bước trong chuỗi' })
+  @ApiProperty({ description: 'Số lượng bước trong chuỗi' })
   @IsInt()
   @Min(0)
   stepCount!: number;

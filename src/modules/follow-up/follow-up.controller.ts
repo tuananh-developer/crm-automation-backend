@@ -24,7 +24,10 @@ import {
   QueryFollowUpExecutionDto,
   UpdateEnrollmentDto,
 } from './dto/index.js';
-import { PaginatedResponseDto } from '../../common/index.js';
+import {
+  ApiPaginatedResponse,
+  PaginatedResponseDto,
+} from '../../common/index.js';
 import { FollowUpExecutionResponseDto } from '@/modules/follow-up/dto/follow-up-execution-response.dto';
 import { LeadFollowUpEnrollmentResponseDto } from '@/modules/follow-up/dto/lead-follow-up-enrollment-response.dto';
 import { FollowUpExecutionMapper } from './mappers/follow-up-execution.mapper.js';
@@ -200,11 +203,10 @@ export class FollowUpController {
   })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiResponse({
-    status: 200,
-    description: 'List of follow-up executions returned successfully.',
-    type: PaginatedResponseDto,
-  })
+  @ApiPaginatedResponse(
+    FollowUpExecutionResponseDto,
+    'List of follow-up executions returned successfully.',
+  )
   findExecutions(
     @Query() query: QueryFollowUpExecutionDto,
   ): Promise<PaginatedResponseDto<FollowUpExecutionResponseDto>> {

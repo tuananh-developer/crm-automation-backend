@@ -3,6 +3,7 @@ import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CustomersService } from './customers.service.js';
 import { QueryCustomerDto } from './dto/index.js';
 import { CustomerResponseDto } from './dto/customer-response.dto.js';
+import { ApiPaginatedResponse } from '../../common/index.js';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
 
 @ApiTags('Customers')
@@ -16,7 +17,7 @@ export class CustomersController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, type: String })
-  @ApiResponse({ status: 200, type: PaginatedResponseDto })
+  @ApiPaginatedResponse(CustomerResponseDto)
   findAll(
     @Query() query: QueryCustomerDto,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {

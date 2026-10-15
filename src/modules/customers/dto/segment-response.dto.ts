@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsInt, IsUUID, Min, MaxLength } from 'class-validator';
 import { UserResponseDto } from '../../users/dto/user-response.dto';
+import { SegmentAssignmentType } from '../enums/customer.enum.js';
 
 export class SegmentResponseDto {
   @ApiProperty({ description: 'ID định danh của phân khúc' })
@@ -12,20 +13,30 @@ export class SegmentResponseDto {
   @MaxLength(150)
   name!: string;
 
-  @ApiPropertyOptional({ description: 'Mô tả phân khúc' })
+  @ApiProperty({ type: String, nullable: true, description: 'Mô tả phân khúc' })
   description!: string | null;
 
-  @ApiPropertyOptional({ description: 'Tiêu chí phân khúc (JSON)' })
+  @ApiProperty({
+    type: 'object',
+    nullable: true,
+    additionalProperties: true,
+    description: 'Tiêu chí phân khúc (JSON)',
+  })
   criteria!: Record<string, unknown> | null;
 
-  @ApiPropertyOptional({ description: 'Trạng thái hoạt động' })
+  @ApiProperty({ description: 'Trạng thái hoạt động' })
   isActive!: boolean;
 
-  @ApiPropertyOptional({ description: 'ID người tạo' })
+  @ApiProperty({ description: 'ID người tạo' })
   @IsUUID()
   createdBy!: string;
 
-  @ApiPropertyOptional({ description: 'ID người cập nhật' })
+  @ApiProperty({
+    type: String,
+    format: 'uuid',
+    nullable: true,
+    description: 'ID người cập nhật',
+  })
   @IsUUID()
   updatedBy!: string | null;
 
@@ -34,15 +45,15 @@ export class SegmentResponseDto {
   creator?: UserResponseDto;
 
   @ApiPropertyOptional({ type: () => UserResponseDto })
-  updater?: UserResponseDto | null;
+  updater?: UserResponseDto;
 
-  @ApiPropertyOptional({ description: 'Thời gian tạo' })
+  @ApiProperty({ description: 'Thời gian tạo' })
   createdAt!: Date;
 
-  @ApiPropertyOptional({ description: 'Thời gian cập nhật' })
+  @ApiProperty({ description: 'Thời gian cập nhật' })
   updatedAt!: Date;
 
-  @ApiPropertyOptional({ description: 'Số lượng khách hàng trong phân khúc' })
+  @ApiProperty({ description: 'Số lượng khách hàng trong phân khúc' })
   @IsInt()
   @Min(0)
   customerCount!: number;
@@ -61,8 +72,8 @@ export class EvaluateSegmentResponseDto {
   @ApiProperty()
   segmentName!: string;
 
-  @ApiProperty()
-  assignmentType!: string;
+  @ApiProperty({ enum: SegmentAssignmentType })
+  assignmentType!: SegmentAssignmentType;
 
   @ApiProperty()
   confidence!: number;
@@ -73,7 +84,7 @@ export class EvaluateSegmentResponseDto {
   @ApiProperty()
   assignedAt!: Date;
 
-  @ApiProperty()
+  @ApiProperty({ type: String, nullable: true })
   assignedBy!: string | null;
 
   @ApiProperty()

@@ -25,7 +25,10 @@ import {
   QuerySegmentDto,
   UpdateSegmentDto,
 } from './dto/index.js';
-import { PaginatedResponseDto } from '../../common/index.js';
+import {
+  ApiPaginatedResponse,
+  PaginatedResponseDto,
+} from '../../common/index.js';
 import {
   EvaluateSegmentBulkResponseDto,
   EvaluateSegmentResponseDto,
@@ -81,11 +84,7 @@ export class SegmentsController {
     enum: [true, false],
     description: 'Filter segments by active status',
   })
-  @ApiResponse({
-    status: 200,
-    description: 'Paginated list of segments.',
-    type: PaginatedResponseDto,
-  })
+  @ApiPaginatedResponse(SegmentResponseDto, 'Paginated list of segments.')
   findAll(
     @Query() query: QuerySegmentDto,
   ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
@@ -151,11 +150,10 @@ export class SegmentsController {
   })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiResponse({
-    status: 200,
-    description: 'Paginated list of customers in the segment.',
-    type: PaginatedResponseDto,
-  })
+  @ApiPaginatedResponse(
+    CustomerResponseDto,
+    'Paginated list of customers in the segment.',
+  )
   getCustomers(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: QuerySegmentDto,

@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsInt, IsUUID, Min } from 'class-validator';
-import { EnrollmentStatus } from '../enums/follow-up.enum.js';
+import {
+  EnrollmentStatus,
+  FollowUpSequenceStatus,
+} from '../enums/follow-up.enum.js';
 import type { Lead } from '../../leads/entities/lead.entity.js';
 import type { FollowUpSequence } from '../entities/follow-up-sequence.entity.js';
 import type { FollowUpStep } from '../entities/follow-up-step.entity.js';
@@ -19,49 +22,110 @@ export class LeadFollowUpEnrollmentResponseDto {
   @IsUUID()
   sequenceId!: string;
 
-  @ApiPropertyOptional({ description: 'ID của bước follow-up hiện tại' })
+  @ApiProperty({
+    type: String,
+    format: 'uuid',
+    nullable: true,
+    description: 'ID của bước follow-up hiện tại',
+  })
   @IsUUID()
   currentStepId!: string | null;
 
   @ApiProperty({ enum: EnrollmentStatus, description: 'Trạng thái đăng ký' })
   status!: EnrollmentStatus;
 
-  @ApiPropertyOptional({ description: 'Thời gian bắt đầu đăng ký' })
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    description: 'Thời gian bắt đầu đăng ký',
+  })
   startedAt!: Date | null;
 
-  @ApiPropertyOptional({ description: 'Thời gian tạm dừng đăng ký (nếu có)' })
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    description: 'Thời gian tạm dừng đăng ký (nếu có)',
+  })
   pausedAt!: Date | null;
 
-  @ApiPropertyOptional({ description: 'Thời gian hoàn thành đăng ký' })
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    description: 'Thời gian hoàn thành đăng ký',
+  })
   completedAt!: Date | null;
 
-  @ApiPropertyOptional({ description: 'Thời gian hủy đăng ký (nếu có)' })
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    description: 'Thời gian hủy đăng ký (nếu có)',
+  })
   cancelledAt!: Date | null;
 
-  @ApiPropertyOptional({ description: 'ID người gán đăng ký này' })
+  @ApiProperty({
+    type: String,
+    format: 'uuid',
+    nullable: true,
+    description: 'ID người gán đăng ký này',
+  })
   @IsUUID()
   assignedBy!: string | null;
 
-  @ApiPropertyOptional({ description: 'Lý do hủy đăng ký (nếu có)' })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'Lý do hủy đăng ký (nếu có)',
+  })
   cancellationReason!: string | null;
 
-  @ApiPropertyOptional({ description: 'Thời gian tạo' })
+  @ApiProperty({ description: 'Thời gian tạo' })
   createdAt!: Date;
 
-  @ApiPropertyOptional({ description: 'Thời gian cập nhật' })
+  @ApiProperty({ description: 'Thời gian cập nhật' })
   updatedAt!: Date;
 
   // Related information (optional, only included when specifically requested)
-  @ApiPropertyOptional({ description: 'Thông tinリード liên quan' })
+  @ApiPropertyOptional({
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      firstName: { type: 'string' },
+      lastName: { type: 'string', nullable: true },
+      email: { type: 'string', format: 'email' },
+      phone: { type: 'string', nullable: true },
+      companyName: { type: 'string', nullable: true },
+    },
+    required: ['id', 'firstName', 'lastName', 'email', 'phone', 'companyName'],
+    description: 'Thông tin lead liên quan',
+  })
   lead?: Pick<
     Lead,
     'id' | 'firstName' | 'lastName' | 'email' | 'phone' | 'companyName'
   >;
 
-  @ApiPropertyOptional({ description: 'Thông tin chuỗi follow-up liên quan' })
+  @ApiPropertyOptional({
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      name: { type: 'string' },
+      status: { type: 'string', enum: Object.values(FollowUpSequenceStatus) },
+      isActive: { type: 'boolean' },
+    },
+    required: ['id', 'name', 'status', 'isActive'],
+    description: 'Thông tin chuỗi follow-up liên quan',
+  })
   sequence?: Pick<FollowUpSequence, 'id' | 'name' | 'status' | 'isActive'>;
 
   @ApiPropertyOptional({
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      sequenceId: { type: 'string', format: 'uuid' },
+      stepOrder: { type: 'integer' },
+      channel: { type: 'string' },
+      actionType: { type: 'string' },
+    },
+    required: ['id', 'sequenceId', 'stepOrder', 'channel', 'actionType'],
     description: 'Thông tin bước follow-up hiện tại (nếu có)',
   })
   currentStep?: Pick<
@@ -69,10 +133,19 @@ export class LeadFollowUpEnrollmentResponseDto {
     'id' | 'sequenceId' | 'stepOrder' | 'channel' | 'actionType'
   >;
 
-  @ApiPropertyOptional({ description: 'Thông tin người gán đăng ký (nếu có)' })
+  @ApiPropertyOptional({
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      name: { type: 'string' },
+      email: { type: 'string', format: 'email' },
+    },
+    required: ['id', 'name', 'email'],
+    description: 'Thông tin người gán đăng ký (nếu có)',
+  })
   assignedByUser?: Pick<User, 'id' | 'name' | 'email'>;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: 'Số lượng thực thi liên quan đến đăng ký này',
   })
   @IsInt()

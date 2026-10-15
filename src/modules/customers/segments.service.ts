@@ -9,7 +9,6 @@ import { In, Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
-import { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import {
   CreateSegmentDto,
@@ -40,9 +39,6 @@ export class SegmentsService {
 
     @InjectRepository(CustomerSegment)
     private readonly customerSegmentsRepository: Repository<CustomerSegment>,
-
-    @InjectRepository(LeadScore)
-    private readonly leadScoresRepository: Repository<LeadScore>,
 
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
@@ -321,7 +317,7 @@ export class SegmentsService {
       );
     }
 
-    const evaluation = await this.evaluateRule(segment, customer);
+    const evaluation = this.evaluateRule(segment, customer);
 
     const existing = await this.customerSegmentsRepository.findOne({
       where: {
@@ -388,29 +384,29 @@ export class SegmentsService {
       );
     }
 
-    const customers = dto.customerIds?.length
-      ? await this.customersRepository.find({
-          where: dto.customerIds.map((id) => ({ id })),
-          relations: {
-            convertedLeads: {
-              scores: true,
-            },
-          },
-        })
-      : await this.customersRepository.find({
-          relations: {
-            convertedLeads: {
-              scores: true,
-            },
-          },
-        });
+    const relations = {
+      convertedLeads: {
+        scores: true,
+      },
+    };
+    const customerIds =
+      dto.customerIds === undefined ? undefined : [...new Set(dto.customerIds)];
+    const customers =
+      customerIds === undefined
+        ? await this.customersRepository.find({ relations })
+        : customerIds.length === 0
+          ? []
+          : await this.customersRepository.find({
+              where: customerIds.map((id) => ({ id })),
+              relations,
+            });
 
     const BATCH_SIZE = 50;
     let matched = 0;
 
     for (let i = 0; i < customers.length; i += BATCH_SIZE) {
       const batch = customers.slice(i, i + BATCH_SIZE);
-      const customerIdsInBatch = batch.map((c) => c.id);
+      const customerIdsInBatch = batch.map((customer) => customer.id);
 
       const existingAssignments = await this.customerSegmentsRepository.find({
         where: {
@@ -419,14 +415,17 @@ export class SegmentsService {
         },
       });
       const existingMap = new Map(
-        existingAssignments.map((a) => [a.customerId, a]),
+        existingAssignments.map((assignment) => [
+          assignment.customerId,
+          assignment,
+        ]),
       );
 
       const toSave: CustomerSegment[] = [];
       const toRemove: CustomerSegment[] = [];
 
       for (const customer of batch) {
-        const evaluation = await this.evaluateRule(segment, customer);
+        const evaluation = this.evaluateRule(segment, customer);
         const existing = existingMap.get(customer.id);
 
         if (evaluation.matched) {
@@ -499,14 +498,14 @@ export class SegmentsService {
     return segment;
   }
 
-  private async evaluateRule(
+  private evaluateRule(
     segment: Segment,
     customer: Customer,
-  ): Promise<{
+  ): {
     matched: boolean;
     confidence: number;
     reason: string;
-  }> {
+  } {
     const criteria = segment.criteria as {
       logic?: 'AND' | 'OR';
       conditions?: Array<{
@@ -532,10 +531,7 @@ export class SegmentsService {
     const reasons: string[] = [];
 
     for (const condition of conditions) {
-      const actualValue = await this.getCustomerFieldValue(
-        customer,
-        condition.field,
-      );
+      const actualValue = this.getCustomerFieldValue(customer, condition.field);
 
       const matched = this.compareValue(
         actualValue,
@@ -560,10 +556,10 @@ export class SegmentsService {
     };
   }
 
-  private async getCustomerFieldValue(
+  private getCustomerFieldValue(
     customer: Customer,
     field: string,
-  ): Promise<string | number | null> {
+  ): string | number | null {
     switch (field) {
       case 'industry':
         return customer.industry;
@@ -591,22 +587,21 @@ export class SegmentsService {
     }
   }
 
-  private async getLatestLeadScore(customer: Customer): Promise<number | null> {
+  private getLatestLeadScore(customer: Customer): number | null {
     const convertedLeads = customer.convertedLeads ?? [];
+    let latestScore: number | null = null;
+    let latestCreatedAt: Date | null = null;
 
-    if (!convertedLeads.length) {
-      return null;
+    for (const lead of convertedLeads) {
+      for (const score of lead.scores ?? []) {
+        if (latestCreatedAt === null || score.createdAt > latestCreatedAt) {
+          latestCreatedAt = score.createdAt;
+          latestScore = Number(score.score);
+        }
+      }
     }
 
-    const leadIds = convertedLeads.map((lead) => lead.id);
-
-    const score = await this.leadScoresRepository
-      .createQueryBuilder('score')
-      .where('score.leadId IN (:...leadIds)', { leadIds })
-      .orderBy('score.createdAt', 'DESC')
-      .getOne();
-
-    return score ? Number(score.score) : null;
+    return latestScore;
   }
 
   private compareValue(

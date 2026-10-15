@@ -16,16 +16,16 @@ export class CustomerSegmentSummaryResponseDto {
   @ApiProperty()
   id!: string;
 
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, nullable: true })
   name!: string | null;
 
-  @ApiProperty()
+  @ApiProperty({ enum: SegmentAssignmentType })
   assignmentType!: SegmentAssignmentType;
 
-  @ApiPropertyOptional()
+  @ApiProperty({ type: Number, nullable: true })
   confidence!: number | null;
 
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, nullable: true })
   assignedReason!: string | null;
 
   @ApiProperty()
@@ -39,19 +39,19 @@ export class CustomerSegmentResponseDto {
   @ApiProperty()
   segmentId!: string;
 
-  @ApiProperty()
+  @ApiProperty({ enum: SegmentAssignmentType })
   assignmentType!: SegmentAssignmentType;
 
-  @ApiPropertyOptional()
+  @ApiProperty({ type: Number, nullable: true })
   confidence!: number | null;
 
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, nullable: true })
   assignedReason!: string | null;
 
   @ApiProperty()
   assignedAt!: Date;
 
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, format: 'uuid', nullable: true })
   assignedBy!: string | null;
 
   @ApiPropertyOptional({
@@ -60,7 +60,15 @@ export class CustomerSegmentResponseDto {
   })
   segment?: { id: string; name: string };
 
-  @ApiPropertyOptional({ type: () => UserResponseDto })
+  @ApiPropertyOptional({
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      name: { type: 'string' },
+      email: { type: 'string', format: 'email' },
+    },
+    required: ['id', 'name', 'email'],
+  })
   assignedByUser?: Pick<UserResponseDto, 'id' | 'name' | 'email'>;
 }
 
@@ -77,56 +85,55 @@ export class CustomerResponseDto {
   name!: string;
 
   @Expose()
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String })
   @IsString()
-  @IsOptional()
   @MaxLength(320)
-  email!: string | null;
+  email!: string;
 
   @Expose()
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, nullable: true })
   @IsString()
   @IsOptional()
   @MaxLength(30)
   phone!: string | null;
 
   @Expose()
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, nullable: true })
   @IsString()
   @IsOptional()
   @MaxLength(255)
   companyName!: string | null;
 
   @Expose()
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, nullable: true })
   @IsString()
   @IsOptional()
   @MaxLength(500)
   companyWebsite!: string | null;
 
   @Expose()
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, nullable: true })
   @IsString()
   @IsOptional()
   @MaxLength(150)
   jobTitle!: string | null;
 
   @Expose()
-  @ApiPropertyOptional()
+  @ApiProperty({ type: Number, nullable: true })
   @IsOptional()
   @IsInt()
   @Min(0)
   companySize!: number | null;
 
   @Expose()
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, nullable: true })
   @IsString()
   @IsOptional()
   @MaxLength(150)
   industry!: string | null;
 
   @Expose()
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, nullable: true })
   @IsString()
   @IsOptional()
   @MaxLength(30)
@@ -138,13 +145,13 @@ export class CustomerResponseDto {
   createdBy!: string;
 
   @Expose()
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, format: 'uuid', nullable: true })
   @IsUUID()
   @IsOptional()
   updatedBy!: string | null;
 
   @Expose()
-  @ApiPropertyOptional()
+  @ApiProperty({ type: String, nullable: true })
   @IsOptional()
   notes!: string | null;
 

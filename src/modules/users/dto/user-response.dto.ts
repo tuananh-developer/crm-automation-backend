@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsUUID, MaxLength } from 'class-validator';
 import { UserRole, UserStatus } from '../enums/user.enum.js';
 
@@ -17,18 +17,22 @@ export class UserResponseDto {
   @MaxLength(320)
   email!: string;
 
-  @ApiPropertyOptional({ description: 'Vai trò người dùng' })
+  @ApiProperty({ enum: UserRole, description: 'Vai trò người dùng' })
   role!: UserRole;
 
-  @ApiPropertyOptional({ description: 'Trạng thái người dùng' })
+  @ApiProperty({ enum: UserStatus, description: 'Trạng thái người dùng' })
   status!: UserStatus;
 
-  @ApiPropertyOptional({ description: 'Lần cuối đăng nhập' })
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    description: 'Lần cuối đăng nhập',
+  })
   lastLoginAt!: Date | null;
 
-  @ApiPropertyOptional({ description: 'Thời gian tạo' })
+  @ApiProperty({ description: 'Thời gian tạo' })
   createdAt!: Date;
 
-  @ApiPropertyOptional({ description: 'Thời gian cập nhật' })
+  @ApiProperty({ description: 'Thời gian cập nhật' })
   updatedAt!: Date;
 }
