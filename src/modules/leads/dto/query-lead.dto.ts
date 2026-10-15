@@ -1,44 +1,45 @@
-import {
-  IsIn,
-  IsInt,
-  IsOptional,
-  IsString,
-  IsUUID,
-  Max,
-  Min,
-} from 'class-validator';
-import { Type } from 'class-transformer';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsIn, IsOptional, IsString, IsUUID } from 'class-validator';
+import { PaginationQueryDto } from '../../../common/index.js';
 import { LeadStatus } from '../enums/lead.enum.js';
 
-export class QueryLeadDto {
-  @IsInt()
-  @Min(1)
-  @IsOptional()
-  @Type(() => Number)
-  page?: number = 1;
-
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  @IsOptional()
-  @Type(() => Number)
-  limit?: number = 10;
-
-  @IsString()
-  @IsOptional()
-  search?: string;
-
+export class QueryLeadDto extends PaginationQueryDto {
+  @ApiPropertyOptional({
+    enum: LeadStatus,
+    description: 'Lọc theo trạng thái Lead',
+  })
   @IsOptional()
   status?: LeadStatus;
 
+  @ApiPropertyOptional({
+    description: 'Lọc theo ID nguồn Lead',
+    format: 'uuid',
+  })
   @IsUUID()
   @IsOptional()
   sourceId?: string;
 
+  @ApiPropertyOptional({
+    description: 'Lọc theo ID người phụ trách',
+    format: 'uuid',
+  })
   @IsUUID()
   @IsOptional()
   ownerId?: string;
 
+  @ApiPropertyOptional({
+    description: 'Trường sắp xếp dữ liệu',
+    enum: [
+      'createdAt',
+      'updatedAt',
+      'firstName',
+      'lastName',
+      'email',
+      'companyName',
+      'status',
+    ],
+    default: 'createdAt',
+  })
   @IsString()
   @IsOptional()
   @IsIn([
@@ -48,11 +49,7 @@ export class QueryLeadDto {
     'lastName',
     'email',
     'companyName',
+    'status',
   ])
-  sortBy?: string = 'createdAt';
-
-  @IsString()
-  @IsOptional()
-  @IsIn(['ASC', 'DESC', 'asc', 'desc'])
-  sortOrder?: 'ASC' | 'DESC' | 'asc' | 'desc' = 'DESC';
+  override sortBy?: string = 'createdAt';
 }

@@ -17,6 +17,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
+import { AuthModule } from './modules/auth/auth.module.js';
 import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module.js';
 
 @Module({
@@ -79,6 +80,7 @@ import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module
     ReviewModule,
     NotificationsModule,
     AuditModule,
+    AuthModule,
     DataCleaningModule,
     ThrottlerModule.forRoot([
       {

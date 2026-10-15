@@ -55,7 +55,6 @@ export interface EnrollLeadResult {
   execution: FollowUpExecution | null;
   message: string;
 }
-
 @Injectable()
 export class FollowUpService {
   private readonly logger = new Logger(FollowUpService.name);

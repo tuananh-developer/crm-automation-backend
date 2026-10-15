@@ -68,7 +68,13 @@ export class SegmentsService {
     });
 
     const saved = await this.segmentsRepository.save(segment);
-    return this.withoutUserHashes(saved);
+
+    // Attach creator relation from already-fetched user and strip password hash
+    return this.withoutUserHashes({
+      ...saved,
+      creator: user,
+      updater: null,
+    });
   }
 
   async findAll(query: QuerySegmentDto) {
@@ -88,12 +94,12 @@ export class SegmentsService {
     }
 
     if (query.isActive !== undefined) {
-      qb.andWhere('segment.is_active = :isActive', {
+      qb.andWhere('segment.isActive = :isActive', {
         isActive: query.isActive,
       });
     }
 
-    qb.orderBy('segment.created_at', 'DESC')
+    qb.orderBy('segment.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
@@ -105,10 +111,10 @@ export class SegmentsService {
       const segmentIds = data.map((s) => s.id);
       const counts = await this.customerSegmentsRepository
         .createQueryBuilder('cs')
-        .select('cs.segment_id', 'segmentId')
-        .addSelect('COUNT(cs.id)', 'count')
-        .where('cs.segment_id IN (:...segmentIds)', { segmentIds })
-        .groupBy('cs.segment_id')
+        .select('cs.segmentId', 'segmentId')
+        .addSelect('COUNT(*)', 'count')
+        .where('cs.segmentId IN (:...segmentIds)', { segmentIds })
+        .groupBy('cs.segmentId')
         .getRawMany<{ segmentId: string; count: string }>();
 
       countMap = new Map(counts.map((c) => [c.segmentId, Number(c.count)]));
@@ -158,6 +164,10 @@ export class SegmentsService {
   async update(id: string, dto: UpdateSegmentDto): Promise<Segment> {
     const segment = await this.segmentsRepository.findOne({
       where: { id },
+      relations: {
+        creator: true,
+        updater: true,
+      },
     });
 
     if (!segment) {
@@ -176,6 +186,8 @@ export class SegmentsService {
       }
     }
 
+    let updater: User | null = segment.updater ?? null;
+
     if (dto.createdBy) {
       const user = await this.usersRepository.findOne({
         where: { id: dto.createdBy },
@@ -188,6 +200,7 @@ export class SegmentsService {
       }
 
       segment.updatedBy = dto.createdBy;
+      updater = user;
     }
 
     if (dto.name !== undefined) {
@@ -207,7 +220,13 @@ export class SegmentsService {
     }
 
     const saved = await this.segmentsRepository.save(segment);
-    return this.withoutUserHashes(saved);
+
+    // Strip password hashes
+    return this.withoutUserHashes({
+      ...saved,
+      creator: segment.creator,
+      updater,
+    });
   }
 
   async remove(id: string) {
@@ -239,16 +258,16 @@ export class SegmentsService {
       .leftJoinAndSelect('assignment.customer', 'customer')
       .leftJoinAndSelect('assignment.segment', 'segment')
       .leftJoinAndSelect('assignment.assignedByUser', 'assignedByUser')
-      .where('assignment.segment_id = :segmentId', { segmentId });
+      .where('assignment.segmentId = :segmentId', { segmentId });
 
     if (query.search) {
       qb.andWhere(
-        '(LOWER(customer.name) LIKE LOWER(:search) OR LOWER(customer.email) LIKE LOWER(:search) OR LOWER(customer.company_name) LIKE LOWER(:search))',
+        '(LOWER(customer.name) LIKE LOWER(:search) OR LOWER(customer.email) LIKE LOWER(:search) OR LOWER(customer.companyName) LIKE LOWER(:search))',
         { search: `%${query.search}%` },
       );
     }
 
-    qb.orderBy('assignment.assigned_at', 'DESC')
+    qb.orderBy('assignment.assignedAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
@@ -592,8 +611,8 @@ export class SegmentsService {
 
     const score = await this.leadScoresRepository
       .createQueryBuilder('score')
-      .where('score.lead_id IN (:...leadIds)', { leadIds })
-      .orderBy('score.created_at', 'DESC')
+      .where('score.leadId IN (:...leadIds)', { leadIds })
+      .orderBy('score.createdAt', 'DESC')
       .getOne();
 
     return score ? Number(score.score) : null;

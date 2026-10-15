@@ -5,7 +5,10 @@ import {
 } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
-import { FollowUpService } from './follow-up.service.js';
+import {
+  FollowUpService,
+  type ExecuteFollowUpResult,
+} from './follow-up.service.js';
 import { EnrollmentStatus, ExecutionStatus } from './enums/follow-up.enum.js';
 import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
@@ -111,7 +114,6 @@ describe('FollowUpService', () => {
       findOne: jest.fn(),
       find: jest.fn(),
     };
-
     stepsRepository = {
       findOne: jest.fn(),
       find: jest.fn(),
@@ -634,7 +636,7 @@ describe('FollowUpService', () => {
       (executionsRepository.find as jest.Mock).mockResolvedValue([pendingExec]);
       const executeSpy = jest
         .spyOn(service, 'execute')
-        .mockResolvedValue({} as any);
+        .mockResolvedValue({} as unknown as ExecuteFollowUpResult);
 
       await service.processPendingExecutions();
 
