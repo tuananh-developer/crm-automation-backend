@@ -17,8 +17,16 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { LeadIntelligenceService } from './lead-intelligence.service.js';
-import { ScoringCallbackDto, TriggerScoringDto } from './dto/index.js';
+import {
+  ScoringCallbackDto,
+  ScoringCallbackResponseDto,
+  ScoringContextResponseDto,
+  ScoringResponseDto,
+  TriggerScoringDto,
+  TriggerScoringResponseDto,
+} from './dto/index.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
+import { ScoringMapper } from './mappers/index.js';
 
 @ApiTags('Lead Intelligence')
 @Controller(['lead-intelligence', 'scoring'])
@@ -39,12 +47,13 @@ export class ScoringController {
   @ApiResponse({
     status: 202,
     description: 'Lead scoring request accepted and queued.',
+    type: TriggerScoringResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  triggerScoring(
+  async triggerScoring(
     @Param('leadId', ParseUUIDPipe) leadId: string,
     @Body() dto?: TriggerScoringDto,
-  ) {
+  ): Promise<TriggerScoringResponseDto> {
     return this.leadIntelligenceService.triggerScoring(leadId, dto);
   }
 
@@ -60,14 +69,19 @@ export class ScoringController {
   @ApiResponse({
     status: 200,
     description: 'Scoring callback processed successfully.',
+    type: ScoringCallbackResponseDto,
   })
   @ApiResponse({
     status: 401,
     description: 'Unauthorized n8n webhook request.',
   })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  handleCallback(@Body() dto: ScoringCallbackDto) {
-    return this.leadIntelligenceService.handleScoringCallback(dto);
+  async handleCallback(
+    @Body() dto: ScoringCallbackDto,
+  ): Promise<ScoringCallbackResponseDto> {
+    const result =
+      await this.leadIntelligenceService.handleScoringCallback(dto);
+    return ScoringMapper.toCallbackResponseDto(result);
   }
 
   @Get(['scoring/context/:leadId', 'context/:leadId'])
@@ -80,10 +94,15 @@ export class ScoringController {
   @ApiResponse({
     status: 200,
     description: 'Aggregated scoring context details.',
+    type: ScoringContextResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  getScoringContext(@Param('leadId', ParseUUIDPipe) leadId: string) {
-    return this.leadIntelligenceService.getScoringContext(leadId);
+  async getScoringContext(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<ScoringContextResponseDto> {
+    const context =
+      await this.leadIntelligenceService.getScoringContext(leadId);
+    return ScoringMapper.toContextResponseDto(context);
   }
 
   @Get('scores/:leadId')
@@ -96,9 +115,13 @@ export class ScoringController {
   @ApiResponse({
     status: 200,
     description: 'List of all score records for the lead.',
+    type: [ScoringResponseDto],
   })
-  getScores(@Param('leadId', ParseUUIDPipe) leadId: string) {
-    return this.leadIntelligenceService.getScoresByLead(leadId);
+  async getScores(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<ScoringResponseDto[]> {
+    const records = await this.leadIntelligenceService.getScoresByLead(leadId);
+    return ScoringMapper.toResponseDtoList(records);
   }
 
   @Get('scores/:leadId/latest')
@@ -111,9 +134,13 @@ export class ScoringController {
   @ApiResponse({
     status: 200,
     description: 'Latest score assessment details.',
+    type: ScoringResponseDto,
   })
   @ApiResponse({ status: 404, description: 'No score found for this lead.' })
-  getLatestScore(@Param('leadId', ParseUUIDPipe) leadId: string) {
-    return this.leadIntelligenceService.getLatestScore(leadId);
+  async getLatestScore(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<ScoringResponseDto | null> {
+    const record = await this.leadIntelligenceService.getLatestScore(leadId);
+    return record ? ScoringMapper.toResponseDto(record) : null;
   }
 }

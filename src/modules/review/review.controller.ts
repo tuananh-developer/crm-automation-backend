@@ -12,6 +12,7 @@ import {
   AssignReviewTaskDto,
   CreateReviewTaskDto,
   ResolveReviewTaskDto,
+  ReviewTaskResponseDto,
 } from './dto/index.js';
 import {
   ApiTags,
@@ -36,10 +37,15 @@ export class ReviewController {
     summary: 'Create a review task',
     description: 'Creates a new human review task for a lead',
   })
-  @ApiCreatedResponse({ description: 'Review task created successfully' })
+  @ApiCreatedResponse({
+    description: 'Review task created successfully',
+    type: ReviewTaskResponseDto,
+  })
   @ApiBadRequestResponse({ description: 'Invalid input data' })
   @ApiForbiddenResponse({ description: 'Workflow run does not belong to lead' })
-  create(@Body() dto: CreateReviewTaskDto) {
+  async create(
+    @Body() dto: CreateReviewTaskDto,
+  ): Promise<ReviewTaskResponseDto> {
     return this.reviewService.create(dto);
   }
 
@@ -48,8 +54,11 @@ export class ReviewController {
     summary: 'List all review tasks',
     description: 'Returns a list of all review tasks',
   })
-  @ApiOkResponse({ description: 'Review tasks retrieved successfully' })
-  findAll() {
+  @ApiOkResponse({
+    description: 'Review tasks retrieved successfully',
+    type: [ReviewTaskResponseDto],
+  })
+  async findAll(): Promise<ReviewTaskResponseDto[]> {
     return this.reviewService.findAll();
   }
 
@@ -58,7 +67,10 @@ export class ReviewController {
     summary: 'Get a review task by ID',
     description: 'Returns a single review task by its UUID',
   })
-  @ApiOkResponse({ description: 'Review task found' })
+  @ApiOkResponse({
+    description: 'Review task found',
+    type: ReviewTaskResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'Review task not found' })
   @ApiParam({
     name: 'id',
@@ -66,7 +78,9 @@ export class ReviewController {
     format: 'uuid',
     description: 'Review task UUID',
   })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<ReviewTaskResponseDto> {
     return this.reviewService.findOne(id);
   }
 
@@ -76,7 +90,10 @@ export class ReviewController {
     description:
       'Assigns a review task to a reviewer (must be SALES role and ACTIVE status)',
   })
-  @ApiOkResponse({ description: 'Review task assigned successfully' })
+  @ApiOkResponse({
+    description: 'Review task assigned successfully',
+    type: ReviewTaskResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'Review task or reviewer not found' })
   @ApiBadRequestResponse({
     description: 'Task not in PENDING status or reviewer not SALES/ACTIVE',
@@ -90,10 +107,10 @@ export class ReviewController {
     format: 'uuid',
     description: 'Review task UUID',
   })
-  assign(
+  async assign(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignReviewTaskDto,
-  ) {
+  ): Promise<ReviewTaskResponseDto> {
     return this.reviewService.assign(id, dto);
   }
 
@@ -102,7 +119,10 @@ export class ReviewController {
     summary: 'Start a review task',
     description: 'Marks a review task as IN_REVIEW by the assigned reviewer',
   })
-  @ApiOkResponse({ description: 'Review task started successfully' })
+  @ApiOkResponse({
+    description: 'Review task started successfully',
+    type: ReviewTaskResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'Review task not found' })
   @ApiBadRequestResponse({
     description: 'Task not in ASSIGNED status or not assigned to current user',
@@ -116,7 +136,9 @@ export class ReviewController {
     format: 'uuid',
     description: 'Review task UUID',
   })
-  start(@Param('id', ParseUUIDPipe) id: string) {
+  async start(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<ReviewTaskResponseDto> {
     return this.reviewService.start(id);
   }
 
@@ -126,7 +148,10 @@ export class ReviewController {
     description:
       'Resolves a review task with APPROVE, REJECT, or MODIFY decision. MODIFY requires reviewComment.',
   })
-  @ApiOkResponse({ description: 'Review task resolved successfully' })
+  @ApiOkResponse({
+    description: 'Review task resolved successfully',
+    type: ReviewTaskResponseDto,
+  })
   @ApiNotFoundResponse({ description: 'Review task not found' })
   @ApiBadRequestResponse({
     description:
@@ -141,10 +166,10 @@ export class ReviewController {
     format: 'uuid',
     description: 'Review task UUID',
   })
-  resolve(
+  async resolve(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ResolveReviewTaskDto,
-  ) {
+  ): Promise<ReviewTaskResponseDto> {
     return this.reviewService.resolve(id, dto);
   }
 }
