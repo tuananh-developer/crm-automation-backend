@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { SegmentsService } from './segments.service.js';
 import type { DeepPartial, Repository } from 'typeorm';

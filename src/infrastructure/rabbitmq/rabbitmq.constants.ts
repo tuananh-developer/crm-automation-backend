@@ -6,6 +6,8 @@ export const CRM_EVENTS = {
   LEAD_ENRICHMENT_REQUESTED: 'lead.enrichment.requested',
   LEAD_SCORING_REQUESTED: 'lead.scoring.requested',
   FOLLOW_UP_TRIGGERED: 'lead.follow_up.triggered',
+  DATA_CLEANING_REQUESTED: 'data.cleaning.requested',
 } as const;
 
 export const DEFAULT_CRM_QUEUE = 'crm_events_queue';
+export const DATA_CLEANING_QUEUE = 'data.cleaning.queue';

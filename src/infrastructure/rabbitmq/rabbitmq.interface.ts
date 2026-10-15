@@ -43,3 +43,11 @@ export interface FollowUpTriggeredEventData {
   stepId?: string;
   scheduledAt?: string;
 }
+
+export interface DataCleaningRequestedEventData {
+  workflowRunId: string;
+  triggeredByUserId?: string | null;
+  scope: string;
+  filter?: Record<string, any> | null;
+  timestamp: string;
+}

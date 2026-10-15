@@ -19,10 +19,17 @@ import {
 } from '@nestjs/swagger';
 import { LeadIntelligenceService } from './lead-intelligence.service.js';
 import {
+  EnrichmentResponseDto,
+  MockEnrichmentResponseDto,
   QualificationCallbackDto,
+  QualificationCallbackResponseDto,
+  QualificationResponseDto,
   TriggerEnrichmentDto,
+  TriggerEnrichmentResponseDto,
   TriggerQualificationDto,
+  TriggerQualificationResponseDto,
 } from './dto/index.js';
+import { EnrichmentMapper, QualificationMapper } from './mappers/index.js';
 
 @ApiTags('Lead Intelligence')
 @Controller('lead-intelligence')
@@ -43,12 +50,13 @@ export class LeadIntelligenceController {
   @ApiResponse({
     status: 202,
     description: 'Qualification request accepted and queued.',
+    type: TriggerQualificationResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  triggerQualification(
+  async triggerQualification(
     @Param('leadId', ParseUUIDPipe) leadId: string,
     @Body() dto?: TriggerQualificationDto,
-  ) {
+  ): Promise<TriggerQualificationResponseDto> {
     return this.leadIntelligenceService.triggerQualification(leadId, dto);
   }
 
@@ -63,10 +71,15 @@ export class LeadIntelligenceController {
   @ApiResponse({
     status: 200,
     description: 'Qualification callback processed successfully.',
+    type: QualificationCallbackResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  handleCallback(@Body() dto: QualificationCallbackDto) {
-    return this.leadIntelligenceService.handleQualificationCallback(dto);
+  async handleCallback(
+    @Body() dto: QualificationCallbackDto,
+  ): Promise<QualificationCallbackResponseDto> {
+    const result =
+      await this.leadIntelligenceService.handleQualificationCallback(dto);
+    return QualificationMapper.toCallbackResponseDto(result);
   }
 
   @Get('qualifications/:leadId')
@@ -75,9 +88,14 @@ export class LeadIntelligenceController {
   @ApiResponse({
     status: 200,
     description: 'List of all qualification records for the lead.',
+    type: [QualificationResponseDto],
   })
-  getQualifications(@Param('leadId', ParseUUIDPipe) leadId: string) {
-    return this.leadIntelligenceService.getQualificationsByLead(leadId);
+  async getQualifications(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<QualificationResponseDto[]> {
+    const records =
+      await this.leadIntelligenceService.getQualificationsByLead(leadId);
+    return QualificationMapper.toResponseDtoList(records);
   }
 
   @Get('qualifications/:leadId/latest')
@@ -86,13 +104,18 @@ export class LeadIntelligenceController {
   @ApiResponse({
     status: 200,
     description: 'Latest qualification assessment details.',
+    type: QualificationResponseDto,
   })
   @ApiResponse({
     status: 404,
     description: 'No qualification found for this lead.',
   })
-  getLatestQualification(@Param('leadId', ParseUUIDPipe) leadId: string) {
-    return this.leadIntelligenceService.getLatestQualification(leadId);
+  async getLatestQualification(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<QualificationResponseDto | null> {
+    const record =
+      await this.leadIntelligenceService.getLatestQualification(leadId);
+    return record ? QualificationMapper.toResponseDto(record) : null;
   }
 
   @Get('mock-enrichment')
@@ -125,6 +148,7 @@ export class LeadIntelligenceController {
   @ApiResponse({
     status: 200,
     description: 'Mock enrichment payload returned successfully.',
+    type: MockEnrichmentResponseDto,
   })
   @HttpCode(HttpStatus.OK)
   mockEnrichment(
@@ -132,7 +156,7 @@ export class LeadIntelligenceController {
     @Query('email') email?: string,
     @Query('provider') provider?: string,
     @Query('fail') fail?: string,
-  ) {
+  ): MockEnrichmentResponseDto {
     return this.leadIntelligenceService.mockEnrichment({
       domain,
       email,
@@ -155,12 +179,13 @@ export class LeadIntelligenceController {
   @ApiResponse({
     status: 202,
     description: 'Enrichment request accepted and queued.',
+    type: TriggerEnrichmentResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
-  triggerEnrichment(
+  async triggerEnrichment(
     @Param('leadId', ParseUUIDPipe) leadId: string,
     @Body() dto?: TriggerEnrichmentDto,
-  ) {
+  ): Promise<TriggerEnrichmentResponseDto> {
     return this.leadIntelligenceService.triggerEnrichment(leadId, dto);
   }
 
@@ -170,9 +195,14 @@ export class LeadIntelligenceController {
   @ApiResponse({
     status: 200,
     description: 'List of all enrichment records for the lead.',
+    type: [EnrichmentResponseDto],
   })
-  getEnrichments(@Param('leadId', ParseUUIDPipe) leadId: string) {
-    return this.leadIntelligenceService.getEnrichmentsByLead(leadId);
+  async getEnrichments(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<EnrichmentResponseDto[]> {
+    const records =
+      await this.leadIntelligenceService.getEnrichmentsByLead(leadId);
+    return EnrichmentMapper.toResponseDtoList(records);
   }
 
   @Get('enrichments/:leadId/latest')
@@ -181,12 +211,17 @@ export class LeadIntelligenceController {
   @ApiResponse({
     status: 200,
     description: 'Latest enrichment result details.',
+    type: EnrichmentResponseDto,
   })
   @ApiResponse({
     status: 404,
     description: 'No enrichment found for this lead.',
   })
-  getLatestEnrichment(@Param('leadId', ParseUUIDPipe) leadId: string) {
-    return this.leadIntelligenceService.getLatestEnrichment(leadId);
+  async getLatestEnrichment(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<EnrichmentResponseDto | null> {
+    const record =
+      await this.leadIntelligenceService.getLatestEnrichment(leadId);
+    return record ? EnrichmentMapper.toResponseDto(record) : null;
   }
 }

@@ -15,6 +15,7 @@ import {
   CRM_EVENTS,
   CRM_EXCHANGE,
   DEFAULT_CRM_QUEUE,
+  DATA_CLEANING_QUEUE,
 } from './rabbitmq.constants.js';
 import type {
   CrmEvent,
@@ -22,6 +23,7 @@ import type {
   LeadQualificationRequestedEventData,
   LeadEnrichmentRequestedEventData,
   LeadScoringRequestedEventData,
+  DataCleaningRequestedEventData,
 } from './rabbitmq.interface.js';
 
 @Injectable()
@@ -78,8 +80,16 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
             CRM_EVENTS.LEAD_SCORING_REQUESTED,
           );
 
+          // Assert dedicated queue for AI CRM Data Cleaning (UC10)
+          await channel.assertQueue(DATA_CLEANING_QUEUE, { durable: true });
+          await channel.bindQueue(
+            DATA_CLEANING_QUEUE,
+            CRM_EXCHANGE,
+            CRM_EVENTS.DATA_CLEANING_REQUESTED,
+          );
+
           this.logger.log(
-            `Exchange '${CRM_EXCHANGE}', default queue '${queueName}', 'lead.enrichment.queue', and 'lead.scoring.queue' asserted and bound`,
+            `Exchange '${CRM_EXCHANGE}', default queue '${queueName}', 'lead.enrichment.queue', 'lead.scoring.queue', and '${DATA_CLEANING_QUEUE}' asserted and bound`,
           );
         },
       });
@@ -198,6 +208,15 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
   ): Promise<CrmEvent<LeadScoringRequestedEventData>> {
     return this.publishEvent<LeadScoringRequestedEventData>(
       CRM_EVENTS.LEAD_SCORING_REQUESTED,
+      data,
+    );
+  }
+
+  async publishDataCleaningRequested(
+    data: DataCleaningRequestedEventData,
+  ): Promise<CrmEvent<DataCleaningRequestedEventData>> {
+    return this.publishEvent<DataCleaningRequestedEventData>(
+      CRM_EVENTS.DATA_CLEANING_REQUESTED,
       data,
     );
   }

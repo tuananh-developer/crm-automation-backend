@@ -93,18 +93,19 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.tsx?$": [
+      "^.+\\.(t|j)s$": [
         "ts-jest",
         {
-          "tsconfig": "tsconfig.jest.json",
-          "useESM": true
+          "tsconfig": "tsconfig.jest.json"
         }
       ]
     },
-    "extensionsToTreatAsEsm": [".ts"],
     "moduleNameMapper": {
       "^(\\.{1,2}/.*)\\.js$": "$1"
     },
+    "transformIgnorePatterns": [
+      "node_modules/(?!(@nestjs)/)"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

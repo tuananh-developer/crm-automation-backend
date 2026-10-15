@@ -4,3 +4,6 @@ export * from './trigger-enrichment.dto.js';
 export * from './enrichment-callback.dto.js';
 export * from './trigger-scoring.dto.js';
 export * from './scoring-callback.dto.js';
+export * from './qualification-response.dto.js';
+export * from './scoring-response.dto.js';
+export * from './enrichment-response.dto.js';

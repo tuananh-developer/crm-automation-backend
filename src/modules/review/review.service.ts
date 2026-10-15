@@ -18,7 +18,9 @@ import {
   AssignReviewTaskDto,
   CreateReviewTaskDto,
   ResolveReviewTaskDto,
+  ReviewTaskResponseDto,
 } from './dto/index.js';
+import { ReviewTaskMapper } from './mappers/index.js';
 
 @Injectable()
 export class ReviewService {
@@ -44,7 +46,25 @@ export class ReviewService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async create(dto: CreateReviewTaskDto): Promise<ReviewTask> {
+  private async findTaskEntity(id: string): Promise<ReviewTask> {
+    const reviewTask = await this.reviewTaskRepository.findOne({
+      where: { id },
+      relations: {
+        lead: true,
+        assignee: true,
+        workflowRun: true,
+        notifications: true,
+      },
+    });
+
+    if (!reviewTask) {
+      throw new NotFoundException('Review task not found');
+    }
+
+    return reviewTask;
+  }
+
+  async create(dto: CreateReviewTaskDto): Promise<ReviewTaskResponseDto> {
     const lead = await this.leadRepository.findOne({
       where: { id: dto.leadId },
     });
@@ -81,10 +101,11 @@ export class ReviewService {
       resolvedAt: null,
     });
 
-    return this.reviewTaskRepository.save(reviewTask);
+    const saved = await this.reviewTaskRepository.save(reviewTask);
+    return ReviewTaskMapper.toResponseDto(saved);
   }
 
-  async findAll(): Promise<ReviewTask[]> {
+  async findAll(): Promise<ReviewTaskResponseDto[]> {
     const reviewTasks = await this.reviewTaskRepository.find({
       relations: {
         lead: true,
@@ -96,43 +117,19 @@ export class ReviewService {
       },
     });
 
-    for (const reviewTask of reviewTasks) {
-      if (reviewTask.assignee) {
-        const { passwordHash, ...safeAssignee } = reviewTask.assignee;
-        void passwordHash;
-        reviewTask.assignee = safeAssignee as User;
-      }
-    }
-
-    return reviewTasks;
+    return ReviewTaskMapper.toResponseDtoList(reviewTasks);
   }
 
-  async findOne(id: string): Promise<ReviewTask> {
-    const reviewTask = await this.reviewTaskRepository.findOne({
-      where: { id },
-      relations: {
-        lead: true,
-        assignee: true,
-        workflowRun: true,
-        notifications: true,
-      },
-    });
-
-    if (!reviewTask) {
-      throw new NotFoundException('Review task not found');
-    }
-
-    if (reviewTask.assignee) {
-      const { passwordHash, ...safeAssignee } = reviewTask.assignee;
-      void passwordHash;
-      reviewTask.assignee = safeAssignee as User;
-    }
-
-    return reviewTask;
+  async findOne(id: string): Promise<ReviewTaskResponseDto> {
+    const reviewTask = await this.findTaskEntity(id);
+    return ReviewTaskMapper.toResponseDto(reviewTask);
   }
 
-  async assign(id: string, dto: AssignReviewTaskDto): Promise<ReviewTask> {
-    const reviewTask = await this.findOne(id);
+  async assign(
+    id: string,
+    dto: AssignReviewTaskDto,
+  ): Promise<ReviewTaskResponseDto> {
+    const reviewTask = await this.findTaskEntity(id);
 
     if (reviewTask.status !== ReviewStatus.PENDING) {
       throw new BadRequestException(
@@ -163,16 +160,17 @@ export class ReviewService {
     }
 
     reviewTask.assignedTo = reviewer.id;
+    reviewTask.assignee = reviewer;
 
     const savedTask = await this.reviewTaskRepository.save(reviewTask);
 
     await this.createNotification(reviewer.id, savedTask, reviewTask.leadId);
 
-    return savedTask;
+    return ReviewTaskMapper.toResponseDto(savedTask);
   }
 
-  async start(id: string): Promise<ReviewTask> {
-    const reviewTask = await this.findOne(id);
+  async start(id: string): Promise<ReviewTaskResponseDto> {
+    const reviewTask = await this.findTaskEntity(id);
 
     if (reviewTask.status !== ReviewStatus.PENDING) {
       throw new BadRequestException('Only PENDING review tasks can be started');
@@ -187,10 +185,14 @@ export class ReviewService {
     reviewTask.status = ReviewStatus.IN_REVIEW;
     reviewTask.startedAt = new Date();
 
-    return this.reviewTaskRepository.save(reviewTask);
+    const savedTask = await this.reviewTaskRepository.save(reviewTask);
+    return ReviewTaskMapper.toResponseDto(savedTask);
   }
 
-  async resolve(id: string, dto: ResolveReviewTaskDto): Promise<ReviewTask> {
+  async resolve(
+    id: string,
+    dto: ResolveReviewTaskDto,
+  ): Promise<ReviewTaskResponseDto> {
     return this.dataSource.transaction(async (manager) => {
       const reviewTaskRepo = manager.getRepository(ReviewTask);
       const leadRepo = manager.getRepository(Lead);
@@ -278,7 +280,7 @@ export class ReviewService {
         }),
       );
 
-      return savedTask;
+      return ReviewTaskMapper.toResponseDto(savedTask);
     });
   }
 

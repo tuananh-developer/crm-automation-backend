@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 import { SequencesController } from './sequences.controller.js';
 import type { SequencesService } from './sequences.service.js';
 import {

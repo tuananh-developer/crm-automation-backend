@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 import {
   BadRequestException,
   ConflictException,
@@ -6,8 +5,10 @@ import {
 } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
-import { FollowUpService } from './follow-up.service.js';
-import type { ExecuteFollowUpResult } from './follow-up.service.js';
+import {
+  FollowUpService,
+  type ExecuteFollowUpResult,
+} from './follow-up.service.js';
 import { EnrollmentStatus, ExecutionStatus } from './enums/follow-up.enum.js';
 import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
