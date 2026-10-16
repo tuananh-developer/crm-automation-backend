@@ -62,7 +62,12 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
             durable: true,
           });
           await channel.assertQueue(queueName, { durable: true });
-          await channel.bindQueue(queueName, CRM_EXCHANGE, 'lead.*');
+          await channel.bindQueue(queueName, CRM_EXCHANGE, 'lead.#');
+          await channel.bindQueue(
+            queueName,
+            CRM_EXCHANGE,
+            CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED,
+          );
 
           // Assert dedicated queue for AI Lead Enrichment (UC03)
           await channel.assertQueue('lead.enrichment.queue', { durable: true });
@@ -134,20 +139,12 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
 
     // 2. In development / local mode: prioritize local Docker RabbitMQ broker
     const host =
-      this.configService.get<string>('LOCAL_RABBITMQ_HOST') ||
-      this.configService.get<string>('RABBITMQ_HOST') ||
-      'localhost';
+      this.configService.get<string>('LOCAL_RABBITMQ_HOST') || 'localhost';
     const port = this.configService.get<number>('LOCAL_RABBITMQ_PORT') || 5672;
     const user =
-      this.configService.get<string>('LOCAL_RABBITMQ_USER') ||
-      (host === 'localhost'
-        ? 'guest'
-        : this.configService.get<string>('RABBITMQ_USER') || 'guest');
+      this.configService.get<string>('LOCAL_RABBITMQ_USER') || 'guest';
     const password =
-      this.configService.get<string>('LOCAL_RABBITMQ_PASSWORD') ||
-      (host === 'localhost'
-        ? 'guest'
-        : this.configService.get<string>('RABBITMQ_PASSWORD') || 'guest');
+      this.configService.get<string>('LOCAL_RABBITMQ_PASSWORD') || 'guest';
 
     this.logger.log(
       `Targeting Local RabbitMQ broker at ${host}:${port} (Development mode)`,
@@ -173,12 +170,10 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
 
     if (this.channelWrapper) {
       try {
-        await this.channelWrapper.publish(
-          CRM_EXCHANGE,
-          eventType,
-          Buffer.from(JSON.stringify(event)),
-          { persistent: true, contentType: 'application/json' },
-        );
+        await this.channelWrapper.publish(CRM_EXCHANGE, eventType, event, {
+          persistent: true,
+          contentType: 'application/json',
+        });
         this.logger.log(
           `Event '${eventType}' published successfully (ID: ${event.eventId})`,
         );

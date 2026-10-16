@@ -47,7 +47,8 @@ export class N8nAuthGuard implements CanActivate {
     const apiKeyHeader =
       (request.headers['x-n8n-api-key'] as string) ||
       (request.headers['x-api-key'] as string) ||
-      (request.headers['x-webhook-secret'] as string);
+      (request.headers['x-webhook-secret'] as string) ||
+      (request.headers['x-n8n-webhook-secret'] as string);
 
     if (apiKeyHeader && apiKeyHeader === expectedKey) {
       return true;

@@ -74,6 +74,7 @@ services:
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-1.5-pro}
       - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://host.docker.internal:3000}
       - N8N_API_KEY=${N8N_API_KEY}
+      - N8N_WEBHOOK_SECRET=${N8N_WEBHOOK_SECRET}
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     volumes:

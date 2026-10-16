@@ -1,5 +1,4 @@
 import { Controller, Get } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import {
   HealthCheck,
   HealthCheckService,
@@ -9,6 +8,8 @@ import {
 } from '@nestjs/terminus';
 import { RmqOptions, Transport } from '@nestjs/microservices';
 
+import { RabbitMQService } from '../infrastructure/rabbitmq/rabbitmq.service.js';
+
 @Controller('health')
 export class HealthController {
   constructor(
@@ -16,15 +17,13 @@ export class HealthController {
     private memory: MemoryHealthIndicator,
     private db: TypeOrmHealthIndicator,
     private microService: MicroserviceHealthIndicator,
-    private configService: ConfigService,
+    private rabbitMQService: RabbitMQService,
   ) {}
 
   @Get()
   @HealthCheck()
   check() {
-    const rabbitMqUrl =
-      this.configService.get<string>('RABBITMQ_URL') ||
-      'amqp://guest:guest@localhost:5672';
+    const rabbitMqUrl = this.rabbitMQService.getRabbitmqUrl();
 
     return this.health.check([
       // Kiểm tra heap memory không vượt quá 300MB

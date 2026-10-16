@@ -130,4 +130,12 @@ export class QualificationCallbackDto {
   @IsObject()
   @IsOptional()
   outputSnapshot?: Record<string, any>;
+
+  @ApiPropertyOptional({
+    description: 'ISO timestamp when evaluation was performed',
+    example: '2026-10-16T08:47:46.849Z',
+  })
+  @IsString()
+  @IsOptional()
+  evaluatedAt?: string;
 }
