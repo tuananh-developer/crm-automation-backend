@@ -1,98 +1,155 @@
+# AI CRM Automation System — Backend Service
+
 <p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
+  <img src="https://nestjs.com/img/logo-small.svg" width="100" alt="NestJS Logo" />
 </p>
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
-
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
+<p align="center">
+  <b>Hệ thống Backend cho Nền tảng Tự động hóa CRM ứng dụng Trí tuệ Nhân tạo</b><br>
+  Xây dựng trên nền tảng <b>NestJS</b>, <b>Clean Architecture</b>, <b>TypeORM</b>, <b>PostgreSQL</b>, <b>RabbitMQ</b> và tích hợp tự động hóa qua <b>n8n & Gemini AI</b>.
 </p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## 📌 1. Giới thiệu tổng quan
 
-## Project setup
+**CRM Automation Backend** là dịch vụ lõi chịu trách nhiệm quản trị toàn bộ dữ liệu khách hàng tiềm năng (Leads), khách hàng chính thức (Customers), luồng xử lý phân tích AI (Đánh giá sơ bộ, Làm giàu dữ liệu, Chấm điểm tiềm năng), chuỗi kịch bản chăm sóc khách hàng tự động (Follow-up Cadences), hộp thư duyệt xét con người (Human-in-the-loop Review) và tác vụ dọn dẹp dữ liệu thông minh (AI CRM Data Cleaning Agent).
 
-```bash
-$ pnpm install
+---
+
+## 🚀 2. Công nghệ cốt lõi
+
+- **Framework**: [NestJS 12](https://nestjs.com/) (Node.js >= 20, TypeScript 5, Express platform).
+- **Kiến trúc**: Clean Architecture, Phân tầng Controllers $\rightarrow$ Services $\rightarrow$ Mappers/DTOs $\rightarrow$ Dedicated Interfaces $\rightarrow$ TypeORM Entities.
+- **Cơ sở dữ liệu**: PostgreSQL 18, [TypeORM](https://typeorm.io/) với Migration có khả năng Revert & Seed script tự động hóa.
+- **Message Broker & Event-Driven**: RabbitMQ 4.3 (AMQP connection manager) phục vụ bắn sự kiện bất đồng bộ (`lead.created`, `lead.qualified`, v.v.).
+- **Workflow & AI Engine**: [n8n](https://n8n.io/) tích hợp Google Gemini AI 1.5 Pro.
+- **Bảo mật & Phân quyền**: JWT Token, Passport JWT Strategy, Bcrypt Password Hashing, RBAC Role Guards (`ADMIN`, `SALES`).
+- **Tài liệu API**: [Swagger OpenAPI](https://swagger.io/) (`/api/docs`).
+- **Kiểm thử**: Jest (Node ESM VM modules) với 24 Test Suites (243/243 Unit Tests Pass) và 15 End-to-End Integration Tests.
+
+---
+
+## 🎯 3. Danh mục 10 Use Cases nghiệp vụ (UC01 - UC10)
+
+| Mã Use Case | Tên chức năng | Module Backend | Mô tả tóm tắt |
+| :--- | :--- | :--- | :--- |
+| **UC01** | **Create & Manage Lead** | `leads` | Tiếp nhận và quản lý Lead đa nguồn (Website Form, Referral, Event...), quản lý trạng thái vòng đời Lead. |
+| **UC02** | **AI Lead Qualification** | `lead-intelligence` | Đánh giá sơ bộ chất lượng Lead tự động bằng Google Gemini theo tiêu chuẩn BANT/CHAMP qua n8n. Tự duyệt nếu điểm $\ge 0.8$, chuyển Review nếu $< 0.8$. |
+| **UC03** | **AI Lead Enrichment** | `lead-intelligence` | Tự động làm giàu hồ sơ doanh nghiệp (quy mô, website, ngành nghề) và người liên hệ qua external providers. |
+| **UC04** | **AI Lead Scoring** | `lead-intelligence` | Chấm điểm tiềm năng Lead theo thang 0 - 100, phân loại nhãn `HOT`, `WARM`, `COLD` dựa trên dữ liệu nhân khẩu học và lịch sử tương tác. |
+| **UC05** | **Enroll Follow-up Cadence** | `follow-up` | Định nghĩa chuỗi kịch bản nuôi dưỡng nhiều bước (Email/SMS/Webhook) và ghi danh Lead vào kịch bản. |
+| **UC06** | **Execute Follow-up** | `follow-up` | Cron job & Webhook thực thi tự động các bước chăm sóc đến hạn, quản lý lịch sử gửi, cơ chế Retry lũy tiến khi gặp sự cố. |
+| **UC07** | **Human-in-the-Loop Review** | `review`, `notifications` | Hộp thư cho nhân viên kinh doanh xét duyệt quyết định AI (`APPROVE`, `REJECT`, `MODIFY`) và gửi thông báo Notification. |
+| **UC08** | **Convert Lead to Customer** | `leads`, `customers` | Chuyển đổi Lead đủ điều kiện sang Khách hàng, tự động chống trùng lặp theo Email/SĐT và ghi Audit Log. |
+| **UC09** | **Customer Segmentation** | `customers` | Phân khúc khách hàng tự động dựa theo bộ lọc quy tắc JSON linh hoạt (`RULE`) hoặc gắn thủ công (`MANUAL`). |
+| **UC10** | **AI CRM Data Cleaning Agent**| `data-cleaning` | Agent AI quét và phát hiện các bất thường (email sai cú pháp, SĐT sai mã vùng, tên dính ký tự lạ) và áp dụng chuẩn hóa hàng loạt. |
+
+---
+
+## 📁 4. Cấu trúc thư mục dự án
+
+```text
+crm-automation-backend/
+├── docs/                      # Sơ đồ thiết kế kiến trúc (ERD V3, Sequence, Class diagrams)
+│   └── diagrams/erd/erd.puml  # Thiết kế cơ sở dữ liệu chuẩn hóa 18 thực thể
+├── docker/                    # Script khởi tạo hạ tầng Docker
+├── src/
+│   ├── common/                # Tiện ích chung: Guards, Pipes, Interceptors, Filters, Base DTOs
+│   ├── config/                # Cấu hình TypeORM, RabbitMQ, Swagger
+│   ├── database/
+│   │   ├── migrations/        # TypeORM DDL Migrations (InitialSchema 18 bảng)
+│   │   └── seeds/             # Seed Script nạp dữ liệu mẫu 18 bảng chuẩn hóa
+│   ├── modules/               # Các Feature Modules
+│   │   ├── audit/             # Ghi nhận nhật ký kiểm toán (Audit Logs)
+│   │   ├── auth/              # Xác thực JWT, đăng nhập, bảo mật mật khẩu
+│   │   ├── customers/         # Khách hàng & Phân khúc (Segments)
+│   │   ├── data-cleaning/     # UC10 AI CRM Data Cleaning Agent
+│   │   ├── follow-up/         # UC05 & UC06 Chuỗi kịch bản & Thực thi tự động
+│   │   ├── lead-intelligence/ # UC02, UC03, UC04 AI Qualification, Enrichment & Scoring
+│   │   ├── leads/             # UC01 Quản lý Lead, Nguồn Lead, Tương tác
+│   │   ├── notifications/     # Hệ thống thông báo người dùng nội bộ
+│   │   ├── review/            # UC07 Duyệt xét tác vụ con người (Human Review)
+│   │   ├── users/             # Quản lý tài khoản người dùng & phân quyền
+│   │   └── workflow/          # Tracing các phiên thực thi n8n Workflow Runs
+│   ├── app.module.ts
+│   ├── data-source.ts         # TypeORM CLI DataSource configuration
+│   └── main.ts                # Bootstrap ứng dụng, Swagger & Global Validation Pipes
+├── test/                      # Bộ kiểm thử tích hợp tự động E2E (UC01-UC09 Pipeline)
+├── docker-compose.yml         # Container PostgreSQL 18, RabbitMQ 4.3, n8n
+├── package.json
+└── tsconfig.json
 ```
 
-## Compile and run the project
+---
 
+## 🛠️ 5. Yêu cầu môi trường & Cài đặt
+
+### Yêu cầu tiên quyết:
+- **Node.js**: `>= 20.x`
+- **Package Manager**: `pnpm` (khuyên dùng `>= 9.x`)
+- **Docker & Docker Compose**: Để chạy cụm PostgreSQL, RabbitMQ và n8n cục bộ
+
+### Bước 1: Khởi động Hạ tầng Docker (Local Stack)
 ```bash
-# development
-$ pnpm run start
+# Khởi động cụm PostgreSQL, RabbitMQ và n8n
+docker compose up -d
+```
+Trạng thái các container sau khi khởi động:
+- **PostgreSQL 18**: `localhost:5432` (`crm_postgres`)
+- **RabbitMQ Management**: `http://localhost:15672`
+- **RabbitMQ AMQP**: `amqp://localhost:5672`
+- **n8n Workflow Automation**: `http://localhost:5678`
 
-# watch mode
-$ pnpm run start:dev
-
-# production mode
-$ pnpm run start:prod
+### Bước 2: Cài đặt Dependencies
+```bash
+pnpm install
 ```
 
-## Run tests
-
+### Bước 3: Cấu hình Biến môi trường (`.env`)
+Sao chép cấu hình từ file mẫu `.env.example`:
 ```bash
-# unit tests
-$ pnpm run test
+cp .env.example .env
+```
+> [!NOTE]
+> Mở file `.env` và tùy chỉnh các tham số cần thiết (các giá trị mặc định trong `.env.example` đã được cấu hình sẵn sàng để kết nối trực tiếp với cụm Docker local).
 
-# e2e tests
-$ pnpm run test:e2e
+### Bước 4: Chạy Migration & Nạp dữ liệu mẫu
+```bash
+# 1. Áp dụng toàn bộ migrations vào cơ sở dữ liệu
+pnpm migration:run
 
-# test coverage
-$ pnpm run test:cov
+# 2. Nạp dữ liệu mẫu chuẩn hóa 18 bảng cho đồ án demo
+pnpm seed:fresh
 ```
 
-## Deployment
+### Bước 5: Khởi động Backend Service
+```bash
+# Chế độ phát triển (Live reload)
+pnpm start:dev
+```
+- **Backend API**: `http://localhost:3000`
+- **Swagger OpenAPI Docs**: [http://localhost:3000/api/docs](http://localhost:3000/api/docs)
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+---
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## 🧪 6. Kiểm thử & Đảm bảo chất lượng
 
 ```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
+# 1. Chạy toàn bộ 243 Unit Tests
+pnpm test
+
+# 2. Chạy bộ 15 End-to-End Integration Tests (Toàn bộ luồng UC01 - UC09)
+pnpm test:e2e
+
+# 3. Kiểm tra và tự động sửa định dạng code (ESLint)
+pnpm lint
+
+# 4. Kiểm tra biên dịch TypeScript toàn dự án
+pnpm build
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+---
 
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+## 📄 7. Bản quyền & Giấy phép
+Dự án được phát triển phục vụ đồ án môn học / giải pháp tự động hóa CRM ứng dụng Trí tuệ Nhân tạo.
