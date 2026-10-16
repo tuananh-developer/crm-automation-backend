@@ -1,6 +1,7 @@
 export * from './enums/lead.enum.js';
 export * from './entities/index.js';
 export * from './dto/index.js';
+export * from './interfaces/index.js';
 export * from './mappers/index.js';
 export * from './leads.service.js';
 export * from './leads.controller.js';

@@ -20,9 +20,11 @@ import type {
   ApplyCleaningResult,
   AppliedFindingResult,
   DataCleaningFinding,
-  DataCleaningSummary,
+  AllowedCleaningField,
+  AppliedStatItem,
+  ScanInputPayload,
+  ScanOutputPayload,
 } from './interfaces/data-cleaning.interface.js';
-import type { LeadStatus } from '../leads/enums/lead.enum.js';
 
 export const ALLOWED_DATA_CLEANING_FIELDS = [
   'firstName',
@@ -35,34 +37,7 @@ export const ALLOWED_DATA_CLEANING_FIELDS = [
   'industry',
 ] as const;
 
-export type AllowedCleaningField =
-  (typeof ALLOWED_DATA_CLEANING_FIELDS)[number];
-
-interface ScanInputPayload {
-  scope: 'ALL' | 'FILTER';
-  filter?: {
-    status?: LeadStatus;
-    sourceId?: string;
-    search?: string;
-    limit?: number;
-  } | null;
-  requestedAt?: string;
-}
-
-interface AppliedStatItem {
-  appliedAt: string;
-  userId: string | null;
-  appliedCount: number;
-  skippedCount: number;
-  totalRequested: number;
-}
-
-interface ScanOutputPayload {
-  summary?: DataCleaningSummary | null;
-  findings?: DataCleaningFinding[];
-  appliedStats?: AppliedStatItem[];
-  receivedAt?: string;
-}
+export type { AllowedCleaningField };
 
 function isAllowedCleaningField(field: string): field is AllowedCleaningField {
   return (ALLOWED_DATA_CLEANING_FIELDS as readonly string[]).includes(field);

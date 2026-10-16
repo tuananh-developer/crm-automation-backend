@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { LeadResponseDto } from './lead-response.dto.js';
-import type { CustomerMatchSource } from '../leads.service.js';
+import type { CustomerMatchSource } from '../interfaces/index.js';
 
 export class ConvertedCustomerResponseDto {
   @ApiProperty({ description: 'ID khách hàng' })

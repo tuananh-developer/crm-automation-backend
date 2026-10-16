@@ -2,8 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './entities/user.entity.js';
+import type { SafeUser } from './interfaces/index.js';
 
-export type SafeUser = Omit<User, 'passwordHash'>;
+export type { SafeUser };
 
 @Injectable()
 export class UsersService {

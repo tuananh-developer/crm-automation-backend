@@ -26,16 +26,12 @@ import {
   UpdateLeadDto,
 } from './dto/index.js';
 import { LeadMapper } from './mappers/lead.mapper.js';
+import type {
+  ConvertLeadResult,
+  CustomerMatchSource,
+} from './interfaces/index.js';
 
-export type CustomerMatchSource = 'EMAIL' | 'PHONE';
-
-export interface ConvertLeadResult {
-  lead: Lead;
-  customer: Customer;
-  customerCreated: boolean;
-  matchedBy: CustomerMatchSource | null;
-  message: string;
-}
+export type { CustomerMatchSource, ConvertLeadResult };
 
 @Injectable()
 export class LeadsService {

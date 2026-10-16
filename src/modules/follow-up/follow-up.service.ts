@@ -32,6 +32,10 @@ import {
   QueryFollowUpExecutionDto,
   UpdateEnrollmentDto,
 } from './dto/index.js';
+import type {
+  ExecuteFollowUpResult,
+  N8nFollowUpResponse,
+} from './interfaces/index.js';
 
 export const DEFAULT_MAX_RETRIES = 3;
 export const DEFAULT_RETRY_DELAY_MINUTES = 10;
@@ -40,19 +44,7 @@ export const DEFAULT_FOLLOW_UP_WEBHOOK_PATH = 'follow-up-execute';
 const PHONE_CHANNELS = ['SMS', 'WHATSAPP', 'MESSAGE', 'PHONE', 'ZALO'];
 const RUNNING_TIMEOUT_MINUTES = 5;
 
-export interface N8nFollowUpResponse {
-  success?: boolean;
-  providerMessageId?: string | null;
-  message?: string;
-  error?: string;
-}
-
-export interface ExecuteFollowUpResult {
-  execution: FollowUpExecution;
-  status: ExecutionStatus;
-  retryCount: number;
-  message: string;
-}
+export type { N8nFollowUpResponse, ExecuteFollowUpResult };
 
 @Injectable()
 export class FollowUpService {

@@ -10,7 +10,7 @@ import {
   LeadResponseDto,
 } from '../dto/lead-response.dto.js';
 import { LeadSourceResponseDto } from '../dto/lead-source-response.dto.js';
-import type { ConvertLeadResult } from '../leads.service.js';
+import type { ConvertLeadResult } from '../interfaces/index.js';
 
 export class LeadMapper {
   static toSourceResponseDto(source: LeadSource): LeadSourceResponseDto {

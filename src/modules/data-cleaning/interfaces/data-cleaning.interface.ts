@@ -58,3 +58,39 @@ export interface ApplyCleaningResult {
   totalRequested: number;
   results: AppliedFindingResult[];
 }
+
+export type AllowedCleaningField =
+  | 'firstName'
+  | 'lastName'
+  | 'email'
+  | 'phone'
+  | 'companyName'
+  | 'companyWebsite'
+  | 'jobTitle'
+  | 'industry';
+
+export interface ScanInputPayload {
+  scope: 'ALL' | 'FILTER';
+  filter?: {
+    status?: string;
+    sourceId?: string;
+    search?: string;
+    limit?: number;
+  } | null;
+  requestedAt?: string;
+}
+
+export interface AppliedStatItem {
+  appliedAt: string;
+  userId: string | null;
+  appliedCount: number;
+  skippedCount: number;
+  totalRequested: number;
+}
+
+export interface ScanOutputPayload {
+  summary?: DataCleaningSummary | null;
+  findings?: DataCleaningFinding[];
+  appliedStats?: AppliedStatItem[];
+  receivedAt?: string;
+}

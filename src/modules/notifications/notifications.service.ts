@@ -2,21 +2,13 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Notification } from './entities/notification.entity.js';
-import { NotificationType } from './enums/notification.enum.js';
 import {
   DEFAULT_NOTIFICATION_LIMIT,
   QueryNotificationsDto,
 } from './dto/index.js';
+import type { CreateNotificationInput } from './interfaces/index.js';
 
-export interface CreateNotificationInput {
-  userId: string;
-  type: NotificationType | string;
-  title: string;
-  content?: string | null;
-  leadId?: string | null;
-  customerId?: string | null;
-  reviewTaskId?: string | null;
-}
+export type { CreateNotificationInput };
 
 @Injectable()
 export class NotificationsService {
