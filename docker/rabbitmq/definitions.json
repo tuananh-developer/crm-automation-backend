@@ -1,0 +1,83 @@
+{
+  "rabbit_version": "4.3.6",
+  "vhosts": [
+    {
+      "name": "/"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "crm.events",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "crm_events_queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "lead.enrichment.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "lead.scoring.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "data.cleaning.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    }
+  ],
+  "bindings": [
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "crm_events_queue",
+      "destination_type": "queue",
+      "routing_key": "lead.*",
+      "arguments": {}
+    },
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "lead.enrichment.queue",
+      "destination_type": "queue",
+      "routing_key": "lead.enrichment.requested",
+      "arguments": {}
+    },
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "lead.scoring.queue",
+      "destination_type": "queue",
+      "routing_key": "lead.scoring.requested",
+      "arguments": {}
+    },
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "data.cleaning.queue",
+      "destination_type": "queue",
+      "routing_key": "data.cleaning.requested",
+      "arguments": {}
+    }
+  ]
+}
