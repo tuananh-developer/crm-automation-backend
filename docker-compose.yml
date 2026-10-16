@@ -18,7 +18,11 @@ services:
       - pgdata:/var/lib/postgresql
 
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${LOCAL_DB_USER:-postgres} -d ${LOCAL_DB_NAME:-crm_backend}']
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${LOCAL_DB_USER:-postgres} -d ${LOCAL_DB_NAME:-crm_backend}',
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -69,8 +73,7 @@ services:
       - N8N_BASIC_AUTH_ACTIVE=false
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-crm-automation-n8n-encryption-key-2026}
-      - N8N_RUNNERS_GRANT_TOKEN_TTL=300
-      - N8N_RUNNERS_MODE=internal
+      - N8N_RUNNERS_ENABLED=false
       - NODE_OPTIONS=--max-old-space-size=384
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=24
