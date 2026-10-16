@@ -7,9 +7,9 @@ services:
     restart: unless-stopped
 
     environment:
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-crm_backend}
+      POSTGRES_USER: ${LOCAL_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${LOCAL_DB_NAME:-crm_backend}
 
     ports:
       - '${DB_PORT:-5432}:5432'
@@ -18,7 +18,7 @@ services:
       - pgdata:/var/lib/postgresql
 
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-crm_backend}']
+      test: ['CMD-SHELL', 'pg_isready -U ${LOCAL_DB_USER:-postgres} -d ${LOCAL_DB_NAME:-crm_backend}']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -58,11 +58,11 @@ services:
       - TZ=Asia/Ho_Chi_Minh
 
       - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_DATABASE=${DB_NAME:-crm_backend}
+      - DB_POSTGRESDB_DATABASE=${N8N_DB_NAME:-crm_db}
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_USER=${DB_USER:-postgres}
-      - DB_POSTGRESDB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_POSTGRESDB_USER=${LOCAL_DB_USER:-postgres}
+      - DB_POSTGRESDB_PASSWORD=${LOCAL_DB_PASSWORD:-postgres}
       - N8N_BASIC_AUTH_ACTIVE=false
 
       - NODE_ENV=production
