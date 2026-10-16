@@ -73,8 +73,12 @@ services:
       - N8N_BASIC_AUTH_ACTIVE=false
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-crm-automation-n8n-encryption-key-2026}
-      - N8N_RUNNERS_ENABLED=false
-      - NODE_OPTIONS=--max-old-space-size=384
+      - N8N_RUNNERS_MODE=internal
+      - N8N_RUNNERS_GRANT_TOKEN_TTL=300
+      - N8N_RUNNERS_TASK_TIMEOUT=300
+      - N8N_RUNNERS_MAX_CONCURRENCY=1
+      - N8N_RUNNERS_MAX_OLD_SPACE_SIZE=96
+      - NODE_OPTIONS=--max-old-space-size=280
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=24
       - EXECUTIONS_DATA_PRUNE_MAX_COUNT=500
