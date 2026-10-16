@@ -35,7 +35,7 @@ async function bootstrap() {
   const swaggerConfig = new DocumentBuilder()
     .setTitle('CRM Automation Backend API')
     .setDescription(
-      'REST API documentation for AI-Powered CRM Automation Platform (UC01 Create Lead, UC02 AI Lead Qualification, etc.)',
+      'REST API documentation for AI-Powered CRM Automation Platform',
     )
     .setVersion('1.0')
     .addTag('Leads', 'Lead management and lifecycle')
