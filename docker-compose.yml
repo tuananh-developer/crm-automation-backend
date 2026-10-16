@@ -71,6 +71,10 @@ services:
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-crm-automation-n8n-encryption-key-2026}
       - N8N_RUNNERS_GRANT_TOKEN_TTL=300
       - N8N_RUNNERS_MODE=internal
+      - NODE_OPTIONS=--max-old-space-size=384
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=24
+      - EXECUTIONS_DATA_PRUNE_MAX_COUNT=500
 
       - NODE_ENV=production
       - GEMINI_API_KEY=${GEMINI_API_KEY}
