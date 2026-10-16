@@ -258,8 +258,8 @@ export class SegmentsService {
     const qb = this.customerSegmentsRepository
       .createQueryBuilder('assignment')
       .leftJoinAndSelect('assignment.customer', 'customer')
-      .leftJoinAndSelect('assignment.customer.creator', 'customerCreator')
-      .leftJoinAndSelect('assignment.customer.updater', 'customerUpdater')
+      .leftJoinAndSelect('customer.creator', 'customerCreator')
+      .leftJoinAndSelect('customer.updater', 'customerUpdater')
       .leftJoinAndSelect('assignment.segment', 'segment')
       .where('assignment.segmentId = :segmentId', { segmentId });
 
