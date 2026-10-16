@@ -121,19 +121,37 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
   }
 
   getRabbitmqUrl(): string {
+    const isProd = this.configService.get<string>('NODE_ENV') === 'production';
+    const useCloudAmqp =
+      this.configService.get<string>('USE_CLOUD_AMQP') === 'true';
     const fullUrl = this.configService.get<string>('RABBITMQ_URL');
-    if (fullUrl) {
+
+    // 1. In production or when USE_CLOUD_AMQP=true: target CloudAMQP broker
+    if ((isProd || useCloudAmqp) && fullUrl) {
+      this.logger.log('Targeting CloudAMQP broker (Production / Cloud mode)');
       return fullUrl;
     }
 
-    const host = this.configService.get<string>('RABBITMQ_HOST');
-    const port = this.configService.get<number>('RABBITMQ_PORT');
-    const user = this.configService.get<string>('RABBITMQ_USER');
-    const password = this.configService.get<string>(
-      'RABBITMQ_PASSWORD',
-      'guest',
-    );
+    // 2. In development / local mode: prioritize local Docker RabbitMQ broker
+    const host =
+      this.configService.get<string>('LOCAL_RABBITMQ_HOST') ||
+      this.configService.get<string>('RABBITMQ_HOST') ||
+      'localhost';
+    const port = this.configService.get<number>('LOCAL_RABBITMQ_PORT') || 5672;
+    const user =
+      this.configService.get<string>('LOCAL_RABBITMQ_USER') ||
+      (host === 'localhost'
+        ? 'guest'
+        : this.configService.get<string>('RABBITMQ_USER') || 'guest');
+    const password =
+      this.configService.get<string>('LOCAL_RABBITMQ_PASSWORD') ||
+      (host === 'localhost'
+        ? 'guest'
+        : this.configService.get<string>('RABBITMQ_PASSWORD') || 'guest');
 
+    this.logger.log(
+      `Targeting Local RabbitMQ broker at ${host}:${port} (Development mode)`,
+    );
     return `amqp://${user}:${password}@${host}:${port}`;
   }
 
