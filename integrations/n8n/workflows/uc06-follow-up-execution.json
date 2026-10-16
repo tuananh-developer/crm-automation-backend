@@ -1,5 +1,5 @@
 {
-  "name": "UC06 - Follow-up Execution Workflow",
+  "name": "UC06 - Execute Follow-up",
   "nodes": [
     {
       "parameters": {
@@ -8,79 +8,152 @@
         "responseMode": "responseNode",
         "options": {}
       },
-      "id": "1",
-      "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [180, 300],
-      "webhookId": "uc06-follow-up-execute"
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "88fa4747-222d-45e6-b3d9-caede6d02917",
+      "name": "Webhook",
+      "webhookId": "fa563d88-5c20-42de-95d9-ef612680bd3f"
     },
     {
       "parameters": {
-        "jsCode": "const incoming = $input.first().json;\nconst body = incoming.body ?? incoming;\n\nconst required = ['executionId', 'enrollmentId', 'stepId', 'recipient', 'message', 'channel'];\nconst missing = required.filter((key) => !body[key]);\n\nif (missing.length > 0) {\n  throw new Error(`Invalid follow-up payload. Missing fields: ${missing.join(', ')}`);\n}\n\nreturn [{ json: { ...body, attempt: body.attempt ?? 1 } }];"
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d79a5877-de33-4a82-b35d-d03fb6c8f76b",
+              "leftValue": "={{ $json.body.enrollmentId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "4a47ae57-8565-4396-bae0-98d28e067434",
+              "leftValue": "={{ $json.body.recipient }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
       },
-      "id": "2",
-      "name": "Validate Input",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [400, 300]
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        224,
+        0
+      ],
+      "id": "934f0779-edfd-4b59-a534-580394c13f6d",
+      "name": "Validate Input"
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nconst channel = String(input.channel || 'EMAIL').toUpperCase();\nconst message = String(input.message || '').trim();\n\nif (!message) {\n  throw new Error('Follow-up message content is empty after template rendering');\n}\n\nreturn [{\n  json: {\n    ...input,\n    channel,\n    providerPayload: {\n      to: input.recipient,\n      subject: input.subject ?? null,\n      text: message,\n      channel,\n      actionType: input.actionType ?? null,\n      executionId: input.executionId,\n      enrollmentId: input.enrollmentId,\n      stepId: input.stepId,\n      leadId: input.leadId ?? null,\n      customerId: input.customerId ?? null\n    }\n  }\n}];"
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8cbd54e9-f622-4d13-87ee-1a1e091eca6a",
+              "name": "recipientEmail",
+              "value": "={{ $json.body.recipient }}",
+              "type": "string"
+            },
+            {
+              "id": "0657bb82-436c-4b1f-83e9-f435c57a3e0d",
+              "name": "emailSubject",
+              "value": "={{ $json.body.subject || 'Thông báo từ hệ thống CRM' }}",
+              "type": "string"
+            },
+            {
+              "id": "05a085ce-30e2-4862-8cf1-b7676cdb10c1",
+              "name": "emailBody",
+              "value": "={{ $json.body.message }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
       },
-      "id": "3",
-      "name": "Build Message",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [620, 300]
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        448,
+        -96
+      ],
+      "id": "cd698884-997a-4e4a-be26-35dbb356ee7c",
+      "name": "Build Message"
     },
     {
       "parameters": {
-        "url": "={{ ($env.COMMUNICATION_SERVICE_URL || 'http://crm_communication_service:3000') + '/messages' }}",
-        "method": "POST",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.providerPayload) }}",
-        "options": {
-          "timeout": 15000
-        }
+        "fromEmail": "={{ $env.SMTP_FROM_EMAIL || 'no-reply@crm.local' }}",
+        "toEmail": "={{ $json.recipientEmail }}",
+        "subject": "={{ $json.emailSubject }}",
+        "html": "={{ $json.emailBody }}",
+        "options": {}
       },
-      "id": "4",
-      "name": "Send Email/Message",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [860, 300],
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        672,
+        -96
+      ],
+      "id": "fb2e85e4-9ffb-4be0-82bc-42a590f838d8",
+      "name": "Send an Email",
       "onError": "continueErrorOutput",
-      "retryOnFail": true,
-      "maxTries": 2,
-      "waitBetweenTries": 2000
-    },
-    {
-      "parameters": {
-        "jsCode": "const item = $input.first().json;\nconst request = $('Build Message').first().json;\n\nconst errorMessage = item?.error?.message ?? item?.errorMessage ?? item?.message ?? null;\nconst failed = Boolean(item?.error) || item?.success === false || Boolean(errorMessage && !item?.id && !item?.messageId);\n\nif (failed) {\n  return [{\n    json: {\n      success: false,\n      executionId: request.executionId,\n      enrollmentId: request.enrollmentId,\n      stepId: request.stepId,\n      error: errorMessage || 'Provider failed to deliver the follow-up message',\n      retryable: true\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    success: true,\n    executionId: request.executionId,\n    enrollmentId: request.enrollmentId,\n    stepId: request.stepId,\n    providerMessageId: item?.id ?? item?.messageId ?? `${request.channel}-${request.executionId}-${Date.now()}`,\n    message: 'Follow-up executed successfully'\n  }\n}];"
-      },
-      "id": "5",
-      "name": "Build Response",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1120, 300]
+      "webhookId": "4a2f3293-0c83-4d1d-b35b-2829d93f4c8d",
+      "credentials": {
+        "smtp": {
+          "id": "hlz8efPEihbX2EdN",
+          "name": "SMTP account"
+        }
+      }
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify($json) }}",
-        "options": {
-          "responseCode": 200
-        }
+        "responseBody": "={{ JSON.stringify({\n  success: true,\n  executionId: $('Webhook').first().json.body.executionId,\n  enrollmentId: $('Webhook').first().json.body.enrollmentId,\n  stepId: $('Webhook').first().json.body.stepId,\n  providerMessageId: $json.messageId ?? null,\n  message: 'Follow-up email sent successfully'\n}) }}",
+        "options": {}
       },
-      "id": "6",
-      "name": "Respond to Webhook",
       "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [1380, 300]
+      "typeVersion": 1.5,
+      "position": [
+        896,
+        -96
+      ],
+      "id": "e2ca5292-1eeb-4cc9-abe9-d8933857bf4e",
+      "name": "Respond Success"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  success: false,\n  error: (typeof $json.error === 'string' ? $json.error : $json.error?.message) || ($json.error ? 'SMTP delivery failed' : 'Invalid payload: missing enrollmentId or lead email'),\n  retryable: Boolean($json.error),\n  executionId: $('Webhook').first().json.body.executionId,\n  enrollmentId: $('Webhook').first().json.body.enrollmentId,\n  stepId: $('Webhook').first().json.body.stepId\n}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        448,
+        96
+      ],
+      "id": "d3f750a6-4dbb-48b5-83e7-2423c0073668",
+      "name": "Respond Error"
     }
   ],
+  "pinData": {},
   "connections": {
     "Webhook": {
       "main": [
@@ -101,6 +174,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -108,38 +188,25 @@
       "main": [
         [
           {
-            "node": "Send Email/Message",
+            "node": "Send an Email",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-"Send Email/Message": {
+    "Send an Email": {
       "main": [
         [
           {
-            "node": "Build Response",
+            "node": "Respond Success",
             "type": "main",
             "index": 0
           }
-        ]
-      ],
-      "error": [
+        ],
         [
           {
-            "node": "Build Response",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Build Response": {
-      "main": [
-        [
-          {
-            "node": "Respond to Webhook",
+            "node": "Respond Error",
             "type": "main",
             "index": 0
           }
@@ -147,7 +214,17 @@
       ]
     }
   },
+  "active": true,
   "settings": {
-    "executionOrder": "v1"
-  }
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "38f1cbff-321c-4c60-a143-68a407e7a267",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "379b96ac07091f7d13498e45251f40b0dfc2c2079eeec6ccadcf8f6898e8d130"
+  },
+  "nodeGroups": [],
+  "id": "iDbXFPap34AGfJSf",
+  "tags": []
 }
