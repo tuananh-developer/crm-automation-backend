@@ -99,7 +99,7 @@
     },
     {
       "parameters": {
-        "fromEmail": "tronglk.24it@vku.udn.vn",
+        "fromEmail": "={{ $env.SMTP_FROM_EMAIL || 'no-reply@crm.local' }}",
         "toEmail": "={{ $json.recipientEmail }}",
         "subject": "={{ $json.emailSubject }}",
         "html": "={{ $json.emailBody }}",
@@ -113,6 +113,7 @@
       ],
       "id": "fb2e85e4-9ffb-4be0-82bc-42a590f838d8",
       "name": "Send an Email",
+      "onError": "continueErrorOutput",
       "webhookId": "4a2f3293-0c83-4d1d-b35b-2829d93f4c8d",
       "credentials": {
         "smtp": {
@@ -139,7 +140,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "{\n  \"success\": false,\n  \"error\": \"Invalid payload: missing enrollmentId or lead email\"\n}",
+        "responseBody": "={{ JSON.stringify({\n  success: false,\n  error: (typeof $json.error === 'string' ? $json.error : $json.error?.message) || ($json.error ? 'SMTP delivery failed' : 'Invalid payload: missing enrollmentId or lead email'),\n  retryable: Boolean($json.error),\n  executionId: $('Webhook').first().json.body.executionId,\n  enrollmentId: $('Webhook').first().json.body.enrollmentId,\n  stepId: $('Webhook').first().json.body.stepId\n}) }}",
         "options": {}
       },
       "type": "n8n-nodes-base.respondToWebhook",
@@ -199,6 +200,13 @@
         [
           {
             "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Error",
             "type": "main",
             "index": 0
           }
