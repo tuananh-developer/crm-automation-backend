@@ -2,7 +2,9 @@ import type { ReviewTask } from '../entities/review-task.entity.js';
 import {
   ReviewAssigneeResponseDto,
   ReviewTaskResponseDto,
+  ReviewWorkflowRunResponseDto,
 } from '../dto/review-task-response.dto.js';
+import { LeadMapper } from '../../leads/mappers/lead.mapper.js';
 
 export class ReviewTaskMapper {
   static toResponseDto(entity: ReviewTask): ReviewTaskResponseDto {
@@ -28,6 +30,29 @@ export class ReviewTaskMapper {
       resolvedAt: entity.resolvedAt ?? null,
       createdAt: entity.createdAt ?? new Date(),
     };
+
+    if (entity.lead) {
+      dto.lead = LeadMapper.toResponseDto(entity.lead);
+    } else {
+      dto.lead = null;
+    }
+
+    if (entity.workflowRun) {
+      const wf: ReviewWorkflowRunResponseDto = {
+        id: entity.workflowRun.id,
+        workflowName: entity.workflowRun.workflowName,
+        status: entity.workflowRun.status,
+        inputPayload: entity.workflowRun.inputPayload ?? null,
+        outputPayload: entity.workflowRun.outputPayload ?? null,
+        errorMessage: entity.workflowRun.errorMessage ?? null,
+        startedAt: entity.workflowRun.startedAt ?? null,
+        finishedAt: entity.workflowRun.finishedAt ?? null,
+        createdAt: entity.workflowRun.createdAt ?? new Date(),
+      };
+      dto.workflowRun = wf;
+    } else {
+      dto.workflowRun = null;
+    }
 
     if (entity.assignee) {
       const assignee: ReviewAssigneeResponseDto = {
