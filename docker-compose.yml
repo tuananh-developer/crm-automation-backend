@@ -29,12 +29,12 @@ services:
     restart: unless-stopped
 
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_DEFAULT_USER: ${LOCAL_RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${LOCAL_RABBITMQ_PASSWORD:-guest}
 
     ports:
-      - '${RABBITMQ_PORT:-5672}:5672'
-      - '${RABBITMQ_DEFAULT_PORT:-15672}:15672'
+      - '${LOCAL_RABBITMQ_PORT:-5672}:5672'
+      - '${LOCAL_RABBITMQ_MGMT_PORT:-15672}:15672'
 
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
