@@ -4,6 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { Lead } from '../leads/entities/lead.entity.js';
@@ -121,6 +122,32 @@ export class DataCleaningService {
       );
     }
 
+    // Resilient fallback worker: if n8n/RabbitMQ takes >2s or is delayed, automatically process in-process
+    setTimeout(() => {
+      void (async () => {
+        try {
+          const check = await this.workflowRunRepository.findOne({
+            where: { id: savedRun.id },
+          });
+          if (
+            check &&
+            (check.status === WorkflowStatus.PENDING ||
+              check.status === WorkflowStatus.RUNNING)
+          ) {
+            this.logger.log(
+              `Executing resilient in-process data cleaning for WorkflowRun ${savedRun.id}`,
+            );
+            await this.executeInProcessScan(savedRun.id);
+          }
+        } catch (err: unknown) {
+          const errText = err instanceof Error ? err.message : String(err);
+          this.logger.error(
+            `Error in fallback data cleaning worker: ${errText}`,
+          );
+        }
+      })();
+    }, 2000);
+
     return {
       workflowRunId: savedRun.id,
       status: savedRun.status,
@@ -208,6 +235,259 @@ export class DataCleaningService {
       count: leads.length,
       leads,
     };
+  }
+
+  /**
+   * Resilient in-process scan engine: executes duplicate detection and format audits
+   * directly within the backend service if n8n/RabbitMQ is delayed or inaccessible.
+   */
+  async executeInProcessScan(workflowRunId: string): Promise<void> {
+    const { leads } = await this.getLeadsForScan(workflowRunId);
+    const findings: DataCleaningFinding[] = [];
+    const emailMap = new Map<string, Lead[]>();
+    const phoneMap = new Map<string, Lead[]>();
+
+    for (const lead of leads) {
+      if (lead.email) {
+        const cleanEmail = lead.email.trim().toLowerCase();
+        if (!emailMap.has(cleanEmail)) emailMap.set(cleanEmail, []);
+        emailMap.get(cleanEmail)!.push(lead);
+      }
+      if (lead.phone) {
+        const cleanPhone = lead.phone.replace(/[^0-9+]/g, '');
+        if (cleanPhone.length >= 8) {
+          if (!phoneMap.has(cleanPhone)) phoneMap.set(cleanPhone, []);
+          phoneMap.get(cleanPhone)!.push(lead);
+        }
+      }
+    }
+
+    for (const duplicateLeads of emailMap.values()) {
+      if (duplicateLeads.length > 1) {
+        for (const lead of duplicateLeads) {
+          findings.push({
+            id: randomUUID(),
+            recordType: 'Lead',
+            recordId: lead.id,
+            leadIdentifier:
+              `${lead.firstName || ''} ${lead.lastName || ''} (${lead.email})`.trim(),
+            fieldName: 'email',
+            issueType: 'DUPLICATE_CANDIDATE',
+            severity: 'CRITICAL',
+            currentValue: lead.email,
+            proposedValue: `Duplicate conflict with ${duplicateLeads.length - 1} other record(s)`,
+            confidence: 0.99,
+            reason:
+              'Lead shares exact email with other leads in database. Requires manual review.',
+            safeToApply: false,
+            requiresHumanApproval: true,
+          });
+        }
+      }
+    }
+
+    for (const [phone, duplicateLeads] of phoneMap.entries()) {
+      if (duplicateLeads.length > 1) {
+        for (const lead of duplicateLeads) {
+          findings.push({
+            id: randomUUID(),
+            recordType: 'Lead',
+            recordId: lead.id,
+            leadIdentifier:
+              `${lead.firstName || ''} ${lead.lastName || ''} (${lead.email})`.trim(),
+            fieldName: 'phone',
+            issueType: 'DUPLICATE_CANDIDATE',
+            severity: 'HIGH',
+            currentValue: lead.phone,
+            proposedValue: `Duplicate phone conflict with ${duplicateLeads.length - 1} other record(s)`,
+            confidence: 0.95,
+            reason: `Lead shares same normalized phone number (${phone}). Requires manual review.`,
+            safeToApply: false,
+            requiresHumanApproval: true,
+          });
+        }
+      }
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    for (const lead of leads) {
+      const leadName =
+        `${lead.firstName || ''} ${lead.lastName || ''}`.trim() ||
+        'Unnamed Lead';
+      const leadIdent = `${leadName} (${lead.email || 'No email'})`;
+
+      if (!lead.firstName || !lead.firstName.trim()) {
+        findings.push({
+          id: randomUUID(),
+          recordType: 'Lead',
+          recordId: lead.id,
+          leadIdentifier: leadIdent,
+          fieldName: 'firstName',
+          issueType: 'MISSING_FIELD',
+          severity: 'HIGH',
+          currentValue: lead.firstName || null,
+          proposedValue: null,
+          confidence: 1.0,
+          reason:
+            'First name is a required field but is currently missing or blank.',
+          safeToApply: false,
+          requiresHumanApproval: true,
+        });
+      }
+
+      if (lead.email) {
+        const rawEmail = lead.email;
+        const trimmed = rawEmail.trim();
+        const lower = trimmed.toLowerCase();
+
+        if (rawEmail !== trimmed) {
+          findings.push({
+            id: randomUUID(),
+            recordType: 'Lead',
+            recordId: lead.id,
+            leadIdentifier: leadIdent,
+            fieldName: 'email',
+            issueType: 'WHITESPACE_TRIM',
+            severity: 'LOW',
+            currentValue: rawEmail,
+            proposedValue: lower,
+            confidence: 1.0,
+            reason: 'Email contains leading or trailing whitespace.',
+            safeToApply: true,
+            requiresHumanApproval: true,
+          });
+        } else if (rawEmail !== lower) {
+          findings.push({
+            id: randomUUID(),
+            recordType: 'Lead',
+            recordId: lead.id,
+            leadIdentifier: leadIdent,
+            fieldName: 'email',
+            issueType: 'CASE_NORMALIZATION',
+            severity: 'LOW',
+            currentValue: rawEmail,
+            proposedValue: lower,
+            confidence: 1.0,
+            reason:
+              'Email contains uppercase characters. Standard convention is lowercase.',
+            safeToApply: true,
+            requiresHumanApproval: true,
+          });
+        }
+
+        if (!emailRegex.test(lower)) {
+          findings.push({
+            id: randomUUID(),
+            recordType: 'Lead',
+            recordId: lead.id,
+            leadIdentifier: leadIdent,
+            fieldName: 'email',
+            issueType: 'INVALID_EMAIL',
+            severity: 'HIGH',
+            currentValue: rawEmail,
+            proposedValue: null,
+            confidence: 0.98,
+            reason: 'Email address does not match standard RFC email format.',
+            safeToApply: false,
+            requiresHumanApproval: true,
+          });
+        }
+      }
+
+      if (lead.companyWebsite) {
+        const rawWeb = lead.companyWebsite.trim();
+        if (rawWeb && !/^https?:\/\//i.test(rawWeb)) {
+          const cleanWeb =
+            'https://' + rawWeb.replace(/^www\./i, '').replace(/\/+$/, '');
+          findings.push({
+            id: randomUUID(),
+            recordType: 'Lead',
+            recordId: lead.id,
+            leadIdentifier: leadIdent,
+            fieldName: 'companyWebsite',
+            issueType: 'INVALID_WEBSITE',
+            severity: 'LOW',
+            currentValue: lead.companyWebsite,
+            proposedValue: cleanWeb,
+            confidence: 0.95,
+            reason:
+              'Company website is missing standard https:// protocol prefix.',
+            safeToApply: true,
+            requiresHumanApproval: true,
+          });
+        } else if (rawWeb.includes(',')) {
+          const cleanWeb = rawWeb.replace(/,/g, '.');
+          findings.push({
+            id: randomUUID(),
+            recordType: 'Lead',
+            recordId: lead.id,
+            leadIdentifier: leadIdent,
+            fieldName: 'companyWebsite',
+            issueType: 'INVALID_WEBSITE',
+            severity: 'MEDIUM',
+            currentValue: lead.companyWebsite,
+            proposedValue: cleanWeb,
+            confidence: 0.98,
+            reason:
+              'Company website domain contains typo comma instead of dot.',
+            safeToApply: true,
+            requiresHumanApproval: true,
+          });
+        }
+      }
+
+      if (lead.phone) {
+        const rawPhone = lead.phone.trim();
+        const cleanedDigits = rawPhone.replace(/[^0-9+]/g, '');
+        if (rawPhone !== cleanedDigits && cleanedDigits.length >= 9) {
+          findings.push({
+            id: randomUUID(),
+            recordType: 'Lead',
+            recordId: lead.id,
+            leadIdentifier: leadIdent,
+            fieldName: 'phone',
+            issueType: 'INCONSISTENT_PHONE',
+            severity: 'LOW',
+            currentValue: rawPhone,
+            proposedValue: cleanedDigits,
+            confidence: 0.92,
+            reason:
+              'Phone contains formatting noise or symbols. Normalized to clean dialable digits.',
+            safeToApply: true,
+            requiresHumanApproval: true,
+          });
+        }
+      }
+    }
+
+    const issuesByType: Record<string, number> = {};
+    const issuesBySeverity: Record<string, number> = {};
+    let duplicatesFound = 0;
+    let safeToApplyCount = 0;
+
+    for (const f of findings) {
+      issuesByType[f.issueType] = (issuesByType[f.issueType] || 0) + 1;
+      issuesBySeverity[f.severity] = (issuesBySeverity[f.severity] || 0) + 1;
+      if (f.issueType === 'DUPLICATE_CANDIDATE') duplicatesFound++;
+      if (f.safeToApply) safeToApplyCount++;
+    }
+
+    const summary = {
+      totalLeadsScanned: leads.length,
+      totalIssuesFound: findings.length,
+      issuesByType,
+      issuesBySeverity,
+      duplicatesFound,
+      safeToApplyCount,
+    };
+
+    await this.handleCallback({
+      workflowRunId,
+      status: 'SUCCESS',
+      summary,
+      findings: findings,
+    });
   }
 
   /**
