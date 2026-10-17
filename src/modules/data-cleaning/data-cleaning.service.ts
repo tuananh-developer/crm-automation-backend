@@ -122,7 +122,7 @@ export class DataCleaningService {
       );
     }
 
-    // Resilient fallback worker: if n8n/RabbitMQ takes >2s or is delayed, automatically process in-process
+    // Resilient fallback worker: if n8n/RabbitMQ takes >20s or is delayed, automatically process in-process
     setTimeout(() => {
       void (async () => {
         try {
@@ -146,7 +146,7 @@ export class DataCleaningService {
           );
         }
       })();
-    }, 2000);
+    }, 20000).unref();
 
     return {
       workflowRunId: savedRun.id,

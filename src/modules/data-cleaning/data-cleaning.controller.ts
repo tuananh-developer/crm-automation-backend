@@ -8,6 +8,8 @@ import {
   ParseUUIDPipe,
   Post,
   UseGuards,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import {
   ApiBody,
@@ -104,6 +106,13 @@ export class DataCleaningController {
 
   @Post('callback')
   @UseGuards(N8nAuthGuard)
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+    }),
+  )
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Receive n8n Data Cleaning Callback (UC10 - Step 10)',
