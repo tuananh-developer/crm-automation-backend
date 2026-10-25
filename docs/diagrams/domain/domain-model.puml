@@ -1,0 +1,390 @@
+@startuml
+title AI CRM Automation — Complete Domain Model
+ hide methods
+ skinparam classAttributeIconSize 0
+ skinparam linetype ortho
+ skinparam shadowing false
+ skinparam packageStyle rectangle
+
+
+
+ package "Identity & Governance" {
+   class User <<ENTITY>> {
+     id: UUID
+     name: string
+     email: string
+     role: UserRole
+     status: UserStatus
+   }
+   class AuditLog <<ENTITY>> {
+     id: UUID
+     userId: UUID?
+     action: string
+     entityType: string
+     entityId: UUID
+   }
+   class Notification <<ENTITY>> {
+     id: UUID
+     userId: UUID
+     type: string
+     title: string
+     content: text?
+     leadId: UUID?
+     customerId: UUID?
+     reviewTaskId: UUID?
+     isRead: boolean
+     readAt: timestamptz?
+   }
+   class ReviewTask <<ENTITY>> {
+     id: UUID
+     leadId: UUID? [nullable]
+     workflowRunId: UUID?
+     assignedTo: UUID?
+     status: ReviewStatus
+     decision: ReviewDecision?
+     targetEntityType: string? [polymorphic target; no FK]
+     targetEntityId: UUID? [polymorphic target; no FK]
+   }
+   class WorkflowRun <<ENTITY>> {
+     id: UUID
+     workflowName: string
+     n8nExecutionId: string?
+     leadId: UUID?
+     customerId: UUID?
+     triggeredByUserId: UUID?
+     status: WorkflowStatus
+     inputPayload: JSONB?
+     outputPayload: JSONB?
+     errorMessage: string?
+   }
+ }
+
+ package "Lead & Intelligence" {
+   class LeadSource <<ENTITY>> {
+     id: UUID
+     name: string
+     isActive: boolean
+   }
+   class Lead <<ENTITY>> {
+     id: UUID
+     firstName: string
+     lastName: string?
+     email: string
+     phone: string?
+     status: LeadStatus
+     sourceId: UUID
+     ownerId: UUID?
+     convertedCustomerId: UUID?
+     convertedBy: UUID?
+   }
+   class Interaction <<ENTITY>> {
+     id: UUID
+     leadId: UUID
+     type: string
+     channel: string?
+     content: text?
+   }
+   class LeadQualification <<ENTITY>> {
+     id: UUID
+     leadId: UUID
+     workflowRunId: UUID?
+     status: QualificationStatus
+     confidence: decimal?
+   }
+   class LeadEnrichment <<ENTITY>> {
+     id: UUID
+     leadId: UUID
+     workflowRunId: UUID?
+     provider: string
+     status: EnrichmentStatus
+   }
+   class LeadScore <<ENTITY>> {
+     id: UUID
+     leadId: UUID
+     workflowRunId: UUID?
+     score: decimal
+     label: ScoreLabel
+   }
+ }
+
+ package "Follow-up Automation" {
+   class FollowUpSequence <<ENTITY>> {
+     id: UUID
+     name: string
+     status: string
+     createdBy: UUID
+     updatedBy: UUID?
+   }
+   class FollowUpStep <<ENTITY>> {
+     id: UUID
+     sequenceId: UUID
+     stepOrder: int
+     delayMinutes: int
+     channel: string
+   }
+   class LeadFollowUpEnrollment <<ENTITY>> {
+     id: UUID
+     leadId: UUID
+     sequenceId: UUID
+     currentStepId: UUID?
+     status: string
+     assignedBy: UUID?
+   }
+   class FollowUpExecution <<ENTITY>> {
+     id: UUID
+     enrollmentId: UUID
+     stepId: UUID
+     status: string
+     retryCount: int
+   }
+ }
+
+ package "Customer & Segmentation" {
+   class Customer <<ENTITY>> {
+     id: UUID
+     name: string
+     email: string
+     status: string?
+     createdBy: UUID
+     updatedBy: UUID?
+     isStrategic: boolean 
+     strategicMarkedBy: UUID? 
+   }
+   class Segment <<ENTITY>> {
+     id: UUID
+     name: string
+     criteria: JSONB?
+     isActive: boolean
+     createdBy: UUID
+     updatedBy: UUID?
+   }
+   class CustomerSegment <<ENTITY>> {
+     customerId: UUID
+     segmentId: UUID
+     assignmentType: string
+   }
+ }
+
+ package "Customer Insights and Operational Tasks" {
+   class CustomerIssue <<ENTITY>> {
+     id: UUID
+     customerId: UUID
+     title: string
+     severity: string
+     status: string
+     assignedTo: UUID?
+     createdBy: UUID?
+   }
+   class CustomerChurnAssessment <<ENTITY>> {
+     id: UUID
+     customerId: UUID
+     riskScore: decimal?
+     riskLevel: string
+     assessmentStatus: string
+     assessedAt: timestamptz
+   }
+   class CustomerFeedback <<ENTITY>> {
+     id: UUID
+     customerId: UUID
+     source: string
+     rating: decimal?
+     sentiment: string?
+     category: string?
+     urgency: string?
+     status: string
+     receivedAt: timestamptz
+   }
+   class CustomerHealthAssessment <<ENTITY>> {
+     id: UUID
+     customerId: UUID
+     healthScore: decimal?
+     healthStatus: string
+     dataCoverage: decimal?
+     policyVersion: string
+   }
+   class CustomerTask <<ENTITY>> {
+     id: UUID
+     customerId: UUID
+     taskType: string
+     title: string
+     description: text?
+     priority: string
+     status: string
+     assignedTo: UUID?
+     createdBy: UUID?
+     dueAt: timestamptz?
+     idempotencyKey: string [unique]
+   }
+ }
+
+ package "Conversations and Sales Meetings" {
+   class SalesMeeting <<ENTITY>> {
+     id: UUID
+     customerId: UUID?
+     leadId: UUID?
+     organizerUserId: UUID?
+     title: string
+     scheduledAt: timestamptz?
+     status: string
+   }
+   class ConversationTranscript <<ENTITY>> {
+     id: UUID
+     meetingId: UUID?
+     customerId: UUID?
+     leadId: UUID?
+     sourceType: string
+     redactedContent: text
+     processingStatus: string
+     createdBy: UUID?
+   }
+   class ConversationSummary <<ENTITY>> {
+     id: UUID
+     transcriptId: UUID
+     summaryText: text
+     sentiment: string?
+     keyPoints: JSONB?
+   }
+   class ConversationActionItem <<ENTITY>> {
+     id: UUID
+     summaryId: UUID
+     title: string
+     assignedTo: UUID?
+     dueAt: timestamptz?
+     status: string
+     approvalState: string
+   }
+ }
+
+ package "Quotes and Renewals" {
+   class ProductCatalogItem <<ENTITY>> {
+     id: UUID
+     sku: string
+     name: string
+     listPrice: decimal
+     currency: string
+   }
+   class Quote <<ENTITY>> {
+     id: UUID
+     customerId: UUID?
+     leadId: UUID?
+     status: string
+     currency: string
+     totalAmount: decimal
+     approvedBy: UUID?
+   }
+   class QuoteItem <<ENTITY>> {
+     id: UUID
+     quoteId: UUID
+     catalogItemId: UUID?
+     quantity: decimal
+     unitPriceSnapshot: decimal
+     lineTotal: decimal
+   }
+   class CustomerContract <<ENTITY>> {
+     id: UUID
+     customerId: UUID
+     contractNumber: string
+     status: string
+     renewalDate: date
+   }
+   class RenewalAttempt <<ENTITY>> {
+     id: UUID
+     contractId: UUID
+     status: string
+     channel: string
+     scheduledAt: timestamptz?
+   }
+ }
+
+ ' Relationships in the complete target domain model.
+ LeadSource "1" -- "0..*" Lead : source
+ User "0..1" -- "0..*" Lead : owner
+ User "0..1" -- "0..*" Lead : convertedBy
+ Lead "0..*" --> "0..1" Customer : convertedCustomer
+ Lead "1" -- "0..*" Interaction
+ User "0..1" -- "0..*" Interaction : createdBy
+ Lead "1" -- "0..*" LeadQualification
+ Lead "1" -- "0..*" LeadEnrichment
+ Lead "1" -- "0..*" LeadScore
+ WorkflowRun "0..1" -- "0..*" LeadQualification
+ WorkflowRun "0..1" -- "0..*" LeadEnrichment
+ WorkflowRun "0..1" -- "0..*" LeadScore
+ FollowUpSequence "1" -- "0..*" FollowUpStep
+ FollowUpSequence "1" -- "0..*" LeadFollowUpEnrollment
+ Lead "1" -- "0..*" LeadFollowUpEnrollment
+ FollowUpStep "0..1" -- "0..*" LeadFollowUpEnrollment : currentStep
+ LeadFollowUpEnrollment "1" -- "0..*" FollowUpExecution
+ FollowUpStep "1" -- "0..*" FollowUpExecution
+ User "1" -- "0..*" FollowUpSequence : createdBy
+ User "0..1" -- "0..*" FollowUpSequence : updatedBy
+ User "0..1" -- "0..*" LeadFollowUpEnrollment : assignedBy
+ Customer "1" -- "0..*" CustomerSegment
+ Segment "1" -- "0..*" CustomerSegment
+ User "0..1" -- "0..*" CustomerSegment : assignedBy
+ User "1" -- "0..*" Segment : createdBy
+ User "1" -- "0..*" Customer : createdBy
+ User "0..1" -- "0..*" Customer : updatedBy
+ User "0..1" -- "0..*" Customer : strategicMarkedBy
+ User "0..1" -- "0..*" Segment : updatedBy
+ Lead "0..1" -- "0..*" WorkflowRun
+ Customer "0..1" -- "0..*" WorkflowRun
+ User "0..1" -- "0..*" WorkflowRun : triggeredBy
+ WorkflowRun "0..1" -- "0..*" ReviewTask
+ Lead "0..1" -- "0..*" ReviewTask : canonical optional Lead association
+ User "0..1" -- "0..*" ReviewTask : assignee
+ User "1" -- "0..*" Notification
+ Lead "0..1" -- "0..*" Notification
+ Customer "0..1" -- "0..*" Notification
+ ReviewTask "0..1" -- "0..*" Notification
+ User "0..1" -- "0..*" AuditLog : actor
+
+ ' Relationships between customer insight and Topic 12 domain entities.
+ Customer "1" -- "0..*" CustomerIssue
+ User "0..1" -- "0..*" CustomerIssue : assignedTo
+ User "0..1" -- "0..*" CustomerIssue : createdBy
+ Customer "1" -- "0..*" CustomerChurnAssessment
+ WorkflowRun "0..1" -- "0..*" CustomerChurnAssessment
+ Customer "1" -- "0..*" CustomerFeedback
+ WorkflowRun "0..1" -- "0..*" CustomerFeedback
+ Customer "1" -- "0..*" CustomerHealthAssessment
+ WorkflowRun "0..1" -- "0..*" CustomerHealthAssessment
+ Customer "1" -- "0..*" CustomerTask
+ User "0..1" -- "0..*" CustomerTask : createdBy
+ CustomerIssue "0..1" -- "0..*" CustomerTask : sourceIssue
+ CustomerChurnAssessment "0..1" -- "0..*" CustomerTask : sourceChurnAssessment
+ CustomerFeedback "0..1" -- "0..*" CustomerTask : sourceFeedback
+ CustomerHealthAssessment "0..1" -- "0..*" CustomerTask : sourceHealthAssessment
+ WorkflowRun "0..1" -- "0..*" CustomerTask
+ User "0..1" -- "0..*" CustomerTask : assignee
+ SalesMeeting "0..1" -- "0..*" ConversationTranscript
+ User "0..1" -- "0..*" SalesMeeting : organizer
+ User "0..1" -- "0..*" ConversationTranscript : createdBy
+ Customer "0..1" -- "0..*" SalesMeeting
+ Lead "0..1" -- "0..*" SalesMeeting
+ Customer "0..1" -- "0..*" ConversationTranscript
+ Lead "0..1" -- "0..*" ConversationTranscript
+ ConversationTranscript "1" -- "0..*" ConversationSummary
+ ConversationSummary "1" -- "0..*" ConversationActionItem
+ Customer "0..1" -- "0..*" ConversationActionItem
+ Lead "0..1" -- "0..*" ConversationActionItem
+ User "0..1" -- "0..*" ConversationActionItem : assignee
+ Customer "0..1" -- "0..*" Quote
+ Lead "0..1" -- "0..*" Quote
+ User "1" -- "0..*" Quote : createdBy
+ User "0..1" -- "0..*" Quote : approvedBy
+ Quote "1" -- "0..*" QuoteItem
+ ProductCatalogItem "0..1" -- "0..*" QuoteItem
+ Customer "1" -- "0..*" CustomerContract
+ User "0..1" -- "0..*" CustomerContract : createdBy
+ CustomerContract "1" -- "0..*" RenewalAttempt
+ WorkflowRun "0..1" -- "0..*" RenewalAttempt
+
+ note bottom
+   This is the complete conceptual domain model for the finished AI CRM Automation product; use the ERD for exact relational columns and keys.
+   WorkflowRun output may hold transient Customer 360/Next Best Action output. Queryable business histories use dedicated entities as specified in the SRS.
+   CustomerTask is for operational customer work and remains distinct from ReviewTask for explicit human approval/review.
+   One Customer may be referenced by multiple Leads via convertedCustomer.
+   Transcript text is redacted before AI; backend owns scoring policies, quote calculations, authorization, idempotency, and persistence.
+   ReviewTask may target Lead or an allowlisted polymorphic resource; enforce target validation, authorization, policy, idempotency and audit in the backend.
+ end note
+@enduml

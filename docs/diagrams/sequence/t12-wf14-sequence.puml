@@ -1,0 +1,58 @@
+@startuml
+title T12-WF14 — AI Customer Feedback Agent (Sequence)
+autonumber
+actor "Customer Feedback Form/API" as FORM
+participant "NestJS Feedback Ingestion API" as API
+participant "n8n WF14\nCustomer Feedback" as N8N
+database "PostgreSQL" as DB
+participant "Gemini API" as AI
+participant "NestJS CustomerTask API" as CTASK
+participant "NestJS Communication API" as COMM
+
+FORM -> API: POST feedback submission
+API -> API: Validate/rate-limit source, authorize customer association, normalize and redact sensitive text
+API -> DB: Create WorkflowRun/request record; preserve restricted source reference
+DB --> API: workflowRunId
+API --> FORM: 202 Accepted + workflowRunId
+API -> N8N: POST protected internal webhook with scoped redacted feedback request
+activate N8N
+N8N -> N8N: Validate customer reference, channel and content
+N8N -> N8N: Validate redaction metadata and normalize safe feedback text
+N8N -> API: GET customer and recent interactions
+API -> DB: Read Customer and Interaction records
+DB --> API: Customer context
+API --> N8N: Context
+N8N -> AI: Classify sentiment/category/urgency from redacted content
+AI --> N8N: Structured classification + rationale
+N8N -> N8N: Validate schema/confidence and derive proposed priority
+N8N -> API: POST CustomerFeedback
+API -> API: Revalidate fields, permissions and priority policy
+API -> DB: Insert CustomerFeedback and audit history
+DB --> API: feedbackId + canonical status/priority
+API --> N8N: Saved feedback
+alt Escalation required by backend policy
+  N8N -> CTASK: POST /api/v1/customer-tasks with customerId + feedbackId (canonical)
+  CTASK -> DB: Insert/reuse customer_tasks linked to feedbackId idempotently
+  DB --> CTASK: taskId/status
+  CTASK --> N8N: Task created/already exists
+else No escalation required
+  N8N -> N8N: Continue with ordinary feedback flow
+end
+N8N -> COMM: Request backend acknowledgment/owner notification
+COMM -> DB: Record communication request/status
+DB --> COMM: Communication status
+COMM --> N8N: Acknowledgment/notification result
+N8N -> API: Record final workflow/callback status
+API -> DB: Update WorkflowRun/audit result
+DB --> API: Saved status
+API --> N8N: Accepted
+deactivate N8N
+FORM -> API: GET feedback processing result by workflowRunId
+API -> DB: Read CustomerFeedback/workflow result
+DB --> API: Result/status
+API --> FORM: Feedback status/reference
+note over API,N8N
+The public form calls NestJS, not n8n directly. NestJS protects the internal webhook,
+with sensitive feedback fields redacted by NestJS before any AI call. Communication and operational task creation remain backend-owned. `CustomerTask` is the operational task for feedback escalation, distinct from approval-only `ReviewTask`.
+end note
+@enduml

@@ -1,0 +1,38 @@
+@startuml
+title T12 — Shared n8n Error Handler (Separate Workflow; Not Counted in 12 Nodes)
+autonumber
+participant "n8n Business Workflow" as SOURCE
+participant "n8n Error Handler\n(Error Trigger)" as ERR
+participant "NestJS Backend" as API
+database "PostgreSQL" as DB
+participant "Notification Service" as NOTIFY
+
+SOURCE -> ERR: n8n execution failed (workflowId, executionId, lastNode, error)
+activate ERR
+ERR -> ERR: Normalize error event and derive correlation ID
+ERR -> ERR: Redact tokens, passwords, PII and secret-bearing request headers
+ERR -> API: POST workflow failure callback
+API -> DB: Idempotently record WorkflowRun failure / AuditLog entry
+DB --> API: Recorded status and correlation reference
+API --> ERR: Failure record accepted
+alt Critical failure or repeated delivery failure
+ERR -> API: Request idempotent in-app notification
+API -> NOTIFY: Notify owner/maintainer with sanitized diagnostic summary
+NOTIFY --> API: Notification status
+API --> ERR: Notification accepted/failed
+else Non-critical failure
+ERR -> ERR: Keep sanitized failure record without noisy notification
+end
+opt Retry policy explicitly permits automatic retry
+ERR -> API: Request retry/reschedule through backend policy
+API -> DB: Record retry attempt and next-run state
+DB --> API: Retry state
+API --> ERR: Retry scheduled or rejected
+end
+deactivate ERR
+note over SOURCE,ERR
+This is a separate Error Trigger workflow. It is not one of the 15 business
+workflows and does not count toward their 12 functional nodes. Prevent the
+error handler from recursively invoking itself; store sanitized diagnostics only.
+end note
+@enduml

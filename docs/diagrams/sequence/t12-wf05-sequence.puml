@@ -1,0 +1,65 @@
+@startuml
+title T12-WF05 — AI Customer 360 Agent (Sequence)
+autonumber
+actor "Sales/UI" as UI
+participant "NestJS Customer 360 API" as API
+participant "n8n WF05\nCustomer 360" as N8N
+database "PostgreSQL" as DB
+participant "Gemini API" as AI
+
+UI -> API: POST Customer 360 request (target route)
+API -> API: Authenticate requester and authorize customer scope
+API -> DB: Create WorkflowRun with customer/requester correlation
+DB --> API: workflowRunId
+API --> UI: 202 Accepted + workflowRunId
+API -> N8N: POST protected internal webhook (workflowRunId, customerId, scoped requester)
+activate N8N
+N8N -> N8N: Validate internal request and correlation
+N8N -> API: GET customer profile and linked converted Leads
+API -> DB: Read Customer + related Lead records
+DB --> API: Profile and lead references
+API --> N8N: CRM profile
+N8N -> API: GET interactions for Customer and linked Leads
+API -> DB: Read Interaction records
+DB --> API: Available interactions
+API --> N8N: Interaction history
+N8N -> API: GET available qualification/enrichment/scoring history
+API -> DB: Read existing intelligence records
+DB --> API: Available history or empty state
+API --> N8N: Intelligence context
+N8N -> API: GET follow-up enrollments/executions
+API -> DB: Read follow-up history
+DB --> API: Follow-up history
+API --> N8N: Follow-up context
+N8N -> API: GET CustomerSegment memberships
+API -> DB: Read CustomerSegment assignments
+DB --> API: Segment memberships or empty result
+API --> N8N: Segment context
+N8N -> API: GET CustomerIssue / CustomerFeedback
+API -> DB: Read records only when target entities/APIs exist
+DB --> API: Available records or explicit NOT_IMPLEMENTED/empty-source marker
+API --> N8N: Issue/feedback evidence and data provenance
+N8N -> N8N: Merge facts with source provenance and unavailable-source flags
+N8N -> AI: Summarize customer profile, activity, risks and opportunities
+AI --> N8N: Structured 360 summary
+N8N -> N8N: Validate output against retrieved evidence
+N8N -> API: Save summary and output status
+API -> DB: Persist summary/provenance and update WorkflowRun
+DB --> API: Snapshot/run result reference
+API --> N8N: Saved snapshot reference
+N8N -> N8N: Finalize workflow result
+deactivate N8N
+UI -> API: GET Customer 360 result by workflowRunId
+API -> DB: Read WorkflowRun/snapshot output
+DB --> API: Summary + source provenance
+API --> UI: Customer 360 result + snapshot ID
+note over API,DB
+Version 1 uses CRM data already stored in PostgreSQL. CustomerIssue/CustomerFeedback
+routes remain target dependencies until implemented; absent sources return an explicit
+unavailable marker. Email/chat/orders/tickets/calls are not assumed connected.
+end note
+note over API,N8N
+The browser never calls the n8n webhook directly. The backend authorizes the
+customer scope, creates the run, and dispatches a protected service-to-service request.
+end note
+@enduml

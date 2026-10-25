@@ -1,0 +1,50 @@
+@startuml
+title T12-WF06 — AI Churn Monitoring Agent (Sequence)
+autonumber
+participant "Schedule Trigger" as SCHED
+participant "n8n WF06\nChurn Monitoring" as N8N
+participant "NestJS Backend" as API
+database "PostgreSQL" as DB
+participant "Gemini API" as AI
+participant "NestJS CustomerTask API" as CTASK
+
+SCHED -> N8N: Daily scheduled run
+activate N8N
+N8N -> API: GET active customer cohort
+API -> DB: Select active customers
+DB --> API: Customer IDs
+API --> N8N: Cohort
+loop For each customer (bounded batch)
+N8N -> API: GET profile, engagement, follow-up and feedback signals
+API -> DB: Read customer/activity/follow-up/feedback records
+DB --> API: Available facts and data coverage
+API --> N8N: Customer signals
+N8N -> N8N: Normalize available features and data coverage; do not calculate canonical risk
+N8N -> API: POST evaluate churn policy
+API -> API: Apply deterministic, versioned backend risk policy
+API -> DB: Insert CustomerChurnAssessment history record
+DB --> API: Assessment ID + canonical score/level or INSUFFICIENT_DATA
+API --> N8N: Canonical assessment + evidence summary
+N8N -> AI: Request explanation grounded in canonical score and supplied evidence
+AI --> N8N: Explanation (not an authoritative score)
+N8N -> N8N: Validate explanation against assessment/evidence
+N8N -> API: PATCH/save validated explanation
+API -> DB: Update assessment explanation/audit
+DB --> API: Updated assessment
+API --> N8N: Explanation saved
+alt Canonical risk is HIGH/CRITICAL
+N8N -> CTASK: POST /api/v1/customer-tasks (canonical) with customerId, assessmentId, dedupe key
+CTASK -> DB: Insert/reuse customer_tasks and audit entry
+DB --> CTASK: Task ID and status
+CTASK --> N8N: Task created/already exists (idempotent)
+else LOW/MEDIUM or insufficient evidence
+N8N -> N8N: Keep assessment without high-risk escalation
+end
+end
+deactivate N8N
+note over N8N,API
+NestJS owns the deterministic risk score/level and persistence
+to NestJS. n8n normalizes features and requests an assessment; AI only explains
+the backend result. `CustomerTask` is the operational task for retention; `ReviewTask` remains reserved for explicit approval/review.
+end note
+@enduml

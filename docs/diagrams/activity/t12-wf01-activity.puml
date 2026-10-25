@@ -1,0 +1,19 @@
+@startuml
+title T12-WF01 — AI CRM Lead Qualification Agent
+start
+:01 | RabbitMQ Trigger\nconsume `lead.qualification.requested` from `n8n.lead-qualification.q`.;
+:02 | Code: Validate Event\nverify event type, lead ID, event ID and schema, ignore duplicates safely.;
+:03 | HTTP Request: Get Lead\nfetch the authoritative lead from NestJS.;
+:04 | HTTP Request: Get Interaction Context\nfetch latest available interactions and profile signals through the canonical NestJS API.;
+:05 | Code: Normalize Qualification Input\nnormalize fields and construct compact structured input.;
+:06 | HTTP Request: Gemini Qualification\nclassify intent and assess qualification using the configured model.;
+:07 | Code: Parse Structured Output\nparse and validate required fields and numeric confidence.;
+:08 | Code: Apply Confidence Policy\nroute confidence <= 0.80 to NEEDS_REVIEW, the backend re-applies the policy authoritatively, n8n cannot approve a record;
+:09 | HTTP Request: Authenticated Qualification Callback\nsend validated result, NestJS owns final policy, persistence and idempotent ReviewTask creation;
+if (10 | Review required?) then (yes)
+:11 | HTTP Request: Notify Reviewer\nrequest idempotent notification only, do not create a second ReviewTask in n8n;
+else (no)
+endif
+:12 | Code: Build Final Result\nproduce a concise execution summary with status and correlation IDs.;
+stop
+@enduml

@@ -1,0 +1,17 @@
+@startuml
+title T12-WF07 — AI Customer Segmentation Agent
+start
+:01 | Schedule Trigger\nperiodically refresh active segments on the configured schedule; a manual operation must use a separate backend endpoint and is not a second trigger on this workflow.;
+:02 | HTTP Request: Get Active Segments\nretrieve segment definitions from NestJS.;
+:03 | Split Out: Segment Items\nprocess each segment in a controlled batch.;
+:04 | HTTP Request: Get Customer Cohort\nget eligible customers and features.;
+:05 | Code: Prepare Rule Engine Request\nshape/validate the request payload only, do not implement segmentation criteria in n8n;
+:06 | HTTP Request: Evaluate Backend Rule Engine\nNestJS owns all segmentation rules, evaluation and CustomerSegment assignment mutations;
+:07 | HTTP Request: Get Assignment Statistics\nretrieve assignment counts/results.;
+:08 | Code: Normalize Backend Results\nnormalize returned assignment statistics for reporting, do not calculate segment membership or business rules in n8n;
+:09 | HTTP Request: AI Segment Insights\ngenerate a concise explanation/trend summary for the results.;
+:10 | Code: Validate Insights\nvalidate response and avoid claims unsupported by the supplied data.;
+:11 | HTTP Request: Save Workflow Summary\nrecord run/result in NestJS.;
+:12 | HTTP Request: Notify on Anomaly\nreport unexpected changes through backend notifications if thresholds are exceeded.;
+stop
+@enduml

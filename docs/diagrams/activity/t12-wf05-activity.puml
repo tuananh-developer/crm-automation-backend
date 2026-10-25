@@ -1,0 +1,17 @@
+@startuml
+title T12-WF05 — AI Customer 360 Agent
+start
+:01 | Webhook Trigger\nreceive an authenticated internal dispatch from NestJS after the UI request is authorized.;
+:02 | Code: Validate Customer Request\nvalidate customer ID and requester context.;
+:03 | HTTP Request: CRM Profile\nfetch the customer and linked Lead data from NestJS.;
+:04 | HTTP Request: Get Interactions\nfetch interactions associated with the Customer and its converted Leads through the NestJS CRM APIs;
+:05 | HTTP Request: Get Lead Intelligence History\nfetch only available qualification, enrichment and scoring records from CRM;
+:06 | HTTP Request: Get Follow-up History\nfetch follow-up enrollments and executions from CRM;
+:07 | HTTP Request: Get Segment Memberships\nfetch CustomerSegment assignments from CRM;
+:08 | HTTP Request: Get Issue/Feedback History\nread CustomerIssue and CustomerFeedback from PostgreSQL when their entities/APIs exist, otherwise return explicit NOT_IMPLEMENTED/empty-source, never pretend external data is connected;
+:09 | Code: Merge Customer Timeline\nnormalize and combine source records with source provenance.;
+:10 | HTTP Request: Gemini Customer 360 Summary\nsummarize profile, recent activities, risks and opportunities.;
+:11 | Code: Validate Customer 360 Output\nrequire structured fields and disclose unavailable sources.;
+:12 | HTTP Request: Save Snapshot\nsave the Customer 360 result via the NestJS workflow/result API; use WorkflowRun.output_payload for the v1 snapshot.;
+stop
+@enduml

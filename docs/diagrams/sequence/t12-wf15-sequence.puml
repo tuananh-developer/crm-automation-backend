@@ -1,0 +1,49 @@
+@startuml
+title T12-WF15 — AI Account Management Agent (Sequence)
+autonumber
+participant "Schedule Trigger" as SCHED
+participant "n8n WF15\nAccount Management" as N8N
+participant "NestJS Backend" as API
+database "PostgreSQL" as DB
+participant "Account Health Policy\ninside NestJS" as HEALTH
+participant "Gemini API" as AI
+participant "NestJS CustomerTask API" as CTASK
+
+SCHED -> N8N: Weekly strategic-account review
+activate N8N
+N8N -> API: GET accounts explicitly marked STRATEGIC
+API -> DB: Query authorized strategic customers
+DB --> API: Strategic customer IDs
+API --> N8N: Account cohort
+loop For each account
+N8N -> API: GET account profile, interactions, follow-ups, feedback, renewals
+API -> DB: Read available account/CRM data
+DB --> API: Current facts + data coverage
+API --> N8N: Account evidence
+N8N -> API: POST calculate health
+API -> HEALTH: Calculate versioned deterministic score
+HEALTH --> API: Score or INSUFFICIENT_DATA + component evidence
+API --> N8N: Canonical health result
+N8N -> AI: Explain risks/opportunities using score and evidence
+AI --> N8N: Evidence-grounded account review
+N8N -> N8N: Validate action allowlist and evidence references
+N8N -> API: Save account review/health snapshot
+API -> DB: Persist snapshot/history
+DB --> API: snapshotId
+API --> N8N: Saved snapshot
+alt Critical risk/opportunity and action is warranted
+N8N -> CTASK: POST /api/v1/customer-tasks with customerId + healthAssessmentId + dedupe key (canonical)
+CTASK -> DB: Insert/reuse customer_tasks and audit entry
+DB --> CTASK: Task ID/status
+CTASK --> N8N: Created/already exists (idempotent)
+else No escalation or insufficient evidence
+N8N -> N8N: Retain snapshot; do not invent a score/action
+end
+end
+deactivate N8N
+note over API,HEALTH
+Strategic status is explicitly marked by an authorized user. Approved v1 health
+weights: engagement 30%, feedback 25%, open issues 25%, follow-up completion 20%.
+Missing critical data yields INSUFFICIENT_DATA, not an invented zero score. `CustomerTask` is the operational task for account follow-up, distinct from `ReviewTask`.
+end note
+@enduml

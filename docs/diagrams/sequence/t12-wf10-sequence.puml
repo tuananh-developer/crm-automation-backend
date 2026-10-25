@@ -1,0 +1,62 @@
+@startuml
+title T12-WF10 — AI Next Best Action Agent (Sequence)
+autonumber
+actor "CRM User/UI" as UI
+participant "NestJS Recommendation API" as API
+participant "n8n WF10\nNext Best Action" as N8N
+database "PostgreSQL" as DB
+participant "Gemini API" as AI
+participant "NestJS Review Module" as REVIEW
+
+UI -> API: POST recommendation request (target route)
+API -> API: Authenticate requester and authorize Lead/Customer access
+API -> DB: Create WorkflowRun/request record
+DB --> API: workflowRunId
+API --> UI: 202 Accepted + workflowRunId
+API -> N8N: POST protected internal webhook with scoped entity/run reference
+activate N8N
+N8N -> N8N: Validate entity type, ID and correlation
+N8N -> API: GET profile and latest qualification/score
+API -> DB: Read profile and intelligence history
+DB --> API: Entity context and latest signals
+API --> N8N: Profile/intelligence
+N8N -> API: GET interactions, follow-up and segment context
+API -> DB: Read engagement and membership records
+DB --> API: Context or explicit empty state
+API --> N8N: Interaction/follow-up context
+N8N -> N8N: Generate bounded candidate actions from allowed set
+N8N -> AI: Rank/explain only candidate actions using supplied evidence
+AI --> N8N: Ranked suggestions and rationale
+N8N -> N8N: Validate allowlist, evidence references and confidence
+N8N -> API: Save recommendation snapshot
+API -> DB: Persist recommendation in approved business record/WorkflowRun
+DB --> API: Recommendation ID
+API --> N8N: Saved recommendation
+alt High-risk action or low confidence requires approval
+  N8N -> REVIEW: Request backend creation/ensure of ReviewTask
+  REVIEW -> DB: Persist approval task idempotently
+  DB --> REVIEW: Task ID
+  REVIEW --> N8N: Pending approval
+else Recommendation only
+  N8N -> N8N: Return suggestion; do not execute action
+end
+N8N -> API: Record workflow result/output
+API -> DB: Update WorkflowRun
+DB --> API: Run result
+API --> N8N: Status recorded
+deactivate N8N
+UI -> API: GET recommendation result by workflowRunId
+API -> DB: Read recommendation/run result
+DB --> API: Recommendation and status
+API --> UI: Recommendation, rationale, evidence refs and status
+note over API,N8N
+Production UI requests must go through NestJS authz; n8n's webhook is protected and
+invoked service-to-service. The backend Review Module alone creates/ensures ReviewTask.
+end note
+
+note over REVIEW,DB
+ReviewTask supports Lead and non-Lead review targets. For a Customer-only action, set
+target_entity_type=Customer and target_entity_id to the Customer UUID; NestJS validates the
+allowlisted target type, record existence, authorization, policy, idempotency and audit.
+end note
+@enduml

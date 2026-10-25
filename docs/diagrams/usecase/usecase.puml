@@ -1,72 +1,120 @@
 @startuml
-title AI CRM Automation System - Use Case Diagram
-
+title AI CRM Automation — Completed Use Cases and Workflows
 left to right direction
-
 skinparam packageStyle rectangle
-skinparam actorStyle awesome
+skinparam shadowing false
+skinparam usecase {
+  BackgroundColor White
+  BorderColor #425466
+}
 
 actor "Sales User" as Sales
 actor "Admin" as Admin
-actor "Automation Engine\n(n8n)" as N8N
-actor "AI / LLM Service" as AI
-actor "External Service" as External
+actor "Scheduled Job" as Scheduler
+actor "RabbitMQ Domain Event" as EventBus
+actor "Feedback Submitter / Source" as FeedbackSource
+actor "AI Provider" as AI
 
-rectangle "AI CRM Automation System" {
+rectangle "AI CRM Automation" {
+  package "Application Use Cases (UC01–UC12)" {
+    usecase "UC01\nCreate & Manage Lead\n" as UC01
+    usecase "UC02\nAI Lead Qualification\n" as UC02
+    usecase "UC03\nAI Lead Enrichment\n[MOCK SOURCE LABELLED]" as UC03
+    usecase "UC04\nAI Lead Scoring\n[BACKEND-OWNED SCORE]" as UC04
+    usecase "UC05\nEnroll Follow-up Cadence\n" as UC05
+    usecase "UC06\nExecute Follow-up\n[RABBITMQ + COMMUNICATION API]" as UC06
+    usecase "UC07\nHuman Review\n" as UC07
+    usecase "UC08\nConvert Lead to Customer\n" as UC08
+    usecase "UC09\nCustomer Segmentation\n[BACKEND RULE ENGINE]" as UC09
+    usecase "UC10\nAI CRM Data Cleaning\n[BACKEND SAFETY / APPROVAL]" as UC10
+    usecase "UC11\nView Dashboard\n" as Dashboard
+    usecase "UC12\nManage Users\n" as ManageUsers
+  }
 
-    usecase "UC01\nCreate Lead" as UC01
-    usecase "UC02\nAI Lead Qualification" as UC02
-    usecase "UC03\nAI Lead Enrichment" as UC03
-    usecase "UC04\nAI Lead Scoring" as UC04
-
-    usecase "UC05\nEnroll Follow-up" as UC05
-    usecase "UC06\nExecute Follow-up" as UC06
-
-    usecase "UC07\nHuman Review" as UC07
-
-    usecase "UC08\nConvert Lead\n→ Customer" as UC08
-
-    usecase "UC09\nCustomer Segmentation" as UC09
-
-    usecase "Manage Users" as UC10
-    usecase "View Dashboard" as UC11
+  package "Topic 12 Automation Workflows (T12-WF01–T12-WF15)" {
+    usecase "T12-WF01\nLead Qualification Agent\n[12 NODES]" as WF01
+    usecase "T12-WF02\nLead Enrichment Agent\n[12 NODES; MOCK SOURCE LABELLED]" as WF02
+    usecase "T12-WF03\nLead Scoring Agent\n[12 NODES; BACKEND OWNS SCORE]" as WF03
+    usecase "T12-WF04\nFollow-up Agent\n[RABBITMQ + COMMUNICATION API]" as WF04
+    usecase "T12-WF05\nCustomer 360 Agent\n[CRM DATABASE ONLY, V1]" as WF05
+    usecase "T12-WF06\nChurn Monitoring Agent\n" as WF06
+    usecase "T12-WF07\nCustomer Segmentation Agent\n[BACKEND RULE ENGINE]" as WF07
+    usecase "T12-WF08\nData Cleaning Agent\n[BACKEND SCAN EVENT]" as WF08
+    usecase "T12-WF09\nConversation Summarizer\n[REDACT BEFORE AI]" as WF09
+    usecase "T12-WF10\nNext Best Action Agent\n[ACTION ALLOWLIST]" as WF10
+    usecase "T12-WF11\nSales Meeting Agent\n" as WF11
+    usecase "T12-WF12\nQuote & Proposal Agent\n[BACKEND OWNS PRICING]" as WF12
+    usecase "T12-WF13\nRenewal Management Agent\n[APPROVAL / CONSENT GATE]" as WF13
+    usecase "T12-WF14\nCustomer Feedback Agent\n" as WF14
+    usecase "T12-WF15\nAccount Management Agent\n" as WF15
+  }
 }
 
-' Sales User
+' Application use cases.
 Sales --> UC01
+Sales --> UC02
+Sales --> UC03
+Sales --> UC04
 Sales --> UC05
 Sales --> UC07
 Sales --> UC08
 Sales --> UC09
-Sales --> UC11
+Sales --> UC10
+Sales --> Dashboard
+Admin --> ManageUsers
+Admin --> Dashboard
 
-' Admin
-Admin --> UC10
-Admin --> UC11
+' Workflow initiation patterns; these actors represent triggers/sources.
+EventBus --> WF01
+EventBus --> WF02
+EventBus --> WF03
+EventBus --> WF04
+EventBus --> WF08
+Sales --> WF05
+Scheduler --> WF06
+Scheduler --> WF07
+Sales --> WF09
+Sales --> WF10
+Sales --> WF11
+Sales --> WF12
+Scheduler --> WF13
+Sales --> WF13
+FeedbackSource --> WF14
+Scheduler --> WF15
+Sales --> WF15
+Admin --> WF15
 
-' Automation
-N8N --> UC02
-N8N --> UC03
-N8N --> UC04
-N8N --> UC06
-N8N --> UC09
+AI --> WF01
+AI --> WF02
+AI --> WF03
+AI --> WF05
+AI --> WF06
+AI --> WF09
+AI --> WF10
+AI --> WF11
+AI --> WF12
+AI --> WF14
+AI --> WF15
 
-' AI
-AI --> UC02
-AI --> UC03
-AI --> UC04
-AI --> UC09
+' Relationships between application use cases and Topic 12 workflows.
+WF01 ..> UC02 : orchestrates
+WF02 ..> UC03 : orchestrates
+WF03 ..> UC04 : orchestrates
+WF04 ..> UC06 : orchestrates
+WF07 ..> UC09 : orchestrates
+WF08 ..> UC10 : orchestrates
 
-' External services
-External --> UC03
-External --> UC06
-
-' Relationships
-UC02 ..> UC07 : <<extend>>\nlow confidence
-UC04 ..> UC07 : <<extend>>\nlow confidence
-
-UC05 ..> UC06 : <<include>>
-UC08 ..> UC04 : <<precondition>>
-UC09 ..> UC08 : <<may follow>>
-
+note bottom of WF05
+  Customer 360 v1 may aggregate only records actually stored
+  in the CRM database. Missing sources remain unavailable,
+  not fabricated.
+end note
+note bottom of WF12
+  Backend calculates authoritative prices/tax/discounts;
+  AI drafts wording only. Catalog may be mock for demo.
+end note
+note bottom of WF14
+  Sensitive data must be redacted before AI processing.
+  CustomerTask is an operational task entity distinct from approval-only ReviewTask.
+end note
 @enduml
