@@ -130,11 +130,11 @@ describe('AuthService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
-    it('registers user with specified role when provided', async () => {
+    it('always registers user with SALES role', async () => {
       (usersRepository.findOne as jest.Mock).mockResolvedValue(null);
       (usersRepository.create as jest.Mock).mockImplementation((dto) => ({
         ...dto,
-        id: 'admin-id',
+        id: 'sales-id',
         createdAt: new Date(),
         updatedAt: new Date(),
       }));
@@ -143,21 +143,52 @@ describe('AuthService', () => {
       );
       jest
         .spyOn(bcrypt, 'hash')
-        .mockImplementation(() => Promise.resolve('hashed-admin') as any);
+        .mockImplementation(() => Promise.resolve('hashed-sales') as any);
 
       const result = await service.register({
-        name: 'Admin User',
-        email: 'admin@crm.local',
-        password: 'AdminPassword123!',
-        role: UserRole.ADMIN,
+        name: 'Sales User',
+        email: 'salesuser@crm.local',
+        password: 'Password123!',
       });
 
       expect(usersRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          role: UserRole.ADMIN,
+          role: UserRole.SALES,
         }),
       );
-      expect(result.user.role).toBe(UserRole.ADMIN);
+      expect(result.user.role).toBe(UserRole.SALES);
+    });
+
+    it('ignores any injected role in registration payload to prevent privilege escalation to ADMIN', async () => {
+      (usersRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (usersRepository.create as jest.Mock).mockImplementation((dto) => ({
+        ...dto,
+        id: 'sales-id',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
+      (usersRepository.save as jest.Mock).mockImplementation((u) =>
+        Promise.resolve(u),
+      );
+      jest
+        .spyOn(bcrypt, 'hash')
+        .mockImplementation(() => Promise.resolve('hashed-sales') as any);
+
+      const maliciousPayload = {
+        name: 'Attacker User',
+        email: 'attacker@crm.local',
+        password: 'Password123!',
+        role: UserRole.ADMIN,
+      };
+
+      const result = await service.register(maliciousPayload);
+
+      expect(usersRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: UserRole.SALES,
+        }),
+      );
+      expect(result.user.role).toBe(UserRole.SALES);
     });
   });
 

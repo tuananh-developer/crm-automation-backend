@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBody,
@@ -30,6 +31,7 @@ import {
   TriggerQualificationResponseDto,
 } from './dto/index.js';
 import { EnrichmentMapper, QualificationMapper } from './mappers/index.js';
+import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
 
 @ApiTags('Lead Intelligence')
 @Controller('lead-intelligence')
@@ -60,12 +62,13 @@ export class LeadIntelligenceController {
     return this.leadIntelligenceService.triggerQualification(leadId, dto);
   }
 
-  @Post('qualification/callback')
+  @Post(['qualification/callback', '/internal/n8n/lead-qualification/callback'])
+  @UseGuards(N8nAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Receive AI Qualification Callback from n8n / AI Service',
     description:
-      'Receives qualification analysis result. If confidence >= 0.8, automatically transitions Lead status. If confidence < 0.8 or review required, creates a ReviewTask for manual evaluation.',
+      'Receives qualification analysis result. If confidence > 0.8, automatically transitions Lead status. If confidence <= 0.8 or review required, creates a ReviewTask for manual evaluation.',
   })
   @ApiBody({ type: QualificationCallbackDto })
   @ApiResponse({

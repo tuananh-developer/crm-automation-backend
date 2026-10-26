@@ -1,14 +1,6 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import {
-  IsEmail,
-  IsEnum,
-  IsOptional,
-  IsString,
-  MaxLength,
-  MinLength,
-} from 'class-validator';
-import { UserRole } from '../../users/enums/user.enum.js';
+import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class RegisterDto {
   @ApiProperty({
@@ -47,15 +39,4 @@ export class RegisterDto {
   @MinLength(8, { message: 'Password must be at least 8 characters long' })
   @MaxLength(100, { message: 'Password must not exceed 100 characters' })
   password!: string;
-
-  @ApiPropertyOptional({
-    enum: UserRole,
-    default: UserRole.SALES,
-    description: 'Vai trò người dùng trong hệ thống (ADMIN | SALES)',
-  })
-  @IsOptional()
-  @IsEnum(UserRole, {
-    message: `Role must be one of: ${Object.values(UserRole).join(', ')}`,
-  })
-  role?: UserRole;
 }

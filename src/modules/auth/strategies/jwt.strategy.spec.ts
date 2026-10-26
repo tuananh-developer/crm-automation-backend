@@ -87,4 +87,75 @@ describe('JwtStrategy', () => {
       UnauthorizedException,
     );
   });
+
+  it('throws UnauthorizedException with descriptive message when user is INACTIVE', async () => {
+    (usersRepository.findOne as jest.Mock).mockResolvedValue({
+      ...mockUser,
+      status: UserStatus.INACTIVE,
+    });
+
+    await expect(strategy.validate(payload)).rejects.toThrow(
+      'User account is inactive and cannot authenticate',
+    );
+  });
+
+  it('throws Error in production when JWT_SECRET is not configured', () => {
+    const configService = {
+      get: jest.fn().mockImplementation((key: string) => {
+        if (key === 'NODE_ENV') return 'production';
+        if (key === 'JWT_SECRET') return undefined;
+        return undefined;
+      }),
+    };
+
+    expect(
+      () =>
+        new JwtStrategy(
+          configService as unknown as ConfigService,
+          usersRepository as Repository<User>,
+        ),
+    ).toThrow(
+      'FATAL: JWT_SECRET environment variable is missing in production environment',
+    );
+  });
+
+  it('throws Error when process.env.NODE_ENV is production and JWT_SECRET is not configured', () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const configService = {
+        get: jest.fn().mockReturnValue(undefined),
+      };
+
+      expect(
+        () =>
+          new JwtStrategy(
+            configService as unknown as ConfigService,
+            usersRepository as Repository<User>,
+          ),
+      ).toThrow(
+        'FATAL: JWT_SECRET environment variable is missing in production environment',
+      );
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
+  });
+
+  it('allows fallback development secret when not in production', () => {
+    const configService = {
+      get: jest.fn().mockImplementation((key: string) => {
+        if (key === 'NODE_ENV') return 'development';
+        if (key === 'JWT_SECRET') return undefined;
+        return undefined;
+      }),
+    };
+
+    expect(
+      () =>
+        new JwtStrategy(
+          configService as unknown as ConfigService,
+          usersRepository as Repository<User>,
+        ),
+    ).not.toThrow();
+  });
 });

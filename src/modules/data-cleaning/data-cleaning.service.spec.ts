@@ -234,29 +234,33 @@ describe('DataCleaningService', () => {
   });
 
   describe('applyCleaning', () => {
-    const completedWorkflowRun: WorkflowRun = {
-      ...mockWorkflowRun,
-      status: WorkflowStatus.SUCCESS,
-      outputPayload: {
-        findings: [
-          mockFinding,
-          {
-            id: 'finding-uuid-website',
-            recordType: 'Lead',
-            recordId: 'lead-uuid-1',
-            fieldName: 'companyWebsite',
-            issueType: 'INVALID_WEBSITE',
-            severity: 'LOW',
-            currentValue: 'http://acme.com',
-            proposedValue: 'https://acme.com',
-            confidence: 0.98,
-            reason: 'Enforce HTTPS',
-            safeToApply: true,
-            requiresHumanApproval: true,
-          },
-        ],
-      },
-    };
+    let completedWorkflowRun: WorkflowRun;
+
+    beforeEach(() => {
+      completedWorkflowRun = {
+        ...mockWorkflowRun,
+        status: WorkflowStatus.SUCCESS,
+        outputPayload: {
+          findings: [
+            mockFinding,
+            {
+              id: 'finding-uuid-website',
+              recordType: 'Lead',
+              recordId: 'lead-uuid-1',
+              fieldName: 'companyWebsite',
+              issueType: 'INVALID_WEBSITE',
+              severity: 'LOW',
+              currentValue: 'http://acme.com',
+              proposedValue: 'https://acme.com',
+              confidence: 0.98,
+              reason: 'Enforce HTTPS',
+              safeToApply: true,
+              requiresHumanApproval: true,
+            },
+          ],
+        },
+      };
+    });
 
     it('should apply accepted findings in a transaction and create AuditLog', async () => {
       (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(
@@ -400,6 +404,190 @@ describe('DataCleaningService', () => {
       await expect(
         service.applyCleaning('wf-uuid-1', { acceptedFindingIds: ['f-1'] }),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should skip finding if already applied previously', async () => {
+      const alreadyAppliedWf: WorkflowRun = {
+        ...completedWorkflowRun,
+        outputPayload: {
+          ...completedWorkflowRun.outputPayload,
+          appliedFindingIds: ['finding-uuid-website'],
+        },
+      };
+
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(
+        alreadyAppliedWf,
+      );
+
+      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockLead,
+      });
+
+      const result = await service.applyCleaning('wf-uuid-1', {
+        acceptedFindingIds: ['finding-uuid-website'],
+      });
+
+      expect(result.appliedCount).toBe(0);
+      expect(result.skippedCount).toBe(1);
+      expect(result.results[0].status).toBe('SKIPPED');
+      expect(result.results[0].skipReason).toBe(
+        'Finding has already been applied',
+      );
+    });
+
+    it('should handle duplicate finding IDs in the same request idempotently without applying twice', async () => {
+      // Finding appears once in scan findings, but client sends duplicate ID in acceptedFindingIds
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(
+        completedWorkflowRun,
+      );
+
+      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockLead,
+      });
+
+      const result = await service.applyCleaning('wf-uuid-1', {
+        acceptedFindingIds: ['finding-uuid-website', 'finding-uuid-website'],
+      });
+
+      // The finding is matched and applied on first occurrence, second duplicate occurrence is skipped
+      expect(result.appliedCount).toBe(1);
+      expect(result.skippedCount).toBe(1);
+      expect(result.totalRequested).toBe(2);
+      expect(result.results[1].status).toBe('SKIPPED');
+      expect(result.results[1].skipReason).toBe(
+        'Finding has already been applied',
+      );
+    });
+
+    it('should be completely idempotent when applyCleaning is called repeatedly with the same payload', async () => {
+      const previouslyCompletedWf: WorkflowRun = {
+        ...completedWorkflowRun,
+        outputPayload: {
+          ...completedWorkflowRun.outputPayload,
+          appliedFindingIds: ['finding-uuid-website'],
+        },
+      };
+
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(
+        previouslyCompletedWf,
+      );
+
+      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockLead,
+        companyWebsite: 'https://acme-corp.com',
+      });
+
+      const result = await service.applyCleaning('wf-uuid-1', {
+        acceptedFindingIds: ['finding-uuid-website'],
+      });
+
+      expect(result.appliedCount).toBe(0);
+      expect(result.skippedCount).toBe(1);
+      expect(result.results[0].status).toBe('SKIPPED');
+      expect(result.results[0].skipReason).toBe(
+        'Finding has already been applied',
+      );
+      // Lead should not be updated in DB
+      expect(mockEntityManager.save).toHaveBeenCalledTimes(1); // Only saving workflowRun output payload, not lead
+    });
+
+    it('should skip finding if safeToApply is not true', async () => {
+      const unsafeFinding: DataCleaningFinding = {
+        id: 'finding-unsafe-1',
+        recordType: 'Lead',
+        recordId: 'lead-uuid-1',
+        fieldName: 'companyWebsite',
+        issueType: 'INVALID_WEBSITE',
+        severity: 'HIGH',
+        currentValue: 'http://acme.com',
+        proposedValue: 'https://acme.com',
+        confidence: 0.5,
+        reason: 'Unsure format',
+        safeToApply: false,
+        requiresHumanApproval: true,
+      };
+
+      const wfWithUnsafeFinding: WorkflowRun = {
+        ...mockWorkflowRun,
+        status: WorkflowStatus.SUCCESS,
+        outputPayload: { findings: [unsafeFinding] },
+      };
+
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(
+        wfWithUnsafeFinding,
+      );
+
+      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockLead,
+      });
+
+      const result = await service.applyCleaning('wf-uuid-1', {
+        acceptedFindingIds: ['finding-unsafe-1'],
+      });
+
+      expect(result.appliedCount).toBe(0);
+      expect(result.skippedCount).toBe(1);
+      expect(result.results[0].status).toBe('SKIPPED');
+      expect(result.results[0].skipReason).toBe(
+        'Finding is not safe to apply automatically',
+      );
+    });
+
+    it('should persist merged appliedFindingIds into outputPayload on success', async () => {
+      const existingWf: WorkflowRun = {
+        ...completedWorkflowRun,
+        outputPayload: {
+          ...completedWorkflowRun.outputPayload,
+          appliedFindingIds: ['finding-uuid-prev'],
+        },
+      };
+
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(
+        existingWf,
+      );
+
+      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockLead,
+      });
+
+      const result = await service.applyCleaning('wf-uuid-1', {
+        acceptedFindingIds: ['finding-uuid-website'],
+      });
+
+      expect(result.appliedCount).toBe(1);
+      expect(mockEntityManager.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputPayload: expect.objectContaining({
+            appliedFindingIds: ['finding-uuid-prev', 'finding-uuid-website'],
+          }),
+        }),
+      );
+    });
+
+    it('should prioritize userId over dto.userId and workflowRun.triggeredByUserId for audit log', async () => {
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(
+        completedWorkflowRun,
+      );
+
+      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockLead,
+      });
+
+      await service.applyCleaning(
+        'wf-uuid-1',
+        {
+          acceptedFindingIds: ['finding-uuid-website'],
+          userId: 'dto-user-id',
+        },
+        'jwt-user-id',
+      );
+
+      expect(mockEntityManager.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          userId: 'jwt-user-id',
+        }),
+      );
     });
   });
 });

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -18,14 +18,30 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
   ) {
-    const jwtSecret =
-      configService.get<string>('JWT_SECRET') ||
-      'crm-jwt-secret-key-super-secure-change-in-production';
+    const isProduction =
+      configService.get<string>('NODE_ENV') === 'production' ||
+      process.env.NODE_ENV === 'production';
+    const jwtSecret = configService.get<string>('JWT_SECRET');
+
+    if (isProduction && !jwtSecret) {
+      throw new Error(
+        'FATAL: JWT_SECRET environment variable is missing in production environment',
+      );
+    }
+
+    if (!jwtSecret) {
+      new Logger(JwtStrategy.name).warn(
+        'JWT_SECRET is not configured; using insecure fallback development secret. Set JWT_SECRET in production!',
+      );
+    }
+
+    const secret =
+      jwtSecret || 'crm-jwt-secret-key-super-secure-change-in-production';
 
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: jwtSecret,
+      secretOrKey: secret,
     });
   }
 

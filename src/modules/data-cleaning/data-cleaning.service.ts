@@ -578,7 +578,10 @@ export class DataCleaningService {
     }
 
     const effectiveUserId =
-      dto.userId || userId || workflowRun.triggeredByUserId || null;
+      userId || dto.userId || workflowRun.triggeredByUserId || null;
+
+    const previouslyAppliedIds: string[] = output.appliedFindingIds || [];
+    const newlyAppliedIds: string[] = [];
 
     // Execute updates within an ACID transaction
     const result = await this.dataSource.transaction(async (manager) => {
@@ -629,10 +632,45 @@ export class DataCleaningService {
 
         const oldValuesSnapshot: Record<string, unknown> = {};
         const newValuesSnapshot: Record<string, unknown> = {};
-        const appliedFindingIds: string[] = [];
+        const leadAppliedFindingIds: string[] = [];
 
         for (const finding of leadFindings) {
-          // 1. Whitelist verification
+          const currentLeadVal = isAllowedCleaningField(finding.fieldName)
+            ? getLeadFieldValue(lead, finding.fieldName)
+            : (lead as unknown as Record<string, unknown>)[finding.fieldName];
+
+          // a. Idempotency check: Skip if already applied
+          if (
+            previouslyAppliedIds.includes(finding.id) ||
+            newlyAppliedIds.includes(finding.id)
+          ) {
+            results.push({
+              findingId: finding.id,
+              leadId: lead.id,
+              fieldName: finding.fieldName,
+              oldValue: currentLeadVal,
+              newValue: finding.proposedValue,
+              status: 'SKIPPED',
+              skipReason: 'Finding has already been applied',
+            });
+            continue;
+          }
+
+          // b. Safety check: safeToApply must be true
+          if (finding.safeToApply !== true) {
+            results.push({
+              findingId: finding.id,
+              leadId: lead.id,
+              fieldName: finding.fieldName,
+              oldValue: currentLeadVal,
+              newValue: finding.proposedValue,
+              status: 'SKIPPED',
+              skipReason: 'Finding is not safe to apply automatically',
+            });
+            continue;
+          }
+
+          // c. Whitelist verification
           if (!isAllowedCleaningField(finding.fieldName)) {
             results.push({
               findingId: finding.id,
@@ -649,7 +687,6 @@ export class DataCleaningService {
           const targetField = finding.fieldName;
 
           // 2. Concurrency re-validation: Check if field has been modified since scan
-          const currentLeadVal = getLeadFieldValue(lead, targetField);
           const scannedVal = finding.currentValue;
 
           const currentLeadStr =
@@ -717,7 +754,8 @@ export class DataCleaningService {
             newValuesSnapshot[targetField] = finding.proposedValue;
           }
 
-          appliedFindingIds.push(finding.id);
+          leadAppliedFindingIds.push(finding.id);
+          newlyAppliedIds.push(finding.id);
 
           results.push({
             findingId: finding.id,
@@ -742,7 +780,7 @@ export class DataCleaningService {
             newValue: newValuesSnapshot,
             metadata: {
               workflowRunId,
-              appliedFindingIds,
+              appliedFindingIds: leadAppliedFindingIds,
               modifiedFields: Object.keys(newValuesSnapshot),
             },
             ipAddress: null,
@@ -775,8 +813,13 @@ export class DataCleaningService {
         newStatItem,
       ];
 
+      const mergedAppliedFindingIds = Array.from(
+        new Set([...previouslyAppliedIds, ...newlyAppliedIds]),
+      );
+
       workflowRun.outputPayload = {
         ...currentOutput,
+        appliedFindingIds: mergedAppliedFindingIds,
         appliedStats: updatedAppliedStats,
       } as Record<string, any>;
 

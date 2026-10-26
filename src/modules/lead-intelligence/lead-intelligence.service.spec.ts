@@ -424,6 +424,104 @@ describe('LeadIntelligenceService', () => {
       );
     });
 
+    it('should trigger human review and create ReviewTask when confidence is exactly equal to threshold (0.80)', async () => {
+      const currentLead = { ...mockLead, status: LeadStatus.QUALIFYING };
+      const boundaryQual = {
+        ...mockQualification,
+        confidence: 0.8,
+        status: QualificationStatus.QUALIFIED,
+      };
+
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(currentLead);
+      (qualificationsRepo.create as jest.Mock).mockReturnValue(boundaryQual);
+      (qualificationsRepo.save as jest.Mock).mockResolvedValue(boundaryQual);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+      });
+      (workflowRunsRepo.save as jest.Mock).mockImplementation((w) =>
+        Promise.resolve(w),
+      );
+      (leadsRepo.save as jest.Mock).mockImplementation((l) =>
+        Promise.resolve(l),
+      );
+
+      const mockReviewTask: ReviewTask = {
+        id: 'review-task-boundary-80',
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        assignedTo: 'user-owner-123',
+        status: ReviewStatus.PENDING,
+        reason: 'Confidence 0.80',
+        decision: null,
+        reviewComment: null,
+        createdAt: new Date(),
+        startedAt: null,
+        resolvedAt: null,
+      };
+
+      (reviewTasksRepo.create as jest.Mock).mockReturnValue(mockReviewTask);
+      (reviewTasksRepo.save as jest.Mock).mockResolvedValue(mockReviewTask);
+      (notificationsRepo.create as jest.Mock).mockReturnValue({
+        id: 'notif-boundary',
+      });
+      (notificationsRepo.save as jest.Mock).mockResolvedValue({
+        id: 'notif-boundary',
+      });
+
+      const result = await service.handleQualificationCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: QualificationStatus.QUALIFIED,
+        confidence: 0.8,
+      });
+
+      expect(result.reviewRequired).toBe(true);
+      expect(result.reviewTaskId).toBe('review-task-boundary-80');
+      expect(reviewTasksRepo.create).toHaveBeenCalled();
+    });
+
+    it('should automatically accept qualification and update lead status to QUALIFIED when confidence is 0.8001 (strictly above threshold 0.80)', async () => {
+      const currentLead = { ...mockLead, status: LeadStatus.QUALIFYING };
+      const aboveBoundaryQual = {
+        ...mockQualification,
+        confidence: 0.8001,
+        status: QualificationStatus.QUALIFIED,
+      };
+
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(currentLead);
+      (qualificationsRepo.create as jest.Mock).mockReturnValue(
+        aboveBoundaryQual,
+      );
+      (qualificationsRepo.save as jest.Mock).mockResolvedValue(
+        aboveBoundaryQual,
+      );
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+      });
+      (workflowRunsRepo.save as jest.Mock).mockImplementation((w) =>
+        Promise.resolve(w),
+      );
+      (leadsRepo.save as jest.Mock).mockImplementation((l) =>
+        Promise.resolve(l),
+      );
+
+      const result = await service.handleQualificationCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: QualificationStatus.QUALIFIED,
+        confidence: 0.8001,
+      });
+
+      expect(result.reviewRequired).toBe(false);
+      expect(result.reviewTaskId).toBeUndefined();
+      expect(result.leadStatus).toBe(LeadStatus.QUALIFIED);
+      expect(reviewTasksRepo.create).not.toHaveBeenCalled();
+      expect(notificationsRepo.create).not.toHaveBeenCalled();
+      expect(leadsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: LeadStatus.QUALIFIED }),
+      );
+    });
+
     it('should reuse existing pending ReviewTask on duplicate callback retry (Idempotency)', async () => {
       const currentLead = { ...mockLead, status: LeadStatus.QUALIFYING };
       const lowConfidenceQual = {
