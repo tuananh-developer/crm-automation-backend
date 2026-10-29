@@ -1,0 +1,14 @@
+{
+  "_mock": true,
+  "_workflow": "WF07",
+  "_scenario": "anomaly",
+  "segmentId": "550e8400-e29b-41d4-a716-446655440020",
+  "asOfDate": "2026-10-29",
+  "assignmentStats": {
+    "totalCustomers": 150,
+    "matched": 0,
+    "unmatched": 150
+  },
+  "anomaly": true,
+  "anomalyReason": "No customers matched — possible criteria error"
+}

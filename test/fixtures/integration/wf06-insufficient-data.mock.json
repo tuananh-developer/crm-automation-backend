@@ -1,0 +1,13 @@
+{
+  "_mock": true,
+  "_workflow": "WF06",
+  "_scenario": "insufficient-data",
+  "customerId": "550e8400-e29b-41d4-a716-446655440010",
+  "asOfDate": "2026-10-29",
+  "churnAssessment": {
+    "score": null,
+    "level": null,
+    "sufficientData": false,
+    "reason": "No engagement history available"
+  }
+}

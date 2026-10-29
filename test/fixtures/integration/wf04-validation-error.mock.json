@@ -1,0 +1,11 @@
+{
+  "_mock": true,
+  "_workflow": "WF04",
+  "_scenario": "validation-error",
+  "executionId": "",
+  "error": {
+    "statusCode": 400,
+    "message": "executionId must be a UUID",
+    "error": "Bad Request"
+  }
+}
