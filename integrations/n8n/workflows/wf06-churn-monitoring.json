@@ -1,0 +1,350 @@
+{
+  "name": "WF06 - Churn Monitoring",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1
+            }
+          ]
+        },
+        "timezone": "UTC"
+      },
+      "id": "node-1-schedule",
+      "name": "1. Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.CRM_API_BASE_URL }}/customers?page=1&limit={{ $env.WF06_BATCH_SIZE || 25 }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "node-2-get-customers",
+      "name": "2. Get Active Customer Cohort",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "node-3-split-customers",
+      "name": "3. Split Customer Batch",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const customer = $input.first().json || {};\nconst runId = $runIndex || 'wf06-' + Date.now();\nconst minimal = {\n  customerId: customer.id,\n  customerName: customer.name,\n  email: customer.email,\n  status: customer.status,\n  companyName: customer.companyName,\n  runId,\n  timestamp: new Date().toISOString()\n};\nif (!minimal.customerId) {\n  throw new Error('Missing customer id');\n}\nreturn [{ json: minimal }];"
+      },
+      "id": "node-4-prepare-customer",
+      "name": "4. Prepare Customer Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.CRM_API_BASE_URL }}/customers/{{ $json.customerId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "node-5-get-profile",
+      "name": "5. Get Customer Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const profile = $input.first().json || {};\nconst asOfDate = new Date().toISOString().slice(0, 10);\nconst engagementHistory = Array.isArray(profile.engagementHistory) ? profile.engagementHistory : [];\nconst followUpHistory = Array.isArray(profile.followUpHistory) ? profile.followUpHistory : [];\nconst feedbackHistory = Array.isArray(profile.feedbackHistory) ? profile.feedbackHistory : [];\nconst normalized = {\n  customerId: profile.id || $('4. Prepare Customer Context').first().json.customerId,\n  asOfDate,\n  profile,\n  engagement: {\n    recentInteractions: engagementHistory.length,\n    lastInteractionDays: engagementHistory[0]?.daysSince ?? null,\n    active: Boolean(profile.status && profile.status !== 'INACTIVE')\n  },\n  followUpHistory,\n  feedbackHistory,\n  coverage: {\n    customerProfile: Boolean(profile.id),\n    engagementHistory: engagementHistory.length > 0,\n    followUpHistory: followUpHistory.length > 0,\n    feedbackHistory: feedbackHistory.length > 0\n  },\n  collectedAt: new Date().toISOString()\n};\nreturn [{ json: normalized }];"
+      },
+      "id": "node-6-normalize-input",
+      "name": "6. Normalize Feature Snapshot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CRM_API_BASE_URL }}/customers/{{ $json.customerId }}/churn-assessments",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ customerId: $json.customerId, asOfDate: $json.asOfDate, profile: $json.profile, engagement: $json.engagement, followUpHistory: $json.followUpHistory, feedbackHistory: $json.feedbackHistory, coverage: $json.coverage, metadata: { normalizedSnapshot: true } }) }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "node-7-backend-assessment",
+      "name": "7. Backend Churn Assessment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json || {};\nif (!response || !response.id) {\n  throw new Error('Backend assessment missing id');\n}\nreturn [{ json: { assessmentId: response.id, score: response.score, riskLevel: response.riskLevel, evidence: response.evidence || [], coverage: response.coverage || {} } }];"
+      },
+      "id": "node-8-assessment-validated",
+      "name": "8. Validate Assessment Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1790, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "modelId": "={{ $env.AI_MODEL || 'gpt-4o-mini' }}",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Explain the churn assessment using only the score, risk level, and evidence provided by the backend. Do not invent evidence or change the assessment. Return a JSON object with {\"summary\": string, \"evidence\": string[], \"confidence\": number}."
+            },
+            {
+              "role": "user",
+              "content": "={{ JSON.stringify($json) }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.2,
+          "timeout": 30000
+        }
+      },
+      "id": "node-9-ai-explanation",
+      "name": "9. AI Explanation",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [2010, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json || {};\nconst parsed = typeof response === 'string' ? JSON.parse(response) : response;\nconst summary = parsed && parsed.summary ? parsed.summary : '';\nconst evidence = Array.isArray(parsed && parsed.evidence) ? parsed.evidence : [];\nconst confidence = typeof parsed?.confidence === 'number' ? parsed.confidence : 0;\nreturn [{ json: { summary, evidence, confidence, valid: Boolean(summary && evidence.length > 0) } }];"
+      },
+      "id": "node-10-validate-ai",
+      "name": "10. Validate AI Explanation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2230, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "gate-high-risk",
+              "leftValue": "={{ $('8. Validate Assessment Result').first().json.riskLevel }}",
+              "rightValue": "HIGH",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-11-gate-retention",
+      "name": "11. Gate Retention",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CRM_API_BASE_URL }}/customer-tasks",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ customerId: $('4. Prepare Customer Context').first().json.customerId, assessmentId: $('8. Validate Assessment Result').first().json.assessmentId, taskType: 'RETENTION', priority: 'HIGH', idempotencyKey: 'wf06-' + $('4. Prepare Customer Context').first().json.customerId + '-' + $('8. Validate Assessment Result').first().json.assessmentId, metadata: { riskLevel: $('8. Validate Assessment Result').first().json.riskLevel, score: $('8. Validate Assessment Result').first().json.score } }) }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "node-12-create-task",
+      "name": "12. Create Retention Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2670, 300]
+    }
+  ],
+  "connections": {
+    "1. Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "2. Get Active Customer Cohort",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Get Active Customer Cohort": {
+      "main": [
+        [
+          {
+            "node": "3. Split Customer Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Split Customer Batch": {
+      "main": [
+        [
+          {
+            "node": "4. Prepare Customer Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Prepare Customer Context": {
+      "main": [
+        [
+          {
+            "node": "5. Get Customer Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Get Customer Profile": {
+      "main": [
+        [
+          {
+            "node": "6. Normalize Feature Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Normalize Feature Snapshot": {
+      "main": [
+        [
+          {
+            "node": "7. Backend Churn Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. Backend Churn Assessment": {
+      "main": [
+        [
+          {
+            "node": "8. Validate Assessment Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Validate Assessment Result": {
+      "main": [
+        [
+          {
+            "node": "9. AI Explanation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9. AI Explanation": {
+      "main": [
+        [
+          {
+            "node": "10. Validate AI Explanation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10. Validate AI Explanation": {
+      "main": [
+        [
+          {
+            "node": "11. Gate Retention",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11. Gate Retention": {
+      "main": [
+        [
+          {
+            "node": "12. Create Retention Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "WF06",
+    "churn-monitoring",
+    "phase-4"
+  ]
+}
