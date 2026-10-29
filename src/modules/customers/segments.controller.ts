@@ -17,12 +17,15 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { SegmentsService } from './segments.service.js';
 import {
   CreateSegmentDto,
   EvaluateSegmentBulkDto,
   EvaluateSegmentDto,
   QuerySegmentDto,
+  SegmentWorkflowCallbackDto,
   UpdateSegmentDto,
 } from './dto/index.js';
 import {
@@ -212,5 +215,46 @@ export class SegmentsController {
     @Body() dto: EvaluateSegmentBulkDto,
   ): Promise<EvaluateSegmentBulkResponseDto> {
     return this.segmentsService.evaluateAll(id, dto);
+  }
+
+  @Post(':id/workflow-runs')
+  @UseGuards(N8nAuthGuard)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create a WorkflowRun for WF07 segmentation',
+    description:
+      'Creates a PENDING WorkflowRun and returns the ID for n8n to use in callbacks.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the segment' })
+  @ApiResponse({ status: 201, description: 'WorkflowRun created.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized n8n request.' })
+  @ApiResponse({ status: 404, description: 'Segment not found.' })
+  createWorkflowRun(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<{ workflowRunId: string; status: string }> {
+    return this.segmentsService.createWorkflowRun(id);
+  }
+
+  @Post(':id/workflow-callback')
+  @UseGuards(N8nAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Receive WF07 workflow summary callback from n8n',
+    description:
+      'Stores workflow execution summary in WorkflowRun output payload.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the segment' })
+  @ApiBody({ type: SegmentWorkflowCallbackDto })
+  @ApiResponse({ status: 200, description: 'Callback processed successfully.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized n8n request.' })
+  @ApiResponse({
+    status: 404,
+    description: 'WorkflowRun or segment not found.',
+  })
+  handleWorkflowCallback(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SegmentWorkflowCallbackDto,
+  ): Promise<{ success: boolean; workflowRunId: string; status: string }> {
+    return this.segmentsService.handleWorkflowCallback(dto);
   }
 }

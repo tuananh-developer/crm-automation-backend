@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Customer } from './entities/customer.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { SegmentsService } from './segments.service.js';
@@ -18,6 +19,7 @@ import { CustomersController } from './customers.controller.js';
       CustomerSegment,
       LeadScore,
       User,
+      WorkflowRun,
     ]),
   ],
   controllers: [SegmentsController, CustomersController],

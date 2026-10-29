@@ -474,6 +474,7 @@ export class SequencesService {
       sequenceId: sequence.id,
       stepId: firstStep.id,
       scheduledAt: scheduledDate.toISOString(),
+      correlationId: dto.correlationId || savedEnrollment.id,
     });
 
     return {

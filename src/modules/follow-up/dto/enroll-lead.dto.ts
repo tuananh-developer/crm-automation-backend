@@ -12,4 +12,8 @@ export class EnrollLeadDto {
   @IsOptional()
   @IsUUID()
   assignedBy?: string;
+
+  @IsOptional()
+  @IsUUID()
+  correlationId?: string;
 }
