@@ -1,0 +1,414 @@
+{
+  "name": "WF07 - Customer Segmentation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "id": "node-1-schedule",
+      "name": "1. Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.CRM_API_BASE_URL }}/segments",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "isActive",
+              "value": "true"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            },
+            {
+              "name": "page",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      },
+      "id": "node-2-get-segments",
+      "name": "2. Get Active Segments",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        470,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "node-3-split",
+      "name": "3. Split Segments",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        690,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.CRM_API_BASE_URL }}/segments/{{ $json.id }}/customers",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "1000"
+            },
+            {
+              "name": "page",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      },
+      "id": "node-4-get-cohort",
+      "name": "4. Get Customer Cohort",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        910,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const segment = $input.first().json;\nconst cohort = $input.all().map(i => i.json);\nconst segmentId = segment.id || segment.segmentId;\nif (!segmentId) {\n  throw new Error('Missing segment ID');\n}\nif (!segment.ruleDefinition && !segment.rules) {\n  throw new Error('Missing rule definition for segment ' + segmentId);\n}\n// Create WorkflowRun via backend API\nlet workflowRunId = '';\ntry {\n  const resp = await this.helpers.httpRequest({\n    method: 'POST',\n    url: ($env.CRM_API_BASE_URL || 'http://localhost:3000/api/v1') + '/segments/' + segmentId + '/workflow-runs',\n    headers: { 'x-n8n-api-key': $env.N8N_API_KEY || '', 'Content-Type': 'application/json' },\n    body: {},\n    json: true\n  });\n  workflowRunId = resp.workflowRunId || '';\n} catch (e) {\n  // If create fails, proceed without ID; backend will auto-create during callback\n  workflowRunId = '';\n}\nreturn [{\n  json: {\n    segmentId,\n    segmentName: segment.name,\n    ruleDefinition: segment.ruleDefinition || segment.rules,\n    isActive: segment.isActive,\n    cohortSize: cohort.length,\n    cohort: cohort,\n    workflowRunId: workflowRunId,\n    validatedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-5-validate",
+      "name": "5. Validate Evaluation Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1130,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CRM_API_BASE_URL }}/segments/{{ $json.segmentId }}/evaluate-all",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ assignmentType: 'RULE' }) }}",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      },
+      "id": "node-6-evaluate",
+      "name": "6. Evaluate Segment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1350,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst stats = {\n  status: resp.status || 'UNKNOWN',\n  total: resp.total ?? null,\n  processed: resp.processed ?? null,\n  matched: resp.matched ?? null,\n  message: resp.message || '',\n  source: 'backend_rule_engine',\n  retrievedAt: new Date().toISOString()\n};\nif (stats.total === null || stats.processed === null || stats.matched === null) {\n  throw new Error('Missing required statistics from backend response');\n}\nreturn [{ json: stats }];"
+      },
+      "id": "node-7-get-stats",
+      "name": "7. Get Evaluation Statistics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1570,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const stats = $input.first().json;\nreturn [{\n  json: {\n    segmentId: $('5. Validate Evaluation Request').first().json.segmentId,\n    segmentName: $('5. Validate Evaluation Request').first().json.segmentName,\n    status: stats.status,\n    total: stats.total,\n    processed: stats.processed,\n    matched: stats.matched,\n    unmatched: stats.total - stats.matched,\n    matchRate: stats.total > 0 ? (stats.matched / stats.total * 100).toFixed(2) + '%' : '0%',\n    message: stats.message\n  }\n}];"
+      },
+      "id": "node-8-normalize",
+      "name": "8. Normalize Statistics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1790,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "modelId": "={{ $env.AI_MODEL || 'gpt-4o-mini' }}",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a CRM analytics assistant. Generate insights ONLY based on the provided statistics. Do not invent numbers, causes, or trends. Each insight must cite the specific statistic field it references. Return JSON array of insights: [{\"insight\": \"...\", \"evidence\": \"field_name=value\", \"confidence\": 0.0-1.0}]"
+            },
+            {
+              "role": "user",
+              "content": "={{ JSON.stringify($json) }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "node-9-ai-insights",
+      "name": "9. Generate AI Insights",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        2010,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('8. Normalize Statistics').first().json;\nconst aiResponse = $input.first().json;\nlet rawText = '';\nif (typeof aiResponse === 'string') rawText = aiResponse;\nelse if (aiResponse && aiResponse.text) rawText = aiResponse.text;\nelse if (aiResponse && aiResponse.content) rawText = aiResponse.content;\nelse rawText = JSON.stringify(aiResponse);\n// Strip markdown code fences\nrawText = rawText.replace(/```json\\s*/gi, '').replace(/```\\s*/g, '').trim();\nlet insights = [];\ntry {\n  const parsed = JSON.parse(rawText);\n  insights = Array.isArray(parsed) ? parsed : (parsed.insights || []);\n} catch (e) {\n  insights = [];\n}\nconst validInsights = insights.filter(ins => {\n  if (!ins || typeof ins !== 'object') return false;\n  if (typeof ins.insight !== 'string' || !ins.insight) return false;\n  if (typeof ins.evidence !== 'string' || !ins.evidence) return false;\n  if (typeof ins.confidence !== 'number') return false;\n  return true;\n});\nreturn [{\n  json: {\n    segmentId: input.segmentId,\n    segmentName: input.segmentName,\n    total: input.total,\n    processed: input.processed,\n    matched: input.matched,\n    unmatched: input.unmatched,\n    matchRate: input.matchRate,\n    aiInsights: validInsights,\n    rejectedInsights: insights.length - validInsights.length,\n    validatedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-10-validate-insights",
+      "name": "10. Validate Insights",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2230,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CRM_API_BASE_URL }}/segments/{{ $json.segmentId }}/workflow-callback",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ segmentId: $json.segmentId, segmentName: $json.segmentName, status: 'SUCCESS', statistics: { total: $json.total, processed: $json.processed, matched: $json.matched, unmatched: $json.unmatched, matchRate: $json.matchRate }, aiInsights: $json.aiInsights, rejectedInsights: $json.rejectedInsights, anomalyDetected: false }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      },
+      "id": "node-11-save-summary",
+      "name": "11. Save Workflow Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "anomaly-check",
+              "leftValue": "={{ $('8. Normalize Statistics').first().json.matched }}",
+              "rightValue": "0",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-12-anomaly-check",
+      "name": "12. Notify Backend on Anomaly",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2670,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "1. Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "2. Get Active Segments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Get Active Segments": {
+      "main": [
+        [
+          {
+            "node": "3. Split Segments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Split Segments": {
+      "main": [
+        [
+          {
+            "node": "4. Get Customer Cohort",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Get Customer Cohort": {
+      "main": [
+        [
+          {
+            "node": "5. Validate Evaluation Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Validate Evaluation Request": {
+      "main": [
+        [
+          {
+            "node": "6. Evaluate Segment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Evaluate Segment": {
+      "main": [
+        [
+          {
+            "node": "7. Get Evaluation Statistics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. Get Evaluation Statistics": {
+      "main": [
+        [
+          {
+            "node": "8. Normalize Statistics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Normalize Statistics": {
+      "main": [
+        [
+          {
+            "node": "9. Generate AI Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9. Generate AI Insights": {
+      "main": [
+        [
+          {
+            "node": "10. Validate Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10. Validate Insights": {
+      "main": [
+        [
+          {
+            "node": "11. Save Workflow Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11. Save Workflow Summary": {
+      "main": [
+        [
+          {
+            "node": "12. Notify Backend on Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "WF07",
+    "customer-segmentation",
+    "phase-2"
+  ]
+}
