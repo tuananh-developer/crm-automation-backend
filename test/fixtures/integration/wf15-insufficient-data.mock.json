@@ -1,0 +1,13 @@
+{
+  "_mock": true,
+  "_workflow": "WF15",
+  "_scenario": "insufficient-data",
+  "customerId": "550e8400-e29b-41d4-a716-446655440040",
+  "asOfDate": "2026-10-29",
+  "healthAssessment": {
+    "score": null,
+    "level": null,
+    "sufficientData": false,
+    "reason": "Insufficient engagement history"
+  }
+}
