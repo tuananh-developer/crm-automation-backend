@@ -5,6 +5,7 @@ import type { DeepPartial, Repository } from 'typeorm';
 import type { Customer } from './entities/customer.entity.js';
 import type { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
+import type { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import type { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import { ScoreLabel } from '../lead-intelligence/enums/lead-intelligence.enum.js';
 import { Lead } from '../leads/entities/lead.entity.js';
@@ -21,6 +22,7 @@ describe('SegmentsService', () => {
     Partial<Repository<CustomerSegment>>
   >;
   let usersRepository: jest.Mocked<Partial<Repository<User>>>;
+  let workflowRunRepository: jest.Mocked<Partial<Repository<WorkflowRun>>>;
 
   const mockUser: User = {
     id: 'user-1',
@@ -139,12 +141,20 @@ describe('SegmentsService', () => {
     usersRepository = {
       findOne: jest.fn(),
     };
+    workflowRunRepository = {
+      findOne: jest.fn(),
+      create: jest
+        .fn()
+        .mockImplementation((dto: any) => Object.assign({}, dto)),
+      save: jest.fn().mockImplementation((item: any) => Promise.resolve(item)),
+    };
 
     service = new SegmentsService(
       customersRepository as Repository<Customer>,
       segmentsRepository as Repository<Segment>,
       customerSegmentsRepository as Repository<CustomerSegment>,
       usersRepository as Repository<User>,
+      workflowRunRepository as Repository<WorkflowRun>,
     );
   });
 

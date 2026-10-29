@@ -27,6 +27,9 @@ import { CustomerMapper } from './mappers/customer.mapper.js';
 import { SegmentMapper } from './mappers/segment.mapper.js';
 import { PaginatedResponseDto } from '../../common/index.js';
 import { SegmentAssignmentType } from './enums/customer.enum.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
+import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
+import { SegmentWorkflowCallbackDto } from './dto/segment-workflow-callback.dto.js';
 
 @Injectable()
 export class SegmentsService {
@@ -42,6 +45,9 @@ export class SegmentsService {
 
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+
+    @InjectRepository(WorkflowRun)
+    private readonly workflowRunRepository: Repository<WorkflowRun>,
   ) {}
 
   async create(dto: CreateSegmentDto): Promise<SegmentResponseDto> {
@@ -258,8 +264,8 @@ export class SegmentsService {
     const qb = this.customerSegmentsRepository
       .createQueryBuilder('assignment')
       .leftJoinAndSelect('assignment.customer', 'customer')
-      .leftJoinAndSelect('assignment.customer.creator', 'customerCreator')
-      .leftJoinAndSelect('assignment.customer.updater', 'customerUpdater')
+      .leftJoinAndSelect('customer.creator', 'customerCreator')
+      .leftJoinAndSelect('customer.updater', 'customerUpdater')
       .leftJoinAndSelect('assignment.segment', 'segment')
       .where('assignment.segmentId = :segmentId', { segmentId });
 
@@ -662,5 +668,103 @@ export class SegmentsService {
       default:
         return false;
     }
+  }
+
+  async createWorkflowRun(
+    segmentId: string,
+  ): Promise<{ workflowRunId: string; status: string }> {
+    const segment = await this.segmentsRepository.findOne({
+      where: { id: segmentId },
+    });
+    if (!segment) {
+      throw new NotFoundException(`Segment '${segmentId}' not found`);
+    }
+
+    const workflowRun = this.workflowRunRepository.create({
+      workflowName: 'WF07_CUSTOMER_SEGMENTATION',
+      status: WorkflowStatus.PENDING,
+      inputPayload: {
+        segmentId,
+        segmentName: segment.name,
+        requestedAt: new Date().toISOString(),
+      } as Record<string, any>,
+      outputPayload: null,
+      startedAt: new Date(),
+    });
+
+    const savedRun = await this.workflowRunRepository.save(workflowRun);
+
+    return {
+      workflowRunId: savedRun.id,
+      status: savedRun.status,
+    };
+  }
+
+  async handleWorkflowCallback(dto: SegmentWorkflowCallbackDto): Promise<{
+    success: boolean;
+    workflowRunId: string;
+    status: string;
+  }> {
+    let workflowRun: WorkflowRun | null = null;
+
+    if (dto.workflowRunId) {
+      workflowRun = await this.workflowRunRepository.findOne({
+        where: { id: dto.workflowRunId },
+      });
+    }
+
+    if (!workflowRun) {
+      const segment = await this.segmentsRepository.findOne({
+        where: { id: dto.segmentId },
+      });
+      if (!segment) {
+        throw new NotFoundException(`Segment '${dto.segmentId}' not found`);
+      }
+      workflowRun = this.workflowRunRepository.create({
+        workflowName: 'WF07_CUSTOMER_SEGMENTATION',
+        status: WorkflowStatus.PENDING,
+        inputPayload: {
+          segmentId: dto.segmentId,
+          segmentName: dto.segmentName,
+          requestedAt: new Date().toISOString(),
+        } as Record<string, any>,
+        outputPayload: null,
+        startedAt: new Date(),
+      });
+      workflowRun = await this.workflowRunRepository.save(workflowRun);
+    }
+
+    const isSuccess = dto.status !== 'FAILED';
+    workflowRun.status = isSuccess
+      ? dto.status === 'SUCCESS'
+        ? WorkflowStatus.SUCCESS
+        : workflowRun.status
+      : WorkflowStatus.FAILED;
+
+    const existingOutput =
+      (workflowRun.outputPayload as Record<string, any>) || {};
+
+    const updatedOutput = {
+      ...existingOutput,
+      segmentId: dto.segmentId,
+      segmentName: dto.segmentName,
+      statistics: dto.statistics,
+      aiInsights: dto.aiInsights,
+      rejectedInsights: dto.rejectedInsights,
+      anomalyDetected: dto.anomalyDetected ?? false,
+      receivedAt: new Date().toISOString(),
+    };
+
+    workflowRun.outputPayload = updatedOutput;
+    workflowRun.finishedAt = new Date();
+    workflowRun.errorMessage = dto.errorMessage || null;
+
+    await this.workflowRunRepository.save(workflowRun);
+
+    return {
+      success: true,
+      workflowRunId: workflowRun.id,
+      status: workflowRun.status,
+    };
   }
 }
