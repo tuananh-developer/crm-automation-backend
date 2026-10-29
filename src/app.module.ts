@@ -19,8 +19,7 @@ import { AuditModule } from './modules/audit/audit.module.js';
 import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module.js';
-import { T12WorkflowsModule } from './modules/t12-workflows/t12-workflows.module.js';
-import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
+import { CommunicationModule } from './modules/communication/communication.module.js';
 
 @Module({
   imports: [
@@ -45,19 +44,22 @@ import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
 
         // Connect to remote database (Neon / Supabase) if in production or DATABASE_URL provided without USE_LOCAL_DB
         if (!useLocalDb && dbUrl) {
-          const sslCa = config
-            .get<string>('DB_SSL_CA')
-            ?.split(String.raw`\n`)
-            .join('\n');
-          const connection = resolvePostgresConnectionOptions(dbUrl, {
-            forceSsl: config.get<string>('DB_SSL') === 'true' || isProd,
-            ca: sslCa,
-          });
+          const useSsl =
+            config.get<string>('DB_SSL') === 'true' ||
+            isProd ||
+            Boolean(
+              dbUrl.includes('sslmode=require') ||
+              dbUrl.includes('supabase') ||
+              dbUrl.includes('neon.tech') ||
+              dbUrl.includes('render.com'),
+            );
+
+          const sslConfig = useSsl ? { rejectUnauthorized: false } : false;
 
           return {
             type: 'postgres',
-            url: connection.url,
-            ssl: connection.ssl,
+            url: dbUrl,
+            ssl: sslConfig,
             autoLoadEntities: true,
             synchronize: false,
           };
@@ -109,7 +111,7 @@ import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
     AuditModule,
     AuthModule,
     DataCleaningModule,
-    T12WorkflowsModule,
+    CommunicationModule,
     ThrottlerModule.forRoot([
       {
         name: 'default',
