@@ -4,3 +4,4 @@ export * from './query-segment.dto.js';
 export * from './query-customer.dto.js';
 export * from './evaluate-segment.dto.js';
 export * from './evaluate-segment-bulk.dto.js';
+export * from './segment-workflow-callback.dto.js';

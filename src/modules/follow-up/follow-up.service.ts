@@ -224,6 +224,7 @@ export class FollowUpService {
         subject: this.renderTemplate(step.subjectTemplate, variables),
         message: this.renderTemplate(step.contentTemplate, variables),
         attempt: record.retryCount + 1,
+        correlationId: dto.correlationId || record.id,
       };
       record.status = ExecutionStatus.RUNNING;
       record.startedAt = startedAt;
@@ -233,8 +234,9 @@ export class FollowUpService {
       return executionsRepository.save(record);
     });
 
+    const correlationId = dto.correlationId || execution.id;
     this.logger.log(
-      `Executing follow-up step ${step.id} (execution ${execution.id}, attempt ${execution.retryCount + 1})`,
+      `Executing follow-up step ${step.id} (execution ${execution.id}, attempt ${execution.retryCount + 1}, correlationId ${correlationId})`,
     );
 
     // 5. Send the execution request to n8n
