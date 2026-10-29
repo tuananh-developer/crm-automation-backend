@@ -3,13 +3,18 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Customer } from './entities/customer.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { SegmentsService } from './segments.service.js';
 import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
-import { CustomersController } from './customers.controller.js';
-import { AuthModule } from '../auth/auth.module.js';
+import {
+  CustomerTasksController,
+  CustomersController,
+} from './customers.controller.js';
+import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
+import { CustomerTask } from './entities/customer-task.entity.js';
 
 @Module({
   imports: [
@@ -19,10 +24,16 @@ import { AuthModule } from '../auth/auth.module.js';
       CustomerSegment,
       LeadScore,
       User,
+      WorkflowRun,
+      CustomerChurnAssessment,
+      CustomerTask,
     ]),
-    AuthModule,
   ],
-  controllers: [SegmentsController, CustomersController],
+  controllers: [
+    SegmentsController,
+    CustomersController,
+    CustomerTasksController,
+  ],
   providers: [SegmentsService, CustomersService],
   exports: [TypeOrmModule, SegmentsService, CustomersService],
 })
