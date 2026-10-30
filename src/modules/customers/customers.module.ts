@@ -9,11 +9,14 @@ import { User } from '../users/entities/user.entity.js';
 import { SegmentsService } from './segments.service.js';
 import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
+import { AccountHealthService } from './account-health.service.js';
+import { AccountHealthController } from './account-health.controller.js';
 import {
   CustomerTasksController,
   CustomersController,
 } from './customers.controller.js';
 import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
+import { AccountHealthSnapshot } from './entities/account-health-snapshot.entity.js';
 import { CustomerTask } from './entities/customer-task.entity.js';
 
 @Module({
@@ -27,14 +30,16 @@ import { CustomerTask } from './entities/customer-task.entity.js';
       WorkflowRun,
       CustomerChurnAssessment,
       CustomerTask,
+      AccountHealthSnapshot,
     ]),
   ],
   controllers: [
+    AccountHealthController,
     SegmentsController,
     CustomersController,
     CustomerTasksController,
   ],
-  providers: [SegmentsService, CustomersService],
+  providers: [SegmentsService, CustomersService, AccountHealthService],
   exports: [TypeOrmModule, SegmentsService, CustomersService],
 })
 export class CustomersModule {}
