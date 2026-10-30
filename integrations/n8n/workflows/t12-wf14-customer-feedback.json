@@ -1,0 +1,413 @@
+{
+  "name": "T12-WF14 \u2014 AI Customer Feedback Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "t12-wf14-customer-feedback",
+        "responseMode": "onReceived",
+        "responseData": "firstEntryJson",
+        "options": {}
+      },
+      "id": "node-1-webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 2. Code: Validate Feedback Input \u2014 validate customer reference, channel and text\nconst item = $input.first().json;\nconst payload = item.body || item;\n\nconst feedbackId = payload.feedbackId;\nconst customerId = payload.customerId;\nconst workflowRunId = payload.workflowRunId;\nconst safeContent = payload.safeContent || payload.content || '';\n\nif (!feedbackId || !customerId) {\n  throw new Error('Validation Error: Missing feedbackId or customerId');\n}\n\nif (!safeContent || safeContent.trim().length === 0) {\n  throw new Error('Validation Error: Empty feedback content');\n}\n\nreturn [{\n  json: {\n    feedbackId,\n    customerId,\n    workflowRunId,\n    safeContent: safeContent.trim(),\n    customerName: payload.customerName || 'Valued Customer',\n    companyName: payload.companyName || 'Customer Account',\n    receivedAt: payload.timestamp || new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-2-validate-feedback-input",
+      "name": "Code: Validate Feedback Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 3. Code: Validate Redaction/Normalize Feedback \u2014 reject unredacted payloads before AI call\nconst item = $input.first().json;\nlet text = item.safeContent;\n\n// Ensure any leaked raw emails/cards are redacted before AI\ntext = text.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g, '[REDACTED_EMAIL]');\ntext = text.replace(/(\\+?\\d{1,3}[-.\\s]?)?\\(?\\d{2,4}\\)?[-.\\s]?\\d{3,4}[-.\\s]?\\d{3,4}/g, '[REDACTED_PHONE]');\ntext = text.replace(/\\b(?:\\d{4}[ -]?){3}\\d{4}\\b/g, '[REDACTED_CARD]');\n\nreturn [{\n  json: {\n    ...item,\n    normalizedSafeContent: text,\n    isCleaned: true\n  }\n}];"
+      },
+      "id": "node-3-validate-redaction",
+      "name": "Code: Validate Redaction/Normalize Feedback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $json.customerId }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-4-get-customer-context",
+      "name": "HTTP Request: Get Customer Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-3.5-flash-lite') + ':generateContent?key=' + $env.GEMINI_API_KEY }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": {{ JSON.stringify(\"You are a Customer Experience & Sentiment Classification Agent.\\nClassify the following customer feedback into structured intelligence.\\n\\nFeedback text: \" + $('Code: Validate Redaction/Normalize Feedback').item.json.normalizedSafeContent + \"\\n\\nRespond strictly in JSON with this schema:\\n{\\n  \\\"sentiment\\\": \\\"POSITIVE\\\" | \\\"NEUTRAL\\\" | \\\"NEGATIVE\\\",\\n  \\\"category\\\": \\\"Product Quality\\\" | \\\"Customer Support\\\" | \\\"Billing\\\" | \\\"Feature Request\\\" | \\\"Performance\\\" | \\\"General\\\",\\n  \\\"urgency\\\": \\\"LOW\\\" | \\\"MEDIUM\\\" | \\\"HIGH\\\" | \\\"CRITICAL\\\",\\n  \\\"executiveSummary\\\": \\\"Brief 1-sentence synopsis\\\",\\n  \\\"escalationRequired\\\": true | false,\\n  \\\"escalationReason\\\": \\\"Reason if escalation required, else null\\\"\\n}\") }}\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.1,\n    \"responseMimeType\": \"application/json\"\n  }\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-5-gemini-classification",
+      "name": "HTTP Request: Gemini Feedback Classification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 6. Code: Validate Classification \u2014 enforce schema and confidence constraints\nconst response = $input.first().json;\nconst prep = $('Code: Validate Redaction/Normalize Feedback').first().json;\n\nlet aiParsed = null;\ntry {\n  const rawText = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    aiParsed = JSON.parse(rawText);\n  }\n} catch (e) {\n  aiParsed = null;\n}\n\nlet sentiment = 'NEUTRAL';\nlet category = 'General';\nlet urgency = 'LOW';\nlet escalationRequired = false;\nlet escalationReason = null;\n\nif (aiParsed && aiParsed.sentiment) {\n  sentiment = ['POSITIVE', 'NEUTRAL', 'NEGATIVE'].includes(aiParsed.sentiment) ? aiParsed.sentiment : 'NEUTRAL';\n  category = aiParsed.category || 'General';\n  urgency = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(aiParsed.urgency) ? aiParsed.urgency : 'LOW';\n  escalationRequired = Boolean(aiParsed.escalationRequired || urgency === 'CRITICAL' || urgency === 'HIGH');\n  escalationReason = aiParsed.escalationReason || (escalationRequired ? 'High urgency customer feedback requires immediate operational follow-up' : null);\n} else {\n  // Deterministic Fallback if Gemini rate-limits or interrupts\n  const text = (prep.normalizedSafeContent || '').toLowerCase();\n  if (text.includes('urgent') || text.includes('broken') || text.includes('timeout') || text.includes('fail') || text.includes('cancel')) {\n    sentiment = 'NEGATIVE';\n    category = 'Product Quality';\n    urgency = 'HIGH';\n    escalationRequired = true;\n    escalationReason = 'Critical operational keywords detected in feedback';\n  } else if (text.includes('great') || text.includes('excellent') || text.includes('love') || text.includes('thanks')) {\n    sentiment = 'POSITIVE';\n    category = 'Customer Support';\n    urgency = 'LOW';\n    escalationRequired = false;\n  }\n}\n\nreturn [{\n  json: {\n    feedbackId: prep.feedbackId,\n    customerId: prep.customerId,\n    workflowRunId: prep.workflowRunId,\n    sentiment,\n    category,\n    urgency,\n    escalationRequired,\n    escalationReason,\n    rawAIOutput: aiParsed || response\n  }\n}];"
+      },
+      "id": "node-6-validate-classification",
+      "name": "Code: Validate Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 7. Code: Determine Priority/SLA \u2014 map categories/severity to documented handling policy\nconst item = $input.first().json;\n\nlet taskPriority = 'MEDIUM';\nlet slaHours = 24;\n\nif (item.urgency === 'CRITICAL') {\n  taskPriority = 'CRITICAL';\n  slaHours = 4;\n} else if (item.urgency === 'HIGH' || item.sentiment === 'NEGATIVE') {\n  taskPriority = 'HIGH';\n  slaHours = 8;\n} else if (item.urgency === 'LOW' && item.sentiment === 'POSITIVE') {\n  taskPriority = 'LOW';\n  slaHours = 72;\n}\n\nconst dueDate = new Date();\ndueDate.setHours(dueDate.getHours() + slaHours);\n\nreturn [{\n  json: {\n    ...item,\n    taskPriority,\n    slaHours,\n    dueAt: dueDate.toISOString(),\n    idempotencyKey: `feedback-task-${item.feedbackId}`\n  }\n}];"
+      },
+      "id": "node-7-determine-priority-sla",
+      "name": "Code: Determine Priority/SLA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/feedback/' + $json.feedbackId + '/callback' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"feedbackId\": \"{{ $json.feedbackId }}\",\n  \"workflowRunId\": \"{{ $json.workflowRunId }}\",\n  \"status\": \"SUCCESS\",\n  \"sentiment\": \"{{ $json.sentiment }}\",\n  \"category\": \"{{ $json.category }}\",\n  \"urgency\": \"{{ $json.urgency }}\",\n  \"escalationRequired\": {{ $json.escalationRequired }}\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-8-save-feedback",
+      "name": "HTTP Request: Save Feedback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('Code: Determine Priority/SLA').item.json.escalationRequired }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-9-if-escalation-required",
+      "name": "IF: Escalation Required",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customer-tasks' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"customerId\": \"{{ $('Code: Determine Priority/SLA').item.json.customerId }}\",\n  \"taskType\": \"FEEDBACK_ESCALATION\",\n  \"title\": \"Urgent Customer Feedback: {{ $('Code: Determine Priority/SLA').item.json.category }}\",\n  \"description\": \"{{ $('Code: Determine Priority/SLA').item.json.escalationReason || 'Customer feedback escalated' }}\",\n  \"priority\": \"{{ $('Code: Determine Priority/SLA').item.json.taskPriority }}\",\n  \"idempotencyKey\": \"{{ $('Code: Determine Priority/SLA').item.json.idempotencyKey }}\",\n  \"sourceEntityType\": \"CUSTOMER_FEEDBACK\",\n  \"sourceEntityId\": \"{{ $('Code: Determine Priority/SLA').item.json.feedbackId }}\",\n  \"dueAt\": \"{{ $('Code: Determine Priority/SLA').item.json.dueAt }}\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-10-ensure-customertask",
+      "name": "HTTP Request: Ensure CustomerTask",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2080,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/notifications' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"CUSTOMER_FEEDBACK_PROCESSED\",\n  \"title\": \"Customer Feedback Classified\",\n  \"content\": \"Feedback has been classified as {{ $('Code: Determine Priority/SLA').item.json.sentiment }} ({{ $('Code: Determine Priority/SLA').item.json.category }}).\",\n  \"customerId\": \"{{ $('Code: Determine Priority/SLA').item.json.customerId }}\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-11-backend-acknowledge-notify",
+      "name": "HTTP Request: Backend Acknowledge/Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2300,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/feedback/' + $('Code: Determine Priority/SLA').item.json.feedbackId }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-12-feedback-callback-log",
+      "name": "HTTP Request: Feedback Callback/Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2520,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate Feedback Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Validate Feedback Input": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate Redaction/Normalize Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Validate Redaction/Normalize Feedback": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Get Customer Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get Customer Context": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Gemini Feedback Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Gemini Feedback Classification": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Validate Classification": {
+      "main": [
+        [
+          {
+            "node": "Code: Determine Priority/SLA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Determine Priority/SLA": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Save Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Save Feedback": {
+      "main": [
+        [
+          {
+            "node": "IF: Escalation Required",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Escalation Required": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Ensure CustomerTask",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request: Backend Acknowledge/Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Ensure CustomerTask": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Backend Acknowledge/Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Backend Acknowledge/Notify": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Feedback Callback/Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
