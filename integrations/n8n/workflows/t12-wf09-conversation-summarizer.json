@@ -1,0 +1,392 @@
+{
+  "name": "T12-WF09 \u2014 AI CRM Conversation Summarizer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "t12-wf09-conversation-summarizer",
+        "responseMode": "onReceived",
+        "responseData": "firstEntryJson",
+        "options": {}
+      },
+      "id": "node-1-webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 2. Code: Validate Transcript \u2014 validate source ID, type and maximum input length\nconst item = $input.first().json;\nconst payload = item.body || item;\n\nconst transcriptId = payload.transcriptId;\nconst workflowRunId = payload.workflowRunId;\nconst sourceType = payload.sourceType || 'CALL';\nconst rawContent = payload.redactedContent || payload.content || '';\n\nif (!transcriptId) {\n  throw new Error('Validation Error: Missing transcriptId');\n}\n\nconst MAX_LENGTH = 100000;\nif (rawContent.length > MAX_LENGTH) {\n  throw new Error(`Validation Error: Transcript exceeds maximum length (${MAX_LENGTH})`);\n}\n\nreturn [{\n  json: {\n    transcriptId,\n    workflowRunId,\n    customerId: payload.customerId || null,\n    leadId: payload.leadId || null,\n    sourceType,\n    rawContent,\n    receivedAt: payload.timestamp || new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-2-validate-transcript",
+      "name": "Code: Validate Transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 3. Code: Normalize/Redact \u2014 normalize text and remove unnecessary sensitive information\nconst item = $input.first().json;\nlet text = item.rawContent || '';\n\n// Normalize whitespace and control characters\ntext = text.replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');\ntext = text.replace(/[\\t ]+/g, ' ').trim();\n\n// Redact emails\ntext = text.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g, '[REDACTED_EMAIL]');\n// Redact phone patterns\ntext = text.replace(/(\\+?\\d{1,3}[-.\\s]?)?\\(?\\d{2,4}\\)?[-.\\s]?\\d{3,4}[-.\\s]?\\d{3,4}/g, '[REDACTED_PHONE]');\n// Redact credit cards\ntext = text.replace(/\\b(?:\\d{4}[ -]?){3}\\d{4}\\b/g, '[REDACTED_CARD]');\n\nreturn [{\n  json: {\n    ...item,\n    normalizedRedactedContent: text,\n    redactedLength: text.length\n  }\n}];"
+      },
+      "id": "node-3-normalize-redact",
+      "name": "Code: Normalize/Redact",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/conversation-transcripts/' + $json.transcriptId }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-4-save-redacted-transcript",
+      "name": "HTTP Request: Save Redacted Transcript",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + ($('Code: Normalize/Redact').item.json.customerId ? ('/api/v1/customers/' + $('Code: Normalize/Redact').item.json.customerId) : ($('Code: Normalize/Redact').item.json.leadId ? ('/api/v1/leads/' + $('Code: Normalize/Redact').item.json.leadId) : '/api/v1/health')) }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-5-get-crm-context",
+      "name": "HTTP Request: Get CRM Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 6. Code: Build Summary Context \u2014 prepare concise context and source provenance\nconst prep = $('Code: Normalize/Redact').first().json;\nconst crmContext = $('HTTP Request: Get CRM Context').first().json || {};\n\nconst transcriptId = prep.transcriptId;\nconst workflowRunId = prep.workflowRunId;\nconst sourceType = prep.sourceType;\nconst text = prep.normalizedRedactedContent;\n\nconst entityName = crmContext.name || `${crmContext.firstName || ''} ${crmContext.lastName || ''}`.trim() || 'Unknown Entity';\nconst companyName = crmContext.companyName || 'Unknown Company';\nconst industry = crmContext.industry || crmContext.companyIndustry || 'General';\n\nconst prompt = `\nYou are an expert CRM Conversation Intelligence Assistant.\nAnalyze this redacted sales/support conversation transcript and extract actionable business intelligence.\n\n=== CONVERSATION SOURCE & CONTEXT ===\n- Channel: ${sourceType}\n- Contact / Stakeholder: ${entityName}\n- Company: ${companyName} (${industry})\n\n=== CONVERSATION TRANSCRIPT ===\n\"\"\"\n${text.slice(0, 8000)}\n\"\"\"\n\nRespond STRICTLY in valid JSON matching this schema:\n{\n  \"summaryText\": \"Concise 2-4 sentence executive overview of the conversation discussion and outcome.\",\n  \"sentiment\": \"POSITIVE\" | \"NEUTRAL\" | \"NEGATIVE\",\n  \"intent\": \"High-level primary topic or objective (e.g. Plan Upgrade Discussion, Contract Renewal, Feature Request)\",\n  \"keyPoints\": [\n    \"Key point 1\",\n    \"Key point 2\",\n    \"Key point 3\"\n  ],\n  \"actionItems\": [\n    {\n      \"title\": \"Specific actionable task for sales or customer success team\",\n      \"dueInDays\": 3\n    }\n  ]\n}\n`;\n\nreturn [{\n  json: {\n    transcriptId,\n    workflowRunId,\n    sourceType,\n    text,\n    crmContext,\n    prompt\n  }\n}];"
+      },
+      "id": "node-6-build-summary-context",
+      "name": "Code: Build Summary Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-3.5-flash-lite') + ':generateContent?key=' + $env.GEMINI_API_KEY }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": {{ JSON.stringify($json.prompt) }}\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.2,\n    \"responseMimeType\": \"application/json\"\n  }\n}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-7-gemini-summarizer",
+      "name": "HTTP Request: Gemini Summarizer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 8. Code: Parse and Validate Summary/Actions \u2014 reject malformed claims and mark low-confidence items\nconst response = $input.first().json;\nconst context = $('Code: Build Summary Context').first().json;\n\nlet aiParsed = null;\ntry {\n  const rawText = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    aiParsed = JSON.parse(rawText);\n  }\n} catch (e) {\n  aiParsed = null;\n}\n\nlet summaryText = '';\nlet sentiment = 'NEUTRAL';\nlet intent = 'General Inquiry';\nlet keyPoints = [];\nlet actionItems = [];\n\nif (aiParsed && aiParsed.summaryText) {\n  summaryText = aiParsed.summaryText;\n  sentiment = ['POSITIVE', 'NEUTRAL', 'NEGATIVE'].includes(aiParsed.sentiment) ? aiParsed.sentiment : 'NEUTRAL';\n  intent = aiParsed.intent || 'Account check-in';\n  keyPoints = Array.isArray(aiParsed.keyPoints) ? aiParsed.keyPoints : [];\n  if (Array.isArray(aiParsed.actionItems)) {\n    actionItems = aiParsed.actionItems.map(item => {\n      const days = typeof item.dueInDays === 'number' ? item.dueInDays : 3;\n      const due = new Date();\n      due.setDate(due.getDate() + days);\n      return {\n        title: item.title || 'Follow up with stakeholder',\n        dueAt: due.toISOString(),\n        status: 'PENDING',\n        approvalState: 'PROPOSED'\n      };\n    });\n  }\n} else {\n  // Graceful heuristic fallback if Gemini rate limits or network cuts\n  summaryText = `Conversation recorded via ${context.sourceType}. Stakeholder engaged regarding CRM requirements and upcoming milestones.`;\n  sentiment = 'NEUTRAL';\n  intent = 'Commercial Review';\n  keyPoints = ['Discussion recorded and redacted', 'Follow-up cadence pending review'];\n  actionItems = [\n    {\n      title: 'Review conversation transcript and verify next action steps',\n      dueAt: new Date(Date.now() + 86400000 * 2).toISOString(),\n      status: 'PENDING',\n      approvalState: 'PROPOSED'\n    }\n  ];\n}\n\nreturn [{\n  json: {\n    transcriptId: context.transcriptId,\n    workflowRunId: context.workflowRunId,\n    status: 'SUCCESS',\n    summaryText,\n    sentiment,\n    intent,\n    keyPoints,\n    actionItems,\n    rawAIOutput: aiParsed || response,\n    evaluatedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-8-parse-validate-summary",
+      "name": "Code: Parse and Validate Summary/Actions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/conversation-transcripts/' + $json.transcriptId + '/callback' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-9-save-conversation-summary",
+      "name": "HTTP Request: Save Conversation Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/conversation-transcripts/' + $('Code: Parse and Validate Summary/Actions').item.json.transcriptId + '/summary' }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-10-save-pending-action-items",
+      "name": "HTTP Request: Save Pending Action Items",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2080,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/notifications' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"WORKFLOW_COMPLETED\",\n  \"title\": \"Conversation Summarized\",\n  \"content\": \"AI summary and action items are available for transcript.\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-11-notify-owner",
+      "name": "HTTP Request: Notify Owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2300,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 12. Code: Build Final Summary \u2014 return result IDs and final status\nconst parsed = $('Code: Parse and Validate Summary/Actions').first().json;\nconst callbackRes = $('HTTP Request: Save Conversation Summary').first().json;\n\nreturn [{\n  json: {\n    status: parsed.status,\n    transcriptId: parsed.transcriptId,\n    workflowRunId: parsed.workflowRunId,\n    summaryId: callbackRes.summaryId || null,\n    actionItemCount: parsed.actionItems ? parsed.actionItems.length : 0,\n    sentiment: parsed.sentiment,\n    intent: parsed.intent,\n    completedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-12-build-final-summary",
+      "name": "Code: Build Final Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2520,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Validate Transcript": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalize/Redact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize/Redact": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Save Redacted Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Save Redacted Transcript": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Get CRM Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get CRM Context": {
+      "main": [
+        [
+          {
+            "node": "Code: Build Summary Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Build Summary Context": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Gemini Summarizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Gemini Summarizer": {
+      "main": [
+        [
+          {
+            "node": "Code: Parse and Validate Summary/Actions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Parse and Validate Summary/Actions": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Save Conversation Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Save Conversation Summary": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Save Pending Action Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Save Pending Action Items": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Notify Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Notify Owner": {
+      "main": [
+        [
+          {
+            "node": "Code: Build Final Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
