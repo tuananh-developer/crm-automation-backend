@@ -10,6 +10,7 @@ import { LeadsModule } from './modules/leads/leads.module.js';
 import { LeadIntelligenceModule } from './modules/lead-intelligence/lead-intelligence.module.js';
 import { FollowUpModule } from './modules/follow-up/follow-up.module.js';
 import { CustomersModule } from './modules/customers/customers.module.js';
+import { RenewalModule } from './modules/renewal/renewal.module.js';
 import { WorkflowModule } from './modules/workflow/workflow.module.js';
 import { ReviewModule } from './modules/review/review.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
@@ -103,6 +104,7 @@ import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
     LeadIntelligenceModule,
     FollowUpModule,
     CustomersModule,
+    RenewalModule,
     WorkflowModule,
     ReviewModule,
     NotificationsModule,
