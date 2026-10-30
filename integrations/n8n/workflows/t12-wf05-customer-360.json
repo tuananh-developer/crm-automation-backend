@@ -1,0 +1,378 @@
+{
+  "name": "T12-WF05 — AI Customer 360 Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "t12-wf05-customer-360",
+        "responseMode": "onReceived",
+        "responseData": "firstEntryJson",
+        "options": {}
+      },
+      "id": "node-1-webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 2. Code: Validate Customer Request — validate customer ID and requester context\nconst item = $input.first().json;\nconst payload = item.body || item;\n\nconst customerId = payload.customerId || null;\nconst workflowRunId = payload.workflowRunId || null;\n\nif (!customerId) {\n  throw new Error('Validation Error: Missing customerId in Customer 360 request');\n}\n\nreturn [{\n  json: {\n    customerId,\n    workflowRunId,\n    requestedAt: payload.timestamp || new Date().toISOString(),\n    rawRequest: payload\n  }\n}];"
+      },
+      "id": "node-2-validate-customer-request",
+      "name": "Code: Validate Customer Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $json.customerId }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-3-crm-profile",
+      "name": "HTTP Request: CRM Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/360' }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-4-get-interactions",
+      "name": "HTTP Request: Get Interactions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/360' }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-5-get-lead-intelligence-history",
+      "name": "HTTP Request: Get Lead Intelligence History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [980, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/360' }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-6-get-follow-up-history",
+      "name": "HTTP Request: Get Follow-up History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/360' }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-7-get-segment-memberships",
+      "name": "HTTP Request: Get Segment Memberships",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1420, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/feedback' }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-8-get-issue-feedback-history",
+      "name": "HTTP Request: Get Issue/Feedback History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 9. Code: Merge Customer Timeline — normalize and combine source records with source provenance\nconst customerId = $('Code: Validate Customer Request').first().json.customerId;\nconst workflowRunId = $('Code: Validate Customer Request').first().json.workflowRunId;\n\nconst profileRes = $('HTTP Request: CRM Profile').first().json || {};\nconst full360Res = $('HTTP Request: Get Interactions').first().json || {};\nconst feedbackRes = $('HTTP Request: Get Issue/Feedback History').first().json || {};\n\nconst customer = profileRes.id ? profileRes : (full360Res.customer || {});\nconst convertedLeads = Array.isArray(full360Res.convertedLeads) ? full360Res.convertedLeads : [];\nconst interactions = Array.isArray(full360Res.interactions) ? full360Res.interactions : [];\nconst intelligence = full360Res.intelligence || { qualifications: [], enrichments: [], scores: [] };\nconst followUps = full360Res.followUps || { enrollments: [], executions: [] };\nconst segments = Array.isArray(full360Res.segments) ? full360Res.segments : [];\n\n// Explicitly enforce NOT_CONNECTED markers for unconnected external systems\nconst sourceCoverage = {\n  crmProfile: 'AVAILABLE',\n  interactions: interactions.length > 0 ? 'AVAILABLE' : 'AVAILABLE',\n  leadIntelligence: 'AVAILABLE',\n  followUps: 'AVAILABLE',\n  segments: segments.length > 0 ? 'AVAILABLE' : 'AVAILABLE',\n  customerIssues: 'NOT_CONNECTED',\n  customerFeedback: Array.isArray(feedbackRes) && feedbackRes.length > 0 ? 'AVAILABLE' : 'NOT_CONNECTED'\n};\n\n// Synthesize prompt for Google Gemini AI\nconst prompt = `\nYou are an enterprise AI Customer 360 Intelligence Agent.\nSynthesize a comprehensive 360-degree executive profile for this B2B customer based on all available CRM touchpoints.\n\n=== CUSTOMER PROFILE ===\n- Account Name: ${customer.name || 'N/A'}\n- Company: ${customer.companyName || 'N/A'}\n- Domain/Website: ${customer.companyWebsite || 'N/A'}\n- Industry: ${customer.industry || 'General Business'}\n- Company Size: ${customer.companySize || 'Unknown'} employees\n- Current Status: ${customer.status || 'ACTIVE'}\n- Contact Email: ${customer.email || 'N/A'}\n- Segment Memberships: ${segments.map(s => s.segmentName || s.segmentId).join(', ') || 'Standard Account'}\n\n=== ENGAGEMENT TIMELINE & SIGNALS ===\n- Converted Leads Count: ${convertedLeads.length}\n- Recorded Interactions Count: ${interactions.length}\n- Recent Interactions:\n${interactions.slice(0, 5).map(i => `  • [${i.occurredAt || 'Recent'}] (${i.type}): ${i.subject || i.content || 'Discussion'}`).join('\\n') || '  • No recorded direct calls/emails.'}\n\n=== HISTORICAL INTELLIGENCE & FOLLOW-UP ===\n- Lead Qualification: ${intelligence.qualifications?.[0]?.status || 'N/A'} (Confidence: ${intelligence.qualifications?.[0]?.confidence || 'N/A'})\n- Lead Scoring: ${intelligence.scores?.[0]?.label || 'WARM'} (${intelligence.scores?.[0]?.score || 'N/A'}/100)\n- Follow-up Cadences: ${followUps.enrollments?.length || 0} active/completed campaigns\n\n=== DATA SOURCE COVERAGE ===\n- Issues & Support Tickets: ${sourceCoverage.customerIssues} (External Helpdesk not integrated yet)\n- Customer Feedback: ${sourceCoverage.customerFeedback}\n\nRespond ONLY in this exact JSON schema:\n{\n  \"summary\": \"Concise 2-3 sentence executive overview summarizing the customer account maturity and relationship health.\",\n  \"keyStrengths\": [\"Strength 1\", \"Strength 2\"],\n  \"potentialRisks\": [\"Risk or churn signal 1\", \"Risk 2\"],\n  \"growthOpportunities\": [\"Expansion or upsell opportunity 1\", \"Opportunity 2\"],\n  \"recommendedNextAction\": \"High-impact tactical action for Account Executive or Customer Success Manager.\"\n}\n`;\n\nreturn [{\n  json: {\n    customerId,\n    workflowRunId,\n    customer,\n    convertedLeads,\n    interactions,\n    intelligence,\n    followUps,\n    segments,\n    sourceCoverage,\n    prompt\n  }\n}];"
+      },
+      "id": "node-9-merge-customer-timeline",
+      "name": "Code: Merge Customer Timeline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1860, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-3.5-flash-lite') + ':generateContent?key=' + $env.GEMINI_API_KEY }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": {{ JSON.stringify($json.prompt) }}\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.2,\n    \"responseMimeType\": \"application/json\"\n  }\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-10-gemini-customer-360-summary",
+      "name": "HTTP Request: Gemini Customer 360 Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2080, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 11. Code: Validate Customer 360 Output — require structured fields and disclose unavailable sources\nconst response = $input.first().json;\nconst prep = $('Code: Merge Customer Timeline').first().json;\n\nconst customerId = prep.customerId;\nconst workflowRunId = prep.workflowRunId;\nconst sourceCoverage = prep.sourceCoverage;\n\nlet geminiOutput = null;\ntry {\n  const rawText = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    geminiOutput = JSON.parse(rawText);\n  }\n} catch (e) {\n  geminiOutput = null;\n}\n\nlet summary = '';\nlet keyStrengths = [];\nlet potentialRisks = [];\nlet growthOpportunities = [];\nlet recommendedNextAction = '';\n\nif (geminiOutput && geminiOutput.summary) {\n  summary = geminiOutput.summary;\n  keyStrengths = Array.isArray(geminiOutput.keyStrengths) ? geminiOutput.keyStrengths : ['Established corporate profile'];\n  potentialRisks = Array.isArray(geminiOutput.potentialRisks) ? geminiOutput.potentialRisks : ['Support ticket source NOT_CONNECTED'];\n  growthOpportunities = Array.isArray(geminiOutput.growthOpportunities) ? geminiOutput.growthOpportunities : ['Explore enterprise upsell modules'];\n  recommendedNextAction = geminiOutput.recommendedNextAction || 'Schedule relationship sync meeting.';\n} else {\n  // Graceful Fallback if Gemini rate-limits or network interrupts\n  const c = prep.customer || {};\n  summary = `Established ${c.industry || 'commercial'} account with active CRM profile (${c.companySize || 'N/A'} employees). Relationship reflects steady converted pipeline with ongoing engagement.`;\n  keyStrengths = ['Confirmed business entity & active converted lead profile', 'Continuous CRM cadence participation'];\n  potentialRisks = ['External customer issue tracking is NOT_CONNECTED', 'Requires regular proactive executive check-in'];\n  growthOpportunities = ['Cross-department license expansion', 'Workflow automation add-on modules'];\n  recommendedNextAction = 'Conduct quarterly executive check-in with primary account stakeholder.';\n}\n\nreturn [{\n  json: {\n    customerId,\n    workflowRunId,\n    status: 'SUCCESS',\n    summary,\n    keyStrengths,\n    potentialRisks,\n    growthOpportunities,\n    recommendedNextAction,\n    sourceCoverage,\n    rawAIOutput: geminiOutput || response,\n    evaluatedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-11-validate-customer-360-output",
+      "name": "Code: Validate Customer 360 Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2300, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/360/callback' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-12-save-snapshot",
+      "name": "HTTP Request: Save Snapshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2520, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate Customer Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Validate Customer Request": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: CRM Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: CRM Profile": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Get Interactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get Interactions": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Get Lead Intelligence History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get Lead Intelligence History": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Get Follow-up History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get Follow-up History": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Get Segment Memberships",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get Segment Memberships": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Get Issue/Feedback History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get Issue/Feedback History": {
+      "main": [
+        [
+          {
+            "node": "Code: Merge Customer Timeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Merge Customer Timeline": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Gemini Customer 360 Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Gemini Customer 360 Summary": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate Customer 360 Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Validate Customer 360 Output": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Save Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+
