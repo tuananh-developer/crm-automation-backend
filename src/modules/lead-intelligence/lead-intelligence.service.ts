@@ -553,21 +553,42 @@ export class LeadIntelligenceService {
       return { enrichment: savedEnrichment, workflowRunUpdated };
     };
 
+    let result: { enrichment: LeadEnrichment; workflowRunUpdated: boolean };
+
     if (this.dataSource) {
-      return await this.dataSource.transaction(async (manager) => {
+      result = await this.dataSource.transaction(async (manager) => {
         return processEnrichment({
           leadRepo: manager.getRepository(Lead),
           enrichmentRepo: manager.getRepository(LeadEnrichment),
           workflowRunRepo: manager.getRepository(WorkflowRun),
         });
       });
+    } else {
+      result = await processEnrichment({
+        leadRepo: this.leadsRepository,
+        enrichmentRepo: this.enrichmentsRepository,
+        workflowRunRepo: this.workflowRunsRepository,
+      });
     }
 
-    return await processEnrichment({
-      leadRepo: this.leadsRepository,
-      enrichmentRepo: this.enrichmentsRepository,
-      workflowRunRepo: this.workflowRunsRepository,
-    });
+    // Auto-trigger Lead Scoring (UC04) after successful enrichment
+    if (
+      dto.status === EnrichmentStatus.SUCCESS ||
+      dto.status === EnrichmentStatus.PARTIAL
+    ) {
+      try {
+        await this.triggerScoring(dto.leadId);
+        this.logger.log(
+          `Auto-triggered AI lead scoring for lead ${dto.leadId} after successful enrichment`,
+        );
+      } catch (scoringErr: unknown) {
+        this.logger.warn(
+          `Failed to auto-trigger scoring for lead ${dto.leadId}: ${scoringErr instanceof Error ? scoringErr.message : String(scoringErr)}`,
+        );
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -617,19 +638,170 @@ export class LeadIntelligenceService {
     const capitalizedName =
       namePart.charAt(0).toUpperCase() + namePart.slice(1);
 
+    const knownCompanies: Record<
+      string,
+      {
+        name: string;
+        website: string;
+        industry: string;
+        size: number;
+        jobTitle: string;
+        linkedinUrl: string;
+      }
+    > = {
+      viettel: {
+        name: 'Tập đoàn Công nghiệp - Viễn thông Quân đội (Viettel)',
+        website: 'https://viettel.com.vn',
+        industry: 'Viễn thông & Công nghệ thông tin',
+        size: 50000,
+        jobTitle: 'Trưởng ban Chuyển đổi số',
+        linkedinUrl: 'https://linkedin.com/company/viettel-group',
+      },
+      fpt: {
+        name: 'Tập đoàn FPT (FPT Corporation)',
+        website: 'https://fpt.com.vn',
+        industry: 'Công nghệ thông tin & Dịch vụ số',
+        size: 70000,
+        jobTitle: 'Giám đốc Công nghệ (CTO)',
+        linkedinUrl: 'https://linkedin.com/company/fpt-corporation',
+      },
+      vng: {
+        name: 'Công ty Cổ phần VNG',
+        website: 'https://vng.com.vn',
+        industry: 'Internet & Trò chơi trực tuyến',
+        size: 4000,
+        jobTitle: 'Giám đốc Kỹ thuật (VP of Engineering)',
+        linkedinUrl: 'https://linkedin.com/company/vng-corporation',
+      },
+      vinfast: {
+        name: 'Công ty TNHH Sản xuất và Kinh doanh VinFast',
+        website: 'https://vinfastauto.com',
+        industry: 'Sản xuất ô tô & Xe điện',
+        size: 25000,
+        jobTitle: 'Giám đốc Phát triển Chuỗi cung ứng',
+        linkedinUrl: 'https://linkedin.com/company/vinfast-auto',
+      },
+      vingroup: {
+        name: 'Tập đoàn Vingroup',
+        website: 'https://vingroup.net',
+        industry: 'Tập đoàn Đa ngành & Bất động sản',
+        size: 60000,
+        jobTitle: 'Trưởng ban Đầu tư & Chiến lược',
+        linkedinUrl: 'https://linkedin.com/company/vingroup',
+      },
+      momo: {
+        name: 'Công ty Cổ phần Dịch vụ Di động Trực tuyến (MoMo)',
+        website: 'https://momo.vn',
+        industry: 'Fintech & Thanh toán số',
+        size: 2500,
+        jobTitle: 'Trưởng phòng Phát triển Kinh doanh',
+        linkedinUrl: 'https://linkedin.com/company/momo-wallet',
+      },
+      vnpt: {
+        name: 'Tập đoàn Bưu chính Viễn thông Việt Nam (VNPT)',
+        website: 'https://vnpt.com.vn',
+        industry: 'Viễn thông & Chuyển đổi số',
+        size: 40000,
+        jobTitle: 'Kỹ sư Trưởng Giải pháp Doanh nghiệp',
+        linkedinUrl: 'https://linkedin.com/company/vnpt',
+      },
+      vku: {
+        name: 'Trường Đại học Công nghệ Thông tin và Truyền thông Việt - Hàn (VKU)',
+        website: 'https://vku.udn.vn',
+        industry: 'Giáo dục Đại học & Nghiên cứu CNTT',
+        size: 500,
+        jobTitle: 'Trưởng bộ môn / Giảng viên cao cấp',
+        linkedinUrl: 'https://linkedin.com/school/vku-udn',
+      },
+      techcombank: {
+        name: 'Ngân hàng TMCP Kỹ thương Việt Nam (Techcombank)',
+        website: 'https://techcombank.com',
+        industry: 'Ngân hàng & Dịch vụ Tài chính',
+        size: 13000,
+        jobTitle: 'Trưởng phòng Khách hàng Doanh nghiệp',
+        linkedinUrl: 'https://linkedin.com/company/techcombank',
+      },
+      vietcombank: {
+        name: 'Ngân hàng TMCP Ngoại thương Việt Nam (Vietcombank)',
+        website: 'https://vietcombank.com.vn',
+        industry: 'Ngân hàng & Dịch vụ Tài chính',
+        size: 23000,
+        jobTitle: 'Giám đốc Quan hệ Khách hàng',
+        linkedinUrl: 'https://linkedin.com/company/vietcombank',
+      },
+      shopee: {
+        name: 'Shopee Vietnam',
+        website: 'https://shopee.vn',
+        industry: 'Thương mại Điện tử (E-Commerce)',
+        size: 8000,
+        jobTitle: 'Operations Team Lead',
+        linkedinUrl: 'https://linkedin.com/company/shopee',
+      },
+      samsung: {
+        name: 'Samsung Electronics Vietnam',
+        website: 'https://samsung.com/vn',
+        industry: 'Sản xuất Điện tử & Bán dẫn',
+        size: 100000,
+        jobTitle: 'Senior R&D Manager',
+        linkedinUrl: 'https://linkedin.com/company/samsung-electronics',
+      },
+      google: {
+        name: 'Google LLC',
+        website: 'https://google.com',
+        industry: 'Công nghệ & Điện toán đám mây',
+        size: 180000,
+        jobTitle: 'Senior Software Engineer',
+        linkedinUrl: 'https://linkedin.com/company/google',
+      },
+      microsoft: {
+        name: 'Microsoft Corporation',
+        website: 'https://microsoft.com',
+        industry: 'Phần mềm & Nền tảng Đám mây',
+        size: 220000,
+        jobTitle: 'Cloud Solution Architect',
+        linkedinUrl: 'https://linkedin.com/company/microsoft',
+      },
+    };
+
+    const normalizedKey = (namePart || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+    const matched = knownCompanies[normalizedKey];
+
+    const company = matched
+      ? {
+          name: matched.name,
+          website: matched.website,
+          industry: matched.industry,
+          size: matched.size,
+        }
+      : {
+          name: `${capitalizedName} Solutions`,
+          website: `https://${domain}`,
+          industry:
+            domain.endsWith('.edu') || domain.endsWith('.edu.vn')
+              ? 'Giáo dục & Đào tạo'
+              : domain.endsWith('.gov') || domain.endsWith('.gov.vn')
+                ? 'Cơ quan Nhà nước'
+                : 'Software & Technology',
+          size: 150,
+        };
+
+    const contact = matched
+      ? {
+          jobTitle: matched.jobTitle,
+          linkedinUrl: matched.linkedinUrl,
+        }
+      : {
+          jobTitle: 'Director of Operations',
+          linkedinUrl: `https://linkedin.com/company/${namePart}`,
+        };
+
     return {
       provider: query.provider || 'mock',
       externalRequestId: `ext-${Date.now()}`,
-      company: {
-        name: `${capitalizedName} Solutions`,
-        website: `https://${domain}`,
-        industry: 'Software & Technology',
-        size: 150,
-      },
-      contact: {
-        jobTitle: 'Director of Operations',
-        linkedinUrl: `https://linkedin.com/company/${namePart}`,
-      },
+      company,
+      contact,
       rawResponse: {
         source: 'mock-enrichment-v1',
         query: { domain, email: query.email },
