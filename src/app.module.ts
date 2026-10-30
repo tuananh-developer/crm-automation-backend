@@ -19,6 +19,7 @@ import { AuditModule } from './modules/audit/audit.module.js';
 import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module.js';
+import { FeedbackModule } from './modules/feedback/feedback.module.js';
 
 @Module({
   imports: [
@@ -110,6 +111,7 @@ import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module
     AuditModule,
     AuthModule,
     DataCleaningModule,
+    FeedbackModule,
     ThrottlerModule.forRoot([
       {
         name: 'default',
