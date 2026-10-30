@@ -1,0 +1,430 @@
+{
+  "name": "WF13 - Renewal Management",
+  "nodes": [
+    {
+      "name": "1. Node 1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w1"
+    },
+    {
+      "name": "2. Node 2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w2"
+    },
+    {
+      "name": "3. Node 3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w3"
+    },
+    {
+      "name": "4. Node 4",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w4"
+    },
+    {
+      "name": "5. Node 5",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w5"
+    },
+    {
+      "name": "6. Node 6",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w6"
+    },
+    {
+      "name": "7. Node 7",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w7"
+    },
+    {
+      "name": "8. Node 8",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w8"
+    },
+    {
+      "name": "9. Node 9",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w9"
+    },
+    {
+      "name": "10. Node 10",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w10"
+    },
+    {
+      "name": "11. Node 11",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w11"
+    },
+    {
+      "name": "12. Node 12",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w12"
+    },
+    {
+      "name": "13. Node 13",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w13"
+    },
+    {
+      "name": "14. Node 14",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2800,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w14"
+    },
+    {
+      "name": "15. Node 15",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w15"
+    },
+    {
+      "name": "16. Node 16",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w16"
+    },
+    {
+      "name": "17. Node 17",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w17"
+    },
+    {
+      "name": "18. Node 18",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "id": "w18"
+    }
+  ],
+  "connections": {
+    "1. Node 1": {
+      "main": [
+        [
+          {
+            "node": "2. Node 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Node 2": {
+      "main": [
+        [
+          {
+            "node": "3. Node 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Node 3": {
+      "main": [
+        [
+          {
+            "node": "4. Node 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Node 4": {
+      "main": [
+        [
+          {
+            "node": "5. Node 5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Node 5": {
+      "main": [
+        [
+          {
+            "node": "6. Node 6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Node 6": {
+      "main": [
+        [
+          {
+            "node": "7. Node 7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. Node 7": {
+      "main": [
+        [
+          {
+            "node": "8. Node 8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Node 8": {
+      "main": [
+        [
+          {
+            "node": "9. Node 9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9. Node 9": {
+      "main": [
+        [
+          {
+            "node": "10. Node 10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10. Node 10": {
+      "main": [
+        [
+          {
+            "node": "11. Node 11",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11. Node 11": {
+      "main": [
+        [
+          {
+            "node": "12. Node 12",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "12. Node 12": {
+      "main": [
+        [
+          {
+            "node": "13. Node 13",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "13. Node 13": {
+      "main": [
+        [
+          {
+            "node": "14. Node 14",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "14. Node 14": {
+      "main": [
+        [
+          {
+            "node": "15. Node 15",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "15. Node 15": {
+      "main": [
+        [
+          {
+            "node": "16. Node 16",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "16. Node 16": {
+      "main": [
+        [
+          {
+            "node": "17. Node 17",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "17. Node 17": {
+      "main": [
+        [
+          {
+            "node": "18. Node 18",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {}
+}
