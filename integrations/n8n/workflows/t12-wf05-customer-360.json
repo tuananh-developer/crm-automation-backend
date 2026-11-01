@@ -17,7 +17,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 2. Code: Validate Customer Request — validate customer ID and requester context\nconst item = $input.first().json;\nconst payload = item.body || item;\n\nconst customerId = payload.customerId || null;\nconst workflowRunId = payload.workflowRunId || null;\n\nif (!customerId) {\n  throw new Error('Validation Error: Missing customerId in Customer 360 request');\n}\n\nreturn [{\n  json: {\n    customerId,\n    workflowRunId,\n    requestedAt: payload.timestamp || new Date().toISOString(),\n    rawRequest: payload\n  }\n}];"
+        "jsCode": "// 2. Code: Validate Customer Request — validate customer ID and requester context\nconst item = $input.first().json;\nconst payload = item.body || item;\n\nconst customerId = payload.customerId || null;\nconst workflowRunId = payload.workflowRunId || null;\nconst triggeredByUserId = payload.triggeredByUserId || null;\n\nif (!customerId) {\n  throw new Error('Validation Error: Missing customerId in Customer 360 request');\n}\n\nreturn [{\n  json: {\n    customerId,\n    workflowRunId,\n    triggeredByUserId,\n    requestedAt: payload.timestamp || new Date().toISOString(),\n    rawRequest: payload\n  }\n}];"
       },
       "id": "node-2-validate-customer-request",
       "name": "Code: Validate Customer Request",
@@ -35,6 +35,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
             }
           ]
         },
@@ -51,7 +55,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/360' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/interactions' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -59,6 +63,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
             }
           ]
         },
@@ -75,7 +83,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/360' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/intelligence' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -83,6 +91,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
             }
           ]
         },
@@ -99,7 +111,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/360' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/follow-ups' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -107,6 +119,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
             }
           ]
         },
@@ -123,7 +139,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/360' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $('Code: Validate Customer Request').item.json.customerId + '/segments' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -131,6 +147,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
             }
           ]
         },
@@ -155,6 +175,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
             }
           ]
         },
@@ -171,7 +195,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 9. Code: Merge Customer Timeline — normalize and combine source records with source provenance\nconst customerId = $('Code: Validate Customer Request').first().json.customerId;\nconst workflowRunId = $('Code: Validate Customer Request').first().json.workflowRunId;\n\nconst profileRes = $('HTTP Request: CRM Profile').first().json || {};\nconst full360Res = $('HTTP Request: Get Interactions').first().json || {};\nconst feedbackRes = $('HTTP Request: Get Issue/Feedback History').first().json || {};\n\nconst customer = profileRes.id ? profileRes : (full360Res.customer || {});\nconst convertedLeads = Array.isArray(full360Res.convertedLeads) ? full360Res.convertedLeads : [];\nconst interactions = Array.isArray(full360Res.interactions) ? full360Res.interactions : [];\nconst intelligence = full360Res.intelligence || { qualifications: [], enrichments: [], scores: [] };\nconst followUps = full360Res.followUps || { enrollments: [], executions: [] };\nconst segments = Array.isArray(full360Res.segments) ? full360Res.segments : [];\n\n// Explicitly enforce NOT_CONNECTED markers for unconnected external systems\nconst sourceCoverage = {\n  crmProfile: 'AVAILABLE',\n  interactions: interactions.length > 0 ? 'AVAILABLE' : 'AVAILABLE',\n  leadIntelligence: 'AVAILABLE',\n  followUps: 'AVAILABLE',\n  segments: segments.length > 0 ? 'AVAILABLE' : 'AVAILABLE',\n  customerIssues: 'NOT_CONNECTED',\n  customerFeedback: Array.isArray(feedbackRes) && feedbackRes.length > 0 ? 'AVAILABLE' : 'NOT_CONNECTED'\n};\n\n// Synthesize prompt for Google Gemini AI\nconst prompt = `\nYou are an enterprise AI Customer 360 Intelligence Agent.\nSynthesize a comprehensive 360-degree executive profile for this B2B customer based on all available CRM touchpoints.\n\n=== CUSTOMER PROFILE ===\n- Account Name: ${customer.name || 'N/A'}\n- Company: ${customer.companyName || 'N/A'}\n- Domain/Website: ${customer.companyWebsite || 'N/A'}\n- Industry: ${customer.industry || 'General Business'}\n- Company Size: ${customer.companySize || 'Unknown'} employees\n- Current Status: ${customer.status || 'ACTIVE'}\n- Contact Email: ${customer.email || 'N/A'}\n- Segment Memberships: ${segments.map(s => s.segmentName || s.segmentId).join(', ') || 'Standard Account'}\n\n=== ENGAGEMENT TIMELINE & SIGNALS ===\n- Converted Leads Count: ${convertedLeads.length}\n- Recorded Interactions Count: ${interactions.length}\n- Recent Interactions:\n${interactions.slice(0, 5).map(i => `  • [${i.occurredAt || 'Recent'}] (${i.type}): ${i.subject || i.content || 'Discussion'}`).join('\\n') || '  • No recorded direct calls/emails.'}\n\n=== HISTORICAL INTELLIGENCE & FOLLOW-UP ===\n- Lead Qualification: ${intelligence.qualifications?.[0]?.status || 'N/A'} (Confidence: ${intelligence.qualifications?.[0]?.confidence || 'N/A'})\n- Lead Scoring: ${intelligence.scores?.[0]?.label || 'WARM'} (${intelligence.scores?.[0]?.score || 'N/A'}/100)\n- Follow-up Cadences: ${followUps.enrollments?.length || 0} active/completed campaigns\n\n=== DATA SOURCE COVERAGE ===\n- Issues & Support Tickets: ${sourceCoverage.customerIssues} (External Helpdesk not integrated yet)\n- Customer Feedback: ${sourceCoverage.customerFeedback}\n\nRespond ONLY in this exact JSON schema:\n{\n  \"summary\": \"Concise 2-3 sentence executive overview summarizing the customer account maturity and relationship health.\",\n  \"keyStrengths\": [\"Strength 1\", \"Strength 2\"],\n  \"potentialRisks\": [\"Risk or churn signal 1\", \"Risk 2\"],\n  \"growthOpportunities\": [\"Expansion or upsell opportunity 1\", \"Opportunity 2\"],\n  \"recommendedNextAction\": \"High-impact tactical action for Account Executive or Customer Success Manager.\"\n}\n`;\n\nreturn [{\n  json: {\n    customerId,\n    workflowRunId,\n    customer,\n    convertedLeads,\n    interactions,\n    intelligence,\n    followUps,\n    segments,\n    sourceCoverage,\n    prompt\n  }\n}];"
+        "jsCode": "// 9. Code: Merge Customer Timeline — normalize and combine source records with source provenance\nconst customerId = $('Code: Validate Customer Request').first().json.customerId;\nconst workflowRunId = $('Code: Validate Customer Request').first().json.workflowRunId;\n\nconst profileRes = $('HTTP Request: CRM Profile').first().json || {};\nconst interactionsRes = $('HTTP Request: Get Interactions').first().json;\nconst intelligenceRes = $('HTTP Request: Get Lead Intelligence History').first().json || {};\nconst followUpsRes = $('HTTP Request: Get Follow-up History').first().json || {};\nconst segmentsRes = $('HTTP Request: Get Segment Memberships').first().json;\nconst feedbackRes = $('HTTP Request: Get Issue/Feedback History').first().json;\n\nconst customer = profileRes.id ? profileRes : {};\nconst convertedLeads = Array.isArray(profileRes.convertedLeads) ? profileRes.convertedLeads : [];\nconst interactions = Array.isArray(interactionsRes) ? interactionsRes : [];\nconst qualifications = Array.isArray(intelligenceRes.qualifications) ? intelligenceRes.qualifications : [];\nconst enrichments = Array.isArray(intelligenceRes.enrichments) ? intelligenceRes.enrichments : [];\nconst scores = Array.isArray(intelligenceRes.scores) ? intelligenceRes.scores : [];\nconst enrollments = Array.isArray(followUpsRes.enrollments) ? followUpsRes.enrollments : [];\nconst executions = Array.isArray(followUpsRes.executions) ? followUpsRes.executions : [];\nconst segments = Array.isArray(segmentsRes) ? segmentsRes : [];\nconst feedbackList = Array.isArray(feedbackRes) ? feedbackRes : (Array.isArray(feedbackRes?.data) ? feedbackRes.data : []);\n\n// Compute data-dependent sourceCoverage (no hardcoded AVAILABLE)\nconst sourceCoverage = {\n  crmProfile: customer.id ? 'AVAILABLE' : 'EMPTY',\n  interactions: interactions.length > 0 ? 'AVAILABLE' : 'EMPTY',\n  leadIntelligence: (qualifications.length > 0 || enrichments.length > 0 || scores.length > 0) ? 'AVAILABLE' : 'EMPTY',\n  followUps: (enrollments.length > 0 || executions.length > 0) ? 'AVAILABLE' : 'EMPTY',\n  segments: segments.length > 0 ? 'AVAILABLE' : 'EMPTY',\n  customerIssues: 'NOT_CONNECTED',\n  customerFeedback: feedbackList.length > 0 ? 'AVAILABLE' : 'NOT_CONNECTED'\n};\n\nconst prompt = `\nYou are an enterprise CRM Customer 360 Intelligence Agent.\nSynthesize a comprehensive 360 executive profile for this B2B customer based on all verified CRM touchpoints.\n\n=== CUSTOMER PROFILE ===\n- Account Name: ${customer.name || 'N/A'}\n- Company: ${customer.companyName || 'N/A'}\n- Domain/Website: ${customer.companyWebsite || 'N/A'}\n- Industry: ${customer.industry || 'General Business'}\n- Company Size: ${customer.companySize || 'Unknown'} employees\n- Current Status: ${customer.status || 'ACTIVE'}\n- Contact Email: ${customer.email || 'N/A'}\n- Segment Memberships: ${segments.map(s => s.segmentName || s.segmentId).join(', ') || 'Standard Account'}\n\n=== INTERACTION TIMELINE & SIGNALS ===\n- Converted Leads Count: ${convertedLeads.length}\n- Recorded Touchpoints Count: ${interactions.length}\n- Recent Interactions:\n${interactions.slice(0, 5).map(i => `  • [${i.occurredAt || 'Recent'}] ${i.type}: ${i.subject || i.content || 'Discussion'}`).join('\\n') || '  • No direct calls/emails recorded.'}\n\n=== HISTORICAL INTELLIGENCE & FOLLOW-UP ===\n- Lead Qualification: ${qualifications[0]?.status || 'N/A'} (Confidence: ${qualifications[0]?.confidence || 'N/A'})\n- Lead Score: ${scores[0]?.label || 'WARM'} (${scores[0]?.score || 'N/A'}/100)\n- Follow-up Cadence: ${enrollments.length} campaigns active/completed\n\n=== DATA SOURCE COVERAGE ===\n- Issues & Support Tickets: ${sourceCoverage.customerIssues} (External helpdesk not connected)\n- Customer Feedback & CSAT: ${sourceCoverage.customerFeedback}\n\nRespond ONLY with valid JSON conforming to this exact schema:\n{\n  \"summary\": \"Concise 2-3 sentence executive synthesis summarizing customer maturity and relationship health.\",\n  \"keyStrengths\": [\"Strength 1\", \"Strength 2\"],\n  \"potentialRisks\": [\"Risk or churn signal 1\", \"Risk 2\"],\n  \"growthOpportunities\": [\"Expansion or upsell opportunity 1\", \"Opportunity 2\"],\n  \"recommendedNextAction\": \"High-impact tactical next action for the Account Executive or CSM.\"\n}\n`;\n\nreturn [{\n  json: {\n    customerId,\n    workflowRunId,\n    customer,\n    convertedLeads,\n    interactions,\n    intelligence: { qualifications, enrichments, scores },\n    followUps: { enrollments, executions },\n    segments,\n    sourceCoverage,\n    prompt\n  }\n}];"
       },
       "id": "node-9-merge-customer-timeline",
       "name": "Code: Merge Customer Timeline",
@@ -181,7 +205,7 @@
     },
     {
       "parameters": {
-        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-3.5-flash-lite') + ':generateContent?key=' + $env.GEMINI_API_KEY }}",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-3.5-flash-lite') + ':generateContent' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
@@ -189,6 +213,10 @@
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
             }
           ]
         },
@@ -208,7 +236,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 11. Code: Validate Customer 360 Output — require structured fields and disclose unavailable sources\nconst response = $input.first().json;\nconst prep = $('Code: Merge Customer Timeline').first().json;\n\nconst customerId = prep.customerId;\nconst workflowRunId = prep.workflowRunId;\nconst sourceCoverage = prep.sourceCoverage;\n\nlet geminiOutput = null;\ntry {\n  const rawText = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    geminiOutput = JSON.parse(rawText);\n  }\n} catch (e) {\n  geminiOutput = null;\n}\n\nlet summary = '';\nlet keyStrengths = [];\nlet potentialRisks = [];\nlet growthOpportunities = [];\nlet recommendedNextAction = '';\n\nif (geminiOutput && geminiOutput.summary) {\n  summary = geminiOutput.summary;\n  keyStrengths = Array.isArray(geminiOutput.keyStrengths) ? geminiOutput.keyStrengths : ['Established corporate profile'];\n  potentialRisks = Array.isArray(geminiOutput.potentialRisks) ? geminiOutput.potentialRisks : ['Support ticket source NOT_CONNECTED'];\n  growthOpportunities = Array.isArray(geminiOutput.growthOpportunities) ? geminiOutput.growthOpportunities : ['Explore enterprise upsell modules'];\n  recommendedNextAction = geminiOutput.recommendedNextAction || 'Schedule relationship sync meeting.';\n} else {\n  // Graceful Fallback if Gemini rate-limits or network interrupts\n  const c = prep.customer || {};\n  summary = `Established ${c.industry || 'commercial'} account with active CRM profile (${c.companySize || 'N/A'} employees). Relationship reflects steady converted pipeline with ongoing engagement.`;\n  keyStrengths = ['Confirmed business entity & active converted lead profile', 'Continuous CRM cadence participation'];\n  potentialRisks = ['External customer issue tracking is NOT_CONNECTED', 'Requires regular proactive executive check-in'];\n  growthOpportunities = ['Cross-department license expansion', 'Workflow automation add-on modules'];\n  recommendedNextAction = 'Conduct quarterly executive check-in with primary account stakeholder.';\n}\n\nreturn [{\n  json: {\n    customerId,\n    workflowRunId,\n    status: 'SUCCESS',\n    summary,\n    keyStrengths,\n    potentialRisks,\n    growthOpportunities,\n    recommendedNextAction,\n    sourceCoverage,\n    rawAIOutput: geminiOutput || response,\n    evaluatedAt: new Date().toISOString()\n  }\n}];"
+        "jsCode": "// 11. Code: Validate Customer 360 Output — require structured fields and report actual AI outcome\nconst response = $input.first().json;\nconst prep = $('Code: Merge Customer Timeline').first().json;\n\nconst customerId = prep.customerId;\nconst workflowRunId = prep.workflowRunId;\nconst sourceCoverage = prep.sourceCoverage;\n\nlet geminiOutput = null;\ntry {\n  const rawText = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    geminiOutput = JSON.parse(rawText);\n  }\n} catch (e) {\n  geminiOutput = null;\n}\n\nif (geminiOutput && geminiOutput.summary) {\n  return [{\n    json: {\n      customerId,\n      workflowRunId,\n      status: 'SUCCESS',\n      summary: geminiOutput.summary,\n      keyStrengths: Array.isArray(geminiOutput.keyStrengths) ? geminiOutput.keyStrengths : [],\n      potentialRisks: Array.isArray(geminiOutput.potentialRisks) ? geminiOutput.potentialRisks : [],\n      growthOpportunities: Array.isArray(geminiOutput.growthOpportunities) ? geminiOutput.growthOpportunities : [],\n      recommendedNextAction: geminiOutput.recommendedNextAction || 'Schedule regular executive review.',\n      sourceCoverage,\n      rawAIOutput: geminiOutput,\n      evaluatedAt: new Date().toISOString()\n    }\n  }];\n} else {\n  // Accurately report failure when Gemini call fails or returns non-JSON, do not fabricate fake AI outputs\n  return [{\n    json: {\n      customerId,\n      workflowRunId,\n      status: 'FAILED',\n      errorMessage: 'Gemini AI Customer 360 synthesis failed or returned invalid response format.',\n      summary: null,\n      keyStrengths: [],\n      potentialRisks: [],\n      growthOpportunities: [],\n      recommendedNextAction: null,\n      sourceCoverage,\n      rawAIOutput: response,\n      evaluatedAt: new Date().toISOString()\n    }\n  }];\n}"
       },
       "id": "node-11-validate-customer-360-output",
       "name": "Code: Validate Customer 360 Output",
@@ -375,4 +403,3 @@
     "executionOrder": "v1"
   }
 }
-

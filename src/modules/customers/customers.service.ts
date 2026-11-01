@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -14,6 +20,8 @@ import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { LeadFollowUpEnrollment } from '../follow-up/entities/lead-follow-up-enrollment.entity.js';
 import { FollowUpExecution } from '../follow-up/entities/follow-up-execution.entity.js';
+import { UserRole } from '../users/enums/user.enum.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   Customer360AiSummaryDto,
   Customer360CallbackDto,
@@ -22,7 +30,6 @@ import {
   Customer360Status,
   CustomerResponseDto,
   QueryCustomerDto,
-  TriggerCustomer360Dto,
   TriggerCustomer360ResponseDto,
 } from './dto/index.js';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
@@ -134,11 +141,45 @@ export class CustomersService {
   }
 
   /**
+   * Enforces object-level customer access policy (RBAC + Ownership).
+   * Admins have full access. Sales agents can only access customers they created or
+   * customers converted from leads they own or converted.
+   */
+  private checkCustomerAccess(
+    customer: Customer,
+    user?: AuthenticatedUser,
+  ): void {
+    if (!user) {
+      return; // Internal service execution (e.g. n8n service worker)
+    }
+
+    if (user.role === UserRole.ADMIN) {
+      return; // ADMIN role bypasses ownership checks
+    }
+
+    const isCreator = customer.createdBy === user.id;
+    const isOwnerOrConverter =
+      customer.convertedLeads &&
+      customer.convertedLeads.some(
+        (lead) => lead.ownerId === user.id || lead.convertedBy === user.id,
+      );
+
+    if (!isCreator && !isOwnerOrConverter) {
+      throw new ForbiddenException(
+        `Forbidden: User '${user.id}' is not authorized to access Customer '${customer.id}' (requires ownership or ADMIN role).`,
+      );
+    }
+  }
+
+  /**
    * Aggregates full CRM 360 view for a customer (T12-WF05 / UC05 / 07_API_CONTRACT.md).
    * Combines profile, converted leads, interaction timeline, intelligence history,
    * follow-up sequences, segment memberships, and AI 360 executive summary.
    */
-  async getCustomer360(customerId: string): Promise<Customer360ResponseDto> {
+  async getCustomer360(
+    customerId: string,
+    user?: AuthenticatedUser,
+  ): Promise<Customer360ResponseDto> {
     const customer = await this.customersRepository.findOne({
       where: { id: customerId },
       relations: {
@@ -154,6 +195,8 @@ export class CustomersService {
     if (!customer) {
       throw new NotFoundException(`Customer with ID '${customerId}' not found`);
     }
+
+    this.checkCustomerAccess(customer, user);
 
     const convertedLeads = customer.convertedLeads || [];
     const convertedLeadIds = convertedLeads.map((l) => l.id);
@@ -328,10 +371,19 @@ export class CustomersService {
       })),
       sourceCoverage: {
         crmProfile: 'AVAILABLE',
-        interactions: 'AVAILABLE',
-        leadIntelligence: 'AVAILABLE',
-        followUps: 'AVAILABLE',
-        segments: 'AVAILABLE',
+        interactions: interactions.length > 0 ? 'AVAILABLE' : 'EMPTY',
+        leadIntelligence:
+          qualifications.length > 0 ||
+          enrichments.length > 0 ||
+          scores.length > 0
+            ? 'AVAILABLE'
+            : 'EMPTY',
+        followUps:
+          enrollments.length > 0 || executions.length > 0
+            ? 'AVAILABLE'
+            : 'EMPTY',
+        segments:
+          (customer.customerSegments || []).length > 0 ? 'AVAILABLE' : 'EMPTY',
         customerIssues: 'NOT_CONNECTED',
         customerFeedback: 'NOT_CONNECTED',
       },
@@ -348,26 +400,164 @@ export class CustomersService {
   }
 
   /**
+   * Retrieves interactions for a customer and its converted leads (for n8n Node 4).
+   */
+  async getCustomerInteractions(
+    customerId: string,
+    user?: AuthenticatedUser,
+  ): Promise<any[]> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: { convertedLeads: true },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+    this.checkCustomerAccess(customer, user);
+
+    const leadIds = (customer.convertedLeads || []).map((l) => l.id);
+    if (leadIds.length === 0) {
+      return [];
+    }
+    return this.interactionsRepository.find({
+      where: { leadId: In(leadIds) },
+      order: { occurredAt: 'DESC' },
+    });
+  }
+
+  /**
+   * Retrieves lead intelligence history (for n8n Node 5).
+   */
+  async getCustomerIntelligence(
+    customerId: string,
+    user?: AuthenticatedUser,
+  ): Promise<{ qualifications: any[]; enrichments: any[]; scores: any[] }> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: { convertedLeads: true },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+    this.checkCustomerAccess(customer, user);
+
+    const leadIds = (customer.convertedLeads || []).map((l) => l.id);
+    if (leadIds.length === 0) {
+      return { qualifications: [], enrichments: [], scores: [] };
+    }
+
+    const [qualifications, enrichments, scores] = await Promise.all([
+      this.qualificationsRepository.find({
+        where: { leadId: In(leadIds) },
+        order: { createdAt: 'DESC' },
+      }),
+      this.enrichmentsRepository.find({
+        where: { leadId: In(leadIds) },
+        order: { enrichedAt: 'DESC' },
+      }),
+      this.scoresRepository.find({
+        where: { leadId: In(leadIds) },
+        order: { createdAt: 'DESC' },
+      }),
+    ]);
+
+    return { qualifications, enrichments, scores };
+  }
+
+  /**
+   * Retrieves follow-up campaign history (for n8n Node 6).
+   */
+  async getCustomerFollowUps(
+    customerId: string,
+    user?: AuthenticatedUser,
+  ): Promise<{ enrollments: any[]; executions: any[] }> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: { convertedLeads: true },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+    this.checkCustomerAccess(customer, user);
+
+    const leadIds = (customer.convertedLeads || []).map((l) => l.id);
+    if (leadIds.length === 0) {
+      return { enrollments: [], executions: [] };
+    }
+
+    const enrollments = await this.enrollmentsRepository.find({
+      where: { leadId: In(leadIds) },
+      order: { createdAt: 'DESC' },
+      relations: { sequence: true },
+    });
+
+    const enrollmentIds = enrollments.map((e) => e.id);
+    let executions: FollowUpExecution[] = [];
+    if (enrollmentIds.length > 0) {
+      executions = await this.executionsRepository.find({
+        where: { enrollmentId: In(enrollmentIds) },
+        order: { scheduledAt: 'DESC' },
+        relations: { step: true },
+      });
+    }
+
+    return { enrollments, executions };
+  }
+
+  /**
+   * Retrieves segment memberships for a customer (for n8n Node 7).
+   */
+  async getCustomerSegments(
+    customerId: string,
+    user?: AuthenticatedUser,
+  ): Promise<any[]> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: {
+        convertedLeads: true,
+        customerSegments: { segment: true },
+      },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+    this.checkCustomerAccess(customer, user);
+
+    return (customer.customerSegments || []).map((cs) => ({
+      segmentId: cs.segmentId,
+      segmentName: cs.segment?.name ?? null,
+      assignmentType: cs.assignmentType,
+      confidence: cs.confidence,
+      assignedReason: cs.assignedReason,
+      assignedAt: cs.assignedAt,
+    }));
+  }
+
+  /**
    * Initiates AI Customer 360 analysis workflow (T12-WF05).
    * Creates a correlated WorkflowRun and dispatches an authenticated internal webhook to n8n.
+   * Enforces object-level authorization and binds triggeredByUserId to authenticated caller.
    */
   async triggerCustomer360(
     customerId: string,
-    dto?: TriggerCustomer360Dto,
+    user: AuthenticatedUser,
   ): Promise<TriggerCustomer360ResponseDto> {
     const customer = await this.customersRepository.findOne({
       where: { id: customerId },
+      relations: { convertedLeads: true },
     });
 
     if (!customer) {
       throw new NotFoundException(`Customer with ID '${customerId}' not found`);
     }
 
-    // 1. Create correlated WorkflowRun in PENDING status
+    this.checkCustomerAccess(customer, user);
+
+    // 1. Create correlated WorkflowRun in PENDING status with verified user id
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 't12-wf05-customer-360',
       customerId: customer.id,
-      triggeredByUserId: dto?.userId ?? null,
+      triggeredByUserId: user.id,
       status: WorkflowStatus.PENDING,
       startedAt: new Date(),
       inputPayload: {
@@ -375,13 +565,14 @@ export class CustomersService {
         customerName: customer.name,
         customerEmail: customer.email,
         companyName: customer.companyName,
+        triggeredByUserId: user.id,
         requestedAt: new Date().toISOString(),
       },
     });
 
     const savedRun = await this.workflowRunsRepository.save(workflowRun);
     this.logger.log(
-      `Created WorkflowRun ${savedRun.id} for Customer 360 of customer ${customer.id}`,
+      `Created WorkflowRun ${savedRun.id} for Customer 360 of customer ${customer.id} by user ${user.id}`,
     );
 
     // 2. Dispatch internal webhook to n8n asynchronously
@@ -390,7 +581,6 @@ export class CustomersService {
       'http://crm_n8n:5678/webhook';
     const webhookUrl = `${n8nBaseUrl}/t12-wf05-customer-360`;
 
-    // Fire and forget webhook call to avoid blocking NestJS response
     fetch(webhookUrl, {
       method: 'POST',
       headers: {
@@ -402,6 +592,7 @@ export class CustomersService {
       body: JSON.stringify({
         customerId: customer.id,
         workflowRunId: savedRun.id,
+        triggeredByUserId: user.id,
         timestamp: new Date().toISOString(),
       }),
     })
@@ -431,7 +622,8 @@ export class CustomersService {
 
   /**
    * Receives AI Customer 360 callback from n8n (T12-WF05).
-   * Stores the executive summary, risks, opportunities into WorkflowRun outputPayload.
+   * Validates correlation between workflowRunId, customerId, and workflowName.
+   * Rejects untrusted/unknown runs and accurately reports workflow outcome.
    */
   async handleCustomer360Callback(
     dto: Customer360CallbackDto,
@@ -446,16 +638,26 @@ export class CustomersService {
       );
     }
 
-    let workflowRun = await this.workflowRunsRepository.findOne({
+    const workflowRun = await this.workflowRunsRepository.findOne({
       where: { id: dto.workflowRunId },
     });
 
     if (!workflowRun) {
-      workflowRun = this.workflowRunsRepository.create({
-        id: dto.workflowRunId,
-        workflowName: 't12-wf05-customer-360',
-        customerId: customer.id,
-      });
+      throw new NotFoundException(
+        `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+      );
+    }
+
+    if (workflowRun.customerId !== customer.id) {
+      throw new BadRequestException(
+        `WorkflowRun '${workflowRun.id}' belongs to customer '${workflowRun.customerId}', not '${customer.id}'`,
+      );
+    }
+
+    if (workflowRun.workflowName !== 't12-wf05-customer-360') {
+      throw new BadRequestException(
+        `WorkflowRun '${workflowRun.id}' is associated with workflow '${workflowRun.workflowName}', not 't12-wf05-customer-360'`,
+      );
     }
 
     const isSuccess = dto.status === Customer360Status.SUCCESS;
@@ -465,21 +667,21 @@ export class CustomersService {
     workflowRun.finishedAt = new Date();
     workflowRun.errorMessage = dto.errorMessage ?? null;
     workflowRun.outputPayload = {
-      summary: dto.summary,
+      summary: dto.summary ?? null,
       keyStrengths: dto.keyStrengths || [],
       potentialRisks: dto.potentialRisks || [],
       growthOpportunities: dto.growthOpportunities || [],
-      recommendedNextAction: dto.recommendedNextAction,
+      recommendedNextAction: dto.recommendedNextAction ?? null,
       sourceCoverage: dto.sourceCoverage || {
         crmProfile: 'AVAILABLE',
-        interactions: 'AVAILABLE',
-        leadIntelligence: 'AVAILABLE',
-        followUps: 'AVAILABLE',
-        segments: 'AVAILABLE',
+        interactions: 'EMPTY',
+        leadIntelligence: 'EMPTY',
+        followUps: 'EMPTY',
+        segments: 'EMPTY',
         customerIssues: 'NOT_CONNECTED',
         customerFeedback: 'NOT_CONNECTED',
       },
-      rawAIOutput: dto.rawAIOutput,
+      rawAIOutput: dto.rawAIOutput ?? null,
       modelInfo: {
         provider: 'google',
         model:
@@ -495,7 +697,7 @@ export class CustomersService {
     );
 
     return {
-      success: true,
+      success: isSuccess,
       customerId: customer.id,
       workflowRunId: workflowRun.id,
     };
