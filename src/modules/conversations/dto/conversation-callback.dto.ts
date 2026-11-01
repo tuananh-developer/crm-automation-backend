@@ -1,10 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -52,13 +54,17 @@ export class ConversationCallbackDto {
     enum: ['SUCCESS', 'FAILED'],
   })
   @IsNotEmpty()
-  @IsString()
+  @IsIn(['SUCCESS', 'FAILED'])
   status!: 'SUCCESS' | 'FAILED';
 
-  @ApiProperty({ description: 'Executive conversational summary text' })
+  @ApiPropertyOptional({
+    description:
+      'Executive conversational summary text (required if status is SUCCESS)',
+  })
+  @ValidateIf((o: ConversationCallbackDto) => o.status === 'SUCCESS')
   @IsNotEmpty()
   @IsString()
-  summaryText!: string;
+  summaryText?: string;
 
   @ApiPropertyOptional({
     description: 'Detected customer sentiment',
@@ -102,4 +108,24 @@ export class ConversationCallbackDto {
   @IsOptional()
   @IsString()
   errorMessage?: string;
+}
+
+export class SaveInternalActionItemsDto {
+  @ApiProperty({
+    description: 'Extracted follow-up action items',
+    type: [ActionItemCallbackItemDto],
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ActionItemCallbackItemDto)
+  actionItems!: ActionItemCallbackItemDto[];
+}
+
+export class UpdateInternalRedactedContentDto {
+  @ApiProperty({
+    description: 'Normalized and redacted transcript content',
+  })
+  @IsNotEmpty()
+  @IsString()
+  redactedContent!: string;
 }

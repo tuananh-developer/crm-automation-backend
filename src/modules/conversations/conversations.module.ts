@@ -5,6 +5,9 @@ import { ConversationSummary } from './entities/conversation-summary.entity.js';
 import { ConversationActionItem } from './entities/conversation-action-item.entity.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
+import { Customer } from '../customers/entities/customer.entity.js';
+import { Lead } from '../leads/entities/lead.entity.js';
+import { User } from '../users/entities/user.entity.js';
 import { ConversationsService } from './conversations.service.js';
 import { ConversationsController } from './conversations.controller.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
@@ -17,6 +20,9 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
       ConversationActionItem,
       WorkflowRun,
       Notification,
+      Customer,
+      Lead,
+      User,
     ]),
   ],
   controllers: [ConversationsController],

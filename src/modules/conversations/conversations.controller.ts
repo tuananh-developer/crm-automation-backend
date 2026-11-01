@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -21,7 +22,9 @@ import { ConversationsService } from './conversations.service.js';
 import {
   ConversationCallbackDto,
   CreateTranscriptDto,
+  SaveInternalActionItemsDto,
   UpdateActionItemDto,
+  UpdateInternalRedactedContentDto,
 } from './dto/index.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
@@ -40,7 +43,7 @@ export class ConversationsController {
     summary:
       'Ingest conversation transcript and trigger AI Summarizer (T12-WF09)',
     description:
-      'Validates and redacts transcript text, stores ConversationTranscript, initiates WorkflowRun and dispatches to n8n.',
+      'Validates entity permissions, redacts transcript text, stores ConversationTranscript, initiates WorkflowRun and dispatches to n8n.',
   })
   @ApiBody({ type: CreateTranscriptDto })
   @ApiResponse({
@@ -49,9 +52,9 @@ export class ConversationsController {
   })
   async createTranscript(
     @Body() dto: CreateTranscriptDto,
-    @CurrentUser() user?: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.conversationsService.createTranscript(dto, user?.id);
+    return this.conversationsService.createTranscript(dto, user);
   }
 
   @Get('conversation-transcripts/:transcriptId')
@@ -60,8 +63,9 @@ export class ConversationsController {
   @ApiParam({ name: 'transcriptId', format: 'uuid' })
   async getTranscript(
     @Param('transcriptId', ParseUUIDPipe) transcriptId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.conversationsService.getTranscript(transcriptId);
+    return this.conversationsService.getTranscript(transcriptId, user);
   }
 
   @Get('conversation-transcripts/:transcriptId/summary')
@@ -70,8 +74,26 @@ export class ConversationsController {
   @ApiParam({ name: 'transcriptId', format: 'uuid' })
   async getTranscriptSummary(
     @Param('transcriptId', ParseUUIDPipe) transcriptId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.conversationsService.getTranscriptSummary(transcriptId);
+    return this.conversationsService.getTranscriptSummary(transcriptId, user);
+  }
+
+  @Put('conversation-transcripts/:transcriptId/internal/redact')
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary:
+      'Internal endpoint for workflow to save normalized redacted transcript',
+  })
+  @ApiParam({ name: 'transcriptId', format: 'uuid' })
+  async saveRedactedTranscript(
+    @Param('transcriptId', ParseUUIDPipe) transcriptId: string,
+    @Body() dto: UpdateInternalRedactedContentDto,
+  ) {
+    return this.conversationsService.updateInternalRedactedContent(
+      transcriptId,
+      dto,
+    );
   }
 
   @Post('conversation-transcripts/:transcriptId/callback')
@@ -86,12 +108,28 @@ export class ConversationsController {
     return this.conversationsService.handleCallback(dto);
   }
 
+  @Post('conversation-summaries/:summaryId/internal/action-items')
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal endpoint for workflow to persist pending action items',
+  })
+  @ApiParam({ name: 'summaryId', format: 'uuid' })
+  async savePendingActionItems(
+    @Param('summaryId', ParseUUIDPipe) summaryId: string,
+    @Body() dto: SaveInternalActionItemsDto,
+  ) {
+    return this.conversationsService.saveInternalActionItems(summaryId, dto);
+  }
+
   @Get('conversation-summaries/:summaryId/action-items')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'List action items for a conversation summary' })
   @ApiParam({ name: 'summaryId', format: 'uuid' })
-  async getActionItems(@Param('summaryId', ParseUUIDPipe) summaryId: string) {
-    return this.conversationsService.getActionItems(summaryId);
+  async getActionItems(
+    @Param('summaryId', ParseUUIDPipe) summaryId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.conversationsService.getActionItems(summaryId, user);
   }
 
   @Patch('conversation-action-items/:itemId')
@@ -101,7 +139,8 @@ export class ConversationsController {
   async updateActionItem(
     @Param('itemId', ParseUUIDPipe) itemId: string,
     @Body() dto: UpdateActionItemDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.conversationsService.updateActionItem(itemId, dto);
+    return this.conversationsService.updateActionItem(itemId, dto, user);
   }
 }
