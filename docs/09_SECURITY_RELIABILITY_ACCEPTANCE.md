@@ -5,7 +5,7 @@
 - Authentication is required for all non-public CRM reads/writes.
 - Public registration cannot accept a caller-selected Admin or other privileged role. The backend assigns an allowed default role.
 - User management, role changes, customer-data access, task assignment/resolution, quote approval and Data Cleaning apply are protected by backend RBAC.
-- Every internal n8n callback is authenticated by a service identity/guard and validates DTO, correlation, run/resource relationship and allowed status transition.
+- Every internal n8n callback is authenticated by a service identity/guard and validates DTO, correlation, run/resource relationship and allowed status transition. Lead Intelligence callbacks require a correlated run for the matching Lead and workflow; data-cleaning callbacks require a data-cleaning run.
 - Service identities are scoped to the minimum routes/resources required; do not reuse a human JWT as a workflow credential.
 - Never rely on a hidden UI action or an unguessable URL as authorization.
 
@@ -57,6 +57,7 @@ Before applying any finding, the backend must reload the record and confirm: (1)
 ## 8. Required verification evidence
 
 The completed project must include automated evidence for:
+
 - DTO/schema validation and all critical business thresholds.
 - RBAC and public-registration role-escalation rejection.
 - Qualification confidence boundary at 0.80 and exactly-one ReviewTask under duplicate callbacks.

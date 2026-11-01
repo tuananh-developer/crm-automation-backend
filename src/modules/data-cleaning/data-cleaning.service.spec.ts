@@ -57,6 +57,7 @@ describe('DataCleaningService', () => {
   };
 
   const mockWorkflowRun: WorkflowRun = {
+    idempotencyKey: null,
     id: 'wf-uuid-1',
     workflowName: 'UC10_DATA_CLEANING',
     status: WorkflowStatus.PENDING,
