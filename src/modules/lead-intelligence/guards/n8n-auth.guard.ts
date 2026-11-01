@@ -7,6 +7,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { timingSafeEqual } from 'node:crypto';
 import type { Request } from 'express';
 
 @Injectable()
@@ -15,10 +16,22 @@ export class N8nAuthGuard implements CanActivate {
 
   constructor(private readonly configService: ConfigService) {}
 
+  private safeCompare(actual: string, expected: string): boolean {
+    const actualBuf = Buffer.from(actual, 'utf8');
+    const expectedBuf = Buffer.from(expected, 'utf8');
+    if (actualBuf.length !== expectedBuf.length) {
+      return false;
+    }
+    return timingSafeEqual(actualBuf, expectedBuf);
+  }
+
   canActivate(context: ExecutionContext): boolean {
-    const isProduction =
-      this.configService.get<string>('NODE_ENV') === 'production' ||
-      process.env.NODE_ENV === 'production';
+    const nodeEnv = (
+      this.configService.get<string>('NODE_ENV') ||
+      process.env.NODE_ENV ||
+      ''
+    ).toLowerCase();
+    const isDevOrTest = ['development', 'test'].includes(nodeEnv);
 
     const expectedKey =
       this.configService.get<string>('N8N_API_KEY') ||
@@ -26,9 +39,9 @@ export class N8nAuthGuard implements CanActivate {
 
     // Fail-Closed: Never bypass when secret is unconfigured
     if (!expectedKey) {
-      if (isProduction) {
+      if (!isDevOrTest) {
         this.logger.error(
-          'Webhook authentication secret is not configured in production',
+          `Webhook authentication secret is not configured in ${nodeEnv || 'production'} environment`,
         );
         throw new InternalServerErrorException(
           'Webhook authentication secret is not configured',
@@ -50,7 +63,7 @@ export class N8nAuthGuard implements CanActivate {
       (request.headers['x-webhook-secret'] as string) ||
       (request.headers['x-n8n-webhook-secret'] as string);
 
-    if (apiKeyHeader && apiKeyHeader === expectedKey) {
+    if (apiKeyHeader && this.safeCompare(apiKeyHeader, expectedKey)) {
       return true;
     }
 
@@ -58,7 +71,7 @@ export class N8nAuthGuard implements CanActivate {
     const authHeader = request.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7).trim();
-      if (token === expectedKey) {
+      if (this.safeCompare(token, expectedKey)) {
         return true;
       }
     }

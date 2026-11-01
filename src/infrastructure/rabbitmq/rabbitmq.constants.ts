@@ -9,5 +9,8 @@ export const CRM_EVENTS = {
   DATA_CLEANING_REQUESTED: 'data.cleaning.requested',
 } as const;
 
-export const DEFAULT_CRM_QUEUE = 'crm_events_queue';
-export const DATA_CLEANING_QUEUE = 'data.cleaning.queue';
+export const LEGACY_CRM_QUEUE = 'crm_events_queue';
+export const QUALIFICATION_QUEUE = 'n8n.lead-qualification.q';
+export const ENRICHMENT_QUEUE = 'n8n.lead-enrichment.q';
+export const SCORING_QUEUE = 'n8n.lead-scoring.q';
+export const DATA_CLEANING_QUEUE = 'n8n.data-cleaning.q';
