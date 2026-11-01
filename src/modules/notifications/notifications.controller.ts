@@ -10,6 +10,7 @@ import {
   HttpCode,
   HttpStatus,
   UseGuards,
+  BadRequestException,
 } from '@nestjs/common';
 import { NotificationsService } from './notifications.service.js';
 import { CreateNotificationDto } from './dto/create-notification.dto.js';
@@ -48,8 +49,11 @@ export class NotificationsController {
   @UseGuards(N8nAuthGuard)
   @HttpCode(HttpStatus.CREATED)
   async createInternal(@Body() dto: CreateNotificationDto) {
+    if (!dto.userId) {
+      throw new BadRequestException('userId is required');
+    }
     const notification = await this.notificationsService.create({
-      userId: dto.userId || '00000000-0000-0000-0000-000000000000',
+      userId: dto.userId,
       type: dto.type,
       title: dto.title,
       content: dto.message,

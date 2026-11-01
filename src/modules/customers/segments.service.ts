@@ -705,33 +705,22 @@ export class SegmentsService {
     workflowRunId: string;
     status: string;
   }> {
-    let workflowRun: WorkflowRun | null = null;
-
-    if (dto.workflowRunId) {
-      workflowRun = await this.workflowRunRepository.findOne({
-        where: { id: dto.workflowRunId },
-      });
+    if (!dto.workflowRunId) {
+      throw new BadRequestException('workflowRunId is required');
     }
 
+    const workflowRun = await this.workflowRunRepository.findOne({
+      where: { id: dto.workflowRunId },
+    });
+
     if (!workflowRun) {
-      const segment = await this.segmentsRepository.findOne({
-        where: { id: dto.segmentId },
-      });
-      if (!segment) {
-        throw new NotFoundException(`Segment '${dto.segmentId}' not found`);
-      }
-      workflowRun = this.workflowRunRepository.create({
-        workflowName: 'WF07_CUSTOMER_SEGMENTATION',
-        status: WorkflowStatus.PENDING,
-        inputPayload: {
-          segmentId: dto.segmentId,
-          segmentName: dto.segmentName,
-          requestedAt: new Date().toISOString(),
-        } as Record<string, any>,
-        outputPayload: null,
-        startedAt: new Date(),
-      });
-      workflowRun = await this.workflowRunRepository.save(workflowRun);
+      throw new NotFoundException(
+        `WorkflowRun '${dto.workflowRunId}' not found`,
+      );
+    }
+
+    if (workflowRun.workflowName !== 'WF07_CUSTOMER_SEGMENTATION') {
+      throw new BadRequestException('Workflow name mismatch');
     }
 
     const isSuccess = dto.status !== 'FAILED';
@@ -762,7 +751,7 @@ export class SegmentsService {
     await this.workflowRunRepository.save(workflowRun);
 
     return {
-      success: true,
+      success: workflowRun.status !== WorkflowStatus.FAILED,
       workflowRunId: workflowRun.id,
       status: workflowRun.status,
     };

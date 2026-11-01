@@ -33,7 +33,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.CRM_API_BASE_URL }}/follow-ups/executions?enrollmentId={{ $json.enrollmentId }}&stepId={{ $json.stepId }}",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/follow-ups/executions?enrollmentId={{ $json.enrollmentId }}&stepId={{ $json.stepId }}",
         "options": {
           "timeout": 15000
         },
@@ -51,7 +51,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const event = $('2. Validate Event').first().json;\nconst ctxResp = $input.first().json;\nconst executions = ctxResp.data || ctxResp.items || [];\nconst exec = executions.find(e => e.id === event.executionId);\nif (!exec) {\n  throw new Error('Execution not found: ' + event.executionId);\n}\nif (exec.enrollmentId !== event.enrollmentId) {\n  throw new Error('enrollmentId mismatch');\n}\nif (exec.stepId !== event.stepId) {\n  throw new Error('stepId mismatch');\n}\nif (exec.status === 'SUCCESS') {\n  throw new Error('Execution already completed successfully');\n}\nif (exec.status === 'RUNNING') {\n  throw new Error('Execution already running');\n}\nreturn [{ json: {\n  ...event,\n  executionStatus: exec.status,\n  enrollmentStatus: exec.enrollment?.status || 'UNKNOWN',\n  isDuplicate: exec.status === 'SUCCESS',\n  contextVerified: true\n} }];"
+        "jsCode": "const event = $('2. Validate Event').first().json;\nconst ctxResp = $input.first().json;\nconst executions = ctxResp.data || ctxResp.items || [];\nconst exec = executions.find(e => e.id === event.executionId);\nif (!exec) {\n  throw new Error('Execution not found: ' + event.executionId);\n}\nif (exec.enrollmentId !== event.enrollmentId) {\n  throw new Error('enrollmentId mismatch');\n}\nif (exec.stepId !== event.stepId) {\n  throw new Error('stepId mismatch');\n}\nif (exec.status === 'SUCCESS') {\n  throw new Error('Execution already completed successfully');\n}\nreturn [{ json: {\n  ...event,\n  executionStatus: exec.status,\n  enrollmentStatus: exec.enrollment?.status || 'UNKNOWN',\n  isDuplicate: exec.status === 'SUCCESS',\n  contextVerified: true\n} }];"
       },
       "id": "node-4-validate-enrollment",
       "name": "4. Validate Enrollment and Duplicate",
@@ -78,7 +78,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CRM_API_BASE_URL }}/communication/send",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/communication/send",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ to: $json.recipientEmail, subject: $json.emailSubject, html: $json.emailHtml, correlationId: $json.correlationId, idempotencyKey: 'follow-up:' + $json.executionId + ':' + $json.stepId }) }}",

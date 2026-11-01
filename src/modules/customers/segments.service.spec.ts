@@ -68,6 +68,7 @@ describe('SegmentsService', () => {
     jobTitle: 'CTO',
     companySize: 500,
     industry: 'Technology',
+    isStrategic: false,
     status: 'CONVERTED',
     createdBy: 'user-1',
     updatedBy: null,
