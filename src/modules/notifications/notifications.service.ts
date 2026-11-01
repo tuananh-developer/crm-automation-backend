@@ -69,7 +69,7 @@ export class NotificationsService {
         userId: input.userId,
         type: input.type,
         title: input.title,
-        content: input.content ?? null,
+        content: input.content ?? input.message ?? null,
         leadId: input.leadId ?? null,
         customerId: input.customerId ?? null,
         reviewTaskId: input.reviewTaskId ?? null,

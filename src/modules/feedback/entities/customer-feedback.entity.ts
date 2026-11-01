@@ -16,6 +16,7 @@ export enum FeedbackStatus {
   PROCESSED = 'PROCESSED',
   ESCALATED = 'ESCALATED',
   RESOLVED = 'RESOLVED',
+  FAILED = 'FAILED',
 }
 
 @Entity('customer_feedback')
@@ -31,8 +32,14 @@ export class CustomerFeedback {
   @Column({ name: 'source', type: 'varchar', length: 50, default: 'WEB' })
   source!: string;
 
+  @Column({ name: 'channel', type: 'varchar', length: 50, nullable: true })
+  channel!: string | null;
+
   @Column({ name: 'content', type: 'text' })
   content!: string;
+
+  @Column({ name: 'content_redacted', type: 'text', nullable: true })
+  contentRedacted!: string | null;
 
   @Column({
     name: 'rating',
@@ -70,6 +77,9 @@ export class CustomerFeedback {
   @Column({ name: 'raw_ai_output', type: 'jsonb', nullable: true })
   rawAIOutput!: Record<string, any> | null;
 
+  @Column({ name: 'error_message', type: 'text', nullable: true })
+  errorMessage!: string | null;
+
   @Column({ name: 'workflow_run_id', type: 'uuid', nullable: true })
   workflowRunId!: string | null;
 
@@ -79,6 +89,9 @@ export class CustomerFeedback {
     default: () => 'CURRENT_TIMESTAMP',
   })
   receivedAt!: Date;
+
+  @Column({ name: 'resolved_at', type: 'timestamptz', nullable: true })
+  resolvedAt!: Date | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;

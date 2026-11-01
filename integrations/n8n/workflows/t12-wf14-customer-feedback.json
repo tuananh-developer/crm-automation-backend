@@ -33,7 +33,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 3. Code: Validate Redaction/Normalize Feedback \u2014 reject unredacted payloads before AI call\nconst item = $input.first().json;\nlet text = item.safeContent;\n\n// Ensure any leaked raw emails/cards are redacted before AI\ntext = text.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g, '[REDACTED_EMAIL]');\ntext = text.replace(/(\\+?\\d{1,3}[-.\\s]?)?\\(?\\d{2,4}\\)?[-.\\s]?\\d{3,4}[-.\\s]?\\d{3,4}/g, '[REDACTED_PHONE]');\ntext = text.replace(/\\b(?:\\d{4}[ -]?){3}\\d{4}\\b/g, '[REDACTED_CARD]');\n\nreturn [{\n  json: {\n    ...item,\n    normalizedSafeContent: text,\n    isCleaned: true\n  }\n}];"
+        "jsCode": "// 3. Code: Validate Redaction/Normalize Feedback — reject unredacted payloads before AI call\nconst item = $input.first().json;\nlet text = item.safeContent;\n\n// Ensure any leaked raw emails/cards/accounts are redacted before AI\ntext = text.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g, '[REDACTED_EMAIL]');\ntext = text.replace(/(\\+?\\d{1,3}[-.\\s]?)?\\(?\\d{2,4}\\)?[-.\\s]?\\d{3,4}[-.\\s]?\\d{3,4}/g, '[REDACTED_PHONE]');\ntext = text.replace(/\\b(?:\\d{4}[ -]?){3}\\d{4}\\b/g, '[REDACTED_CARD]');\ntext = text.replace(/\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b/g, '[REDACTED_ACCOUNT]');\ntext = text.replace(/(?:(?:số\\s*tài\\s*khoản|tài\\s*khoản(?:\\s*ngân\\s*hàng)?|số\\s*tk|stk|account(?:\\s*number)?|acc(?:\\s*no|\\s*#)?)\\s*[:#.-]?\\s*)([0-9]{6,20})/gi, function(match, p1) { return match.replace(p1, '[REDACTED_ACCOUNT]'); });\n\nreturn [{\n  json: {\n    ...item,\n    normalizedSafeContent: text,\n    isCleaned: true\n  }\n}];"
       },
       "id": "node-3-validate-redaction",
       "name": "Code: Validate Redaction/Normalize Feedback",
@@ -73,7 +73,7 @@
     },
     {
       "parameters": {
-        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-3.5-flash-lite') + ':generateContent?key=' + $env.GEMINI_API_KEY }}",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-2.5-flash-lite') + ':generateContent' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
@@ -81,6 +81,10 @@
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
             }
           ]
         },
@@ -217,7 +221,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/notifications' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/notifications/internal/create' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
@@ -234,7 +238,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"type\": \"CUSTOMER_FEEDBACK_PROCESSED\",\n  \"title\": \"Customer Feedback Classified\",\n  \"content\": \"Feedback has been classified as {{ $('Code: Determine Priority/SLA').item.json.sentiment }} ({{ $('Code: Determine Priority/SLA').item.json.category }}).\",\n  \"customerId\": \"{{ $('Code: Determine Priority/SLA').item.json.customerId }}\"\n}",
+        "jsonBody": "={\n  \"userId\": \"{{ $('HTTP Request: Get Customer Context').item.json.createdBy || $('Code: Validate Feedback Input').item.json.createdBy || '00000000-0000-0000-0000-000000000001' }}\",\n  \"type\": \"CUSTOMER_FEEDBACK_PROCESSED\",\n  \"title\": \"Customer Feedback Classified\",\n  \"message\": \"Feedback has been classified as {{ $('Code: Determine Priority/SLA').item.json.sentiment }} ({{ $('Code: Determine Priority/SLA').item.json.category }}).\",\n  \"severity\": \"{{ $('Code: Determine Priority/SLA').item.json.escalationRequired ? 'HIGH' : 'INFO' }}\",\n  \"customerId\": \"{{ $('Code: Determine Priority/SLA').item.json.customerId }}\"\n}",
         "options": {
           "timeout": 10000
         }
@@ -251,7 +255,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/feedback/' + $('Code: Determine Priority/SLA').item.json.feedbackId }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/feedback/' + $('Code: Determine Priority/SLA').item.json.feedbackId + '/internal' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -259,6 +263,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
             }
           ]
         },

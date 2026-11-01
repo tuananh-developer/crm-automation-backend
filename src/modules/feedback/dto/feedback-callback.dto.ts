@@ -1,5 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
+import {
+  IsBoolean,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+} from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class FeedbackCallbackDto {
   @ApiProperty({ description: 'CustomerFeedback UUID' })
@@ -43,6 +50,12 @@ export class FeedbackCallbackDto {
     default: false,
   })
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === 'true' || value === true) return true;
+    if (value === 'false' || value === false) return false;
+    return typeof value === 'boolean' ? value : null;
+  })
+  @IsBoolean()
   escalationRequired?: boolean;
 
   @ApiPropertyOptional({ description: 'Raw generative AI output payload' })

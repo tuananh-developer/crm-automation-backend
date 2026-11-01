@@ -10,12 +10,14 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  ApiBearerAuth,
   ApiBody,
   ApiOperation,
   ApiParam,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { FeedbackService } from './feedback.service.js';
 import {
   CreateCustomerTaskDto,
@@ -24,6 +26,8 @@ import {
 } from './dto/index.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Customer Feedback & Tasks')
 @Controller()
@@ -31,37 +35,61 @@ export class FeedbackController {
   constructor(private readonly feedbackService: FeedbackService) {}
 
   @Post('feedback')
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @HttpCode(HttpStatus.ACCEPTED)
+  @ApiBearerAuth()
   @ApiOperation({
     summary: 'Submit customer feedback (T12-WF14 ingress)',
     description:
-      'Validates customer reference, redacts sensitive text, stores feedback record in NEW status, and dispatches to n8n AI Feedback Agent.',
+      'Validates customer tenant ownership, redacts sensitive text, stores feedback record in NEW status, and dispatches to n8n AI Feedback Agent.',
   })
   @ApiBody({ type: CreateFeedbackDto })
   @ApiResponse({
     status: 202,
     description: 'Feedback accepted for AI classification.',
   })
-  async createFeedback(@Body() dto: CreateFeedbackDto) {
-    return this.feedbackService.createFeedback(dto);
+  async createFeedback(
+    @Body() dto: CreateFeedbackDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.feedbackService.createFeedback(dto, user);
   }
 
   @Get('feedback/:feedbackId')
   @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Get feedback detail and classification' })
   @ApiParam({ name: 'feedbackId', format: 'uuid' })
-  async getFeedback(@Param('feedbackId', ParseUUIDPipe) feedbackId: string) {
-    return this.feedbackService.getFeedback(feedbackId);
+  async getFeedback(
+    @Param('feedbackId', ParseUUIDPipe) feedbackId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.feedbackService.getFeedback(feedbackId, user);
+  }
+
+  @Get('feedback/:feedbackId/internal')
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal get feedback detail for n8n workflows/services',
+  })
+  @ApiParam({ name: 'feedbackId', format: 'uuid' })
+  async getInternalFeedback(
+    @Param('feedbackId', ParseUUIDPipe) feedbackId: string,
+  ) {
+    return this.feedbackService.getInternalFeedback(feedbackId);
   }
 
   @Get('customers/:customerId/feedback')
   @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'List all feedback for a specific customer' })
   @ApiParam({ name: 'customerId', format: 'uuid' })
   async getCustomerFeedback(
     @Param('customerId', ParseUUIDPipe) customerId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.feedbackService.getCustomerFeedback(customerId);
+    return this.feedbackService.getCustomerFeedback(customerId, user);
   }
 
   @Post('feedback/:feedbackId/callback')

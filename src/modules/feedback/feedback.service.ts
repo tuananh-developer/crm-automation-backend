@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -6,7 +12,11 @@ import {
   CustomerFeedback,
   FeedbackStatus,
 } from './entities/customer-feedback.entity.js';
-import { CustomerTask } from './entities/customer-task.entity.js';
+import {
+  CustomerTask,
+  CustomerTaskPriority,
+  CustomerTaskStatus,
+} from './entities/customer-task.entity.js';
 import { Customer } from '../customers/entities/customer.entity.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
@@ -16,6 +26,8 @@ import {
   CreateFeedbackDto,
   FeedbackCallbackDto,
 } from './dto/index.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole } from '../users/enums/user.enum.js';
 
 @Injectable()
 export class FeedbackService {
@@ -42,25 +54,55 @@ export class FeedbackService {
 
   public redactSensitiveContent(rawText: string): string {
     if (!rawText) return '';
-    return rawText
-      .replace(
-        /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-        '[REDACTED_EMAIL]',
-      )
-      .replace(
-        /(\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}/g,
-        '[REDACTED_PHONE]',
-      )
-      .replace(/\b(?:\d{4}[ -]?){3}\d{4}\b/g, '[REDACTED_CARD]');
+    return (
+      rawText
+        // Email addresses
+        .replace(
+          /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
+          '[REDACTED_EMAIL]',
+        )
+        // 16-digit credit card sequences (e.g. 4111 2222 3333 4444)
+        .replace(/\b(?:\d{4}[ -]?){3}\d{4}\b/g, '[REDACTED_CARD]')
+        // International Bank Account Numbers (IBAN)
+        .replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b/g, '[REDACTED_ACCOUNT]')
+        // Bank account / account numbers preceded by labels (Vietnamese & English)
+        .replace(
+          /(?:(?:số\s*tài\s*khoản|tài\s*khoản(?:\s*ngân\s*hàng)?|số\s*tk|stk|account(?:\s*number)?|acc(?:\s*no|\s*#)?)\s*[:#.-]?\s*)([0-9]{6,20})/gi,
+          (match, p1: string) => match.replace(p1, '[REDACTED_ACCOUNT]'),
+        )
+        // Phone numbers (e.g. +84 912345678, (028) 38234567, 090-123-4567)
+        .replace(
+          /(\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}/g,
+          '[REDACTED_PHONE]',
+        )
+    );
   }
 
-  async createFeedback(dto: CreateFeedbackDto) {
+  async validateCustomerAccess(
+    user: AuthenticatedUser,
+    customerId: string,
+  ): Promise<Customer> {
     const customer = await this.customersRepository.findOne({
-      where: { id: dto.customerId },
+      where: { id: customerId },
     });
     if (!customer) {
-      throw new NotFoundException(`Customer ${dto.customerId} not found`);
+      throw new NotFoundException(`Customer ${customerId} not found`);
     }
+
+    if (
+      user.role !== UserRole.ADMIN &&
+      customer.createdBy &&
+      customer.createdBy !== user.id
+    ) {
+      throw new ForbiddenException(
+        `You do not have permission to access Customer ${customerId}`,
+      );
+    }
+    return customer;
+  }
+
+  async createFeedback(dto: CreateFeedbackDto, user: AuthenticatedUser) {
+    const customer = await this.validateCustomerAccess(user, dto.customerId);
 
     const safeContent = this.redactSensitiveContent(dto.content);
 
@@ -68,6 +110,7 @@ export class FeedbackService {
       customerId: dto.customerId,
       source: dto.source || 'WEB',
       content: safeContent,
+      contentRedacted: safeContent,
       rating: dto.rating ?? null,
       status: FeedbackStatus.NEW,
       receivedAt: new Date(),
@@ -79,6 +122,7 @@ export class FeedbackService {
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 't12-wf14-customer-feedback',
       customerId: customer.id,
+      triggeredByUserId: user.id,
       status: WorkflowStatus.PENDING,
       startedAt: new Date(),
       inputPayload: {
@@ -120,7 +164,7 @@ export class FeedbackService {
     workflowRunId: string,
     safeContent: string,
     customer: Customer,
-  ) {
+  ): Promise<void> {
     const n8nBaseUrl =
       this.configService.get<string>('N8N_INTERNAL_URL') ||
       this.configService.get<string>('N8N_WEBHOOK_URL') ||
@@ -134,12 +178,13 @@ export class FeedbackService {
       customerId: customer.id,
       customerName: customer.name,
       companyName: customer.companyName,
+      createdBy: customer.createdBy,
       safeContent,
       timestamp: new Date().toISOString(),
     };
 
     try {
-      await fetch(url, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -149,17 +194,69 @@ export class FeedbackService {
         },
         body: JSON.stringify(payload),
       });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        const errorMsg = `n8n webhook returned HTTP ${response.status}: ${errText.slice(0, 300)}`;
+        this.logger.error(`Failed to dispatch T12-WF14 to n8n: ${errorMsg}`);
+        await this.handleDispatchFailure(feedbackId, workflowRunId, errorMsg);
+        return;
+      }
+
       this.logger.log(
         `T12-WF14 successfully dispatched to n8n webhook: ${url}`,
       );
     } catch (err: unknown) {
+      const errorMsg = `Network error dispatching T12-WF14: ${err instanceof Error ? err.message : String(err)}`;
+      this.logger.error(errorMsg);
+      await this.handleDispatchFailure(feedbackId, workflowRunId, errorMsg);
+    }
+  }
+
+  private async handleDispatchFailure(
+    feedbackId: string,
+    workflowRunId: string,
+    errorMessage: string,
+  ): Promise<void> {
+    try {
+      const feedback = await this.feedbackRepository.findOne({
+        where: { id: feedbackId },
+      });
+      if (feedback) {
+        feedback.status = FeedbackStatus.FAILED;
+        feedback.errorMessage = errorMessage;
+        await this.feedbackRepository.save(feedback);
+      }
+
+      const workflowRun = await this.workflowRunsRepository.findOne({
+        where: { id: workflowRunId },
+      });
+      if (workflowRun) {
+        workflowRun.status = WorkflowStatus.FAILED;
+        workflowRun.finishedAt = new Date();
+        workflowRun.errorMessage = errorMessage;
+        await this.workflowRunsRepository.save(workflowRun);
+      }
+    } catch (persistErr: unknown) {
       this.logger.error(
-        `Error dispatching T12-WF14: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to record dispatch failure for feedback ${feedbackId}: ${persistErr instanceof Error ? persistErr.message : String(persistErr)}`,
       );
     }
   }
 
-  async getFeedback(id: string) {
+  async getFeedback(id: string, user: AuthenticatedUser) {
+    const feedback = await this.feedbackRepository.findOne({
+      where: { id },
+      relations: { customer: true },
+    });
+    if (!feedback) {
+      throw new NotFoundException(`Customer feedback ${id} not found`);
+    }
+    await this.validateCustomerAccess(user, feedback.customerId);
+    return feedback;
+  }
+
+  async getInternalFeedback(id: string) {
     const feedback = await this.feedbackRepository.findOne({
       where: { id },
       relations: { customer: true },
@@ -170,7 +267,8 @@ export class FeedbackService {
     return feedback;
   }
 
-  async getCustomerFeedback(customerId: string) {
+  async getCustomerFeedback(customerId: string, user: AuthenticatedUser) {
+    await this.validateCustomerAccess(user, customerId);
     return this.feedbackRepository.find({
       where: { customerId },
       order: { receivedAt: 'DESC' },
@@ -189,6 +287,42 @@ export class FeedbackService {
       throw new NotFoundException(`Feedback ${dto.feedbackId} not found`);
     }
 
+    const workflowRun = await this.workflowRunsRepository.findOne({
+      where: { id: dto.workflowRunId },
+    });
+    if (!workflowRun) {
+      throw new BadRequestException(
+        `Invalid callback correlation: WorkflowRun ${dto.workflowRunId} not found`,
+      );
+    }
+
+    if (workflowRun.workflowName !== 't12-wf14-customer-feedback') {
+      throw new BadRequestException(
+        `Invalid callback correlation: WorkflowRun ${dto.workflowRunId} is not for t12-wf14-customer-feedback`,
+      );
+    }
+
+    if (workflowRun.customerId !== feedback.customerId) {
+      throw new BadRequestException(
+        `Invalid callback correlation: WorkflowRun customer ${workflowRun.customerId} does not match feedback customer ${feedback.customerId}`,
+      );
+    }
+
+    if (feedback.workflowRunId && feedback.workflowRunId !== workflowRun.id) {
+      throw new BadRequestException(
+        `Invalid callback correlation: WorkflowRun ${workflowRun.id} does not match feedback workflowRunId ${feedback.workflowRunId}`,
+      );
+    }
+
+    if (
+      workflowRun.inputPayload?.feedbackId &&
+      workflowRun.inputPayload.feedbackId !== feedback.id
+    ) {
+      throw new BadRequestException(
+        `Invalid callback correlation: WorkflowRun input feedbackId does not match callback feedbackId`,
+      );
+    }
+
     const isSuccess = dto.status === 'SUCCESS';
     if (isSuccess) {
       feedback.sentiment = dto.sentiment ?? 'NEUTRAL';
@@ -198,28 +332,27 @@ export class FeedbackService {
         ? FeedbackStatus.ESCALATED
         : FeedbackStatus.PROCESSED;
       feedback.rawAIOutput = dto.rawAIOutput ?? null;
+      feedback.errorMessage = null;
+    } else {
+      feedback.status = FeedbackStatus.FAILED;
+      feedback.errorMessage =
+        dto.errorMessage ?? 'Workflow execution reported failure';
     }
     await this.feedbackRepository.save(feedback);
 
-    // Update WorkflowRun
-    const workflowRun = await this.workflowRunsRepository.findOne({
-      where: { id: dto.workflowRunId },
-    });
-    if (workflowRun) {
-      workflowRun.status = isSuccess
-        ? WorkflowStatus.SUCCESS
-        : WorkflowStatus.FAILED;
-      workflowRun.finishedAt = new Date();
-      workflowRun.errorMessage = dto.errorMessage ?? null;
-      workflowRun.outputPayload = {
-        sentiment: dto.sentiment,
-        category: dto.category,
-        urgency: dto.urgency,
-        escalationRequired: dto.escalationRequired,
-        rawAIOutput: dto.rawAIOutput,
-      };
-      await this.workflowRunsRepository.save(workflowRun);
-    }
+    workflowRun.status = isSuccess
+      ? WorkflowStatus.SUCCESS
+      : WorkflowStatus.FAILED;
+    workflowRun.finishedAt = new Date();
+    workflowRun.errorMessage = dto.errorMessage ?? null;
+    workflowRun.outputPayload = {
+      sentiment: dto.sentiment,
+      category: dto.category,
+      urgency: dto.urgency,
+      escalationRequired: dto.escalationRequired,
+      rawAIOutput: dto.rawAIOutput,
+    };
+    await this.workflowRunsRepository.save(workflowRun);
 
     return {
       success: isSuccess,
@@ -230,7 +363,8 @@ export class FeedbackService {
   }
 
   /**
-   * Idempotently creates or returns existing operational task linked to Customer/Feedback.
+   * Concurrency-safe idempotent creation of operational CustomerTask.
+   * Catches unique constraint collisions on idempotencyKey and returns existing record.
    */
   async ensureCustomerTask(dto: CreateCustomerTaskDto) {
     const existing = await this.customerTasksRepository.findOne({
@@ -243,24 +377,44 @@ export class FeedbackService {
       return { task: existing, created: false };
     }
 
-    const task = this.customerTasksRepository.create({
-      customerId: dto.customerId,
-      taskType: dto.taskType,
-      title: dto.title,
-      description: dto.description ?? null,
-      priority: dto.priority,
-      status: dto.status,
-      assignedTo: dto.assignedTo ?? null,
-      dueAt: dto.dueAt ? new Date(dto.dueAt) : null,
-      idempotencyKey: dto.idempotencyKey,
-      sourceEntityType: dto.sourceEntityType ?? 'CUSTOMER_FEEDBACK',
-      sourceEntityId: dto.sourceEntityId ?? null,
-    });
+    try {
+      const task = this.customerTasksRepository.create({
+        customerId: dto.customerId,
+        taskType: dto.taskType,
+        title: dto.title,
+        description: dto.description ?? null,
+        priority: dto.priority ?? CustomerTaskPriority.MEDIUM,
+        status: dto.status ?? CustomerTaskStatus.OPEN,
+        assignedTo: dto.assignedTo ?? null,
+        dueAt: dto.dueAt ? new Date(dto.dueAt) : null,
+        idempotencyKey: dto.idempotencyKey,
+        sourceEntityType: dto.sourceEntityType ?? 'CUSTOMER_FEEDBACK',
+        sourceEntityId: dto.sourceEntityId ?? null,
+      });
 
-    const saved = await this.customerTasksRepository.save(task);
-    this.logger.log(
-      `Created new CustomerTask ${saved.id} for customer ${dto.customerId}`,
-    );
-    return { task: saved, created: true };
+      const saved = await this.customerTasksRepository.save(task);
+      this.logger.log(
+        `Created new CustomerTask ${saved.id} for customer ${dto.customerId}`,
+      );
+      return { task: saved, created: true };
+    } catch (err: unknown) {
+      const error = err as { code?: string; message?: string };
+      if (
+        error?.code === '23505' ||
+        error?.message?.includes('duplicate key') ||
+        error?.message?.includes('UQ_customer_tasks_idempotency_key')
+      ) {
+        this.logger.log(
+          `Concurrent insert collision for idempotencyKey '${dto.idempotencyKey}': fetching existing task`,
+        );
+        const collisionTask = await this.customerTasksRepository.findOne({
+          where: { idempotencyKey: dto.idempotencyKey },
+        });
+        if (collisionTask) {
+          return { task: collisionTask, created: false };
+        }
+      }
+      throw err;
+    }
   }
 }
