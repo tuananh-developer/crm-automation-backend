@@ -16,6 +16,8 @@ import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { ReviewTask } from '../review/entities/review-task.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
+import { UserRole } from '../users/enums/user.enum.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   EnrichmentStatus,
   QualificationStatus,
@@ -66,14 +68,26 @@ export class LeadIntelligenceService {
     private readonly dataSource?: DataSource,
   ) {}
 
-  async triggerQualification(
+  async assertLeadAccess(
     leadId: string,
-    dto?: TriggerQualificationDto,
-  ): Promise<TriggerQualificationResponseDto> {
+    actor?: AuthenticatedUser,
+  ): Promise<Lead> {
     const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
     if (!lead) {
       throw new NotFoundException(`Lead with ID '${leadId}' not found`);
     }
+    if (actor && actor.role === UserRole.SALES && lead.ownerId !== actor.id) {
+      throw new NotFoundException(`Lead with ID '${lead.id}' not found`);
+    }
+    return lead;
+  }
+
+  async triggerQualification(
+    leadId: string,
+    dto?: TriggerQualificationDto,
+    actor?: AuthenticatedUser,
+  ): Promise<TriggerQualificationResponseDto> {
+    const lead = await this.assertLeadAccess(leadId, actor);
 
     // Update lead status to QUALIFYING
     lead.status = LeadStatus.QUALIFYING;
@@ -264,7 +278,13 @@ export class LeadIntelligenceService {
     };
   }
 
-  async getQualificationsByLead(leadId: string): Promise<LeadQualification[]> {
+  async getQualificationsByLead(
+    leadId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<LeadQualification[]> {
+    if (actor) {
+      await this.assertLeadAccess(leadId, actor);
+    }
     return this.qualificationsRepository.find({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -276,7 +296,11 @@ export class LeadIntelligenceService {
 
   async getLatestQualification(
     leadId: string,
+    actor?: AuthenticatedUser,
   ): Promise<LeadQualification | null> {
+    if (actor) {
+      await this.assertLeadAccess(leadId, actor);
+    }
     return this.qualificationsRepository.findOne({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -286,7 +310,13 @@ export class LeadIntelligenceService {
     });
   }
 
-  async getLatestEnrichment(leadId: string): Promise<LeadEnrichment | null> {
+  async getLatestEnrichment(
+    leadId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<LeadEnrichment | null> {
+    if (actor) {
+      await this.assertLeadAccess(leadId, actor);
+    }
     return this.enrichmentsRepository.findOne({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -296,7 +326,13 @@ export class LeadIntelligenceService {
     });
   }
 
-  async getEnrichmentsByLead(leadId: string): Promise<LeadEnrichment[]> {
+  async getEnrichmentsByLead(
+    leadId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<LeadEnrichment[]> {
+    if (actor) {
+      await this.assertLeadAccess(leadId, actor);
+    }
     return this.enrichmentsRepository.find({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -309,11 +345,9 @@ export class LeadIntelligenceService {
   async triggerEnrichment(
     leadId: string,
     dto?: TriggerEnrichmentDto,
+    actor?: AuthenticatedUser,
   ): Promise<TriggerEnrichmentResponseDto> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
+    const lead = await this.assertLeadAccess(leadId, actor);
 
     const provider = dto?.provider ?? DEFAULT_ENRICHMENT_PROVIDER;
 
@@ -819,17 +853,17 @@ export class LeadIntelligenceService {
    *  4. Up to 20 recent Interactions
    *  5. Pre-extracted scoring features summary
    */
-  async getScoringContext(leadId: string): Promise<{
+  async getScoringContext(
+    leadId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<{
     lead: Lead;
     qualification: LeadQualification | null;
     enrichment: LeadEnrichment | null;
     interactions: Interaction[];
     scoringFeatures: Record<string, any>;
   }> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
+    const lead = await this.assertLeadAccess(leadId, actor);
 
     const [qualification, enrichment, interactions] = await Promise.all([
       this.getLatestQualification(leadId),
@@ -984,12 +1018,9 @@ export class LeadIntelligenceService {
   async triggerScoring(
     leadId: string,
     dto?: TriggerScoringDto,
+    actor?: AuthenticatedUser,
   ): Promise<TriggerScoringResponseDto> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
-
+    const lead = await this.assertLeadAccess(leadId, actor);
     const context = await this.getScoringContext(leadId);
 
     const leadData = {
@@ -1266,7 +1297,13 @@ export class LeadIntelligenceService {
     });
   }
 
-  async getScoresByLead(leadId: string): Promise<LeadScore[]> {
+  async getScoresByLead(
+    leadId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<LeadScore[]> {
+    if (actor) {
+      await this.assertLeadAccess(leadId, actor);
+    }
     return this.scoresRepository.find({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -1274,7 +1311,13 @@ export class LeadIntelligenceService {
     });
   }
 
-  async getLatestScore(leadId: string): Promise<LeadScore | null> {
+  async getLatestScore(
+    leadId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<LeadScore | null> {
+    if (actor) {
+      await this.assertLeadAccess(leadId, actor);
+    }
     return this.scoresRepository.findOne({
       where: { leadId },
       order: { createdAt: 'DESC' },

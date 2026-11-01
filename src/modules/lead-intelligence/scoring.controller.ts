@@ -26,6 +26,9 @@ import {
   TriggerScoringResponseDto,
 } from './dto/index.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { ScoringMapper } from './mappers/index.js';
 
 @ApiTags('Lead Intelligence')
@@ -36,6 +39,7 @@ export class ScoringController {
   ) {}
 
   @Post(['score/:leadId', 'trigger/:leadId'])
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Trigger AI Lead Scoring (UC04)',
@@ -53,8 +57,9 @@ export class ScoringController {
   async triggerScoring(
     @Param('leadId', ParseUUIDPipe) leadId: string,
     @Body() dto?: TriggerScoringDto,
+    @CurrentUser() actor?: AuthenticatedUser,
   ): Promise<TriggerScoringResponseDto> {
-    return this.leadIntelligenceService.triggerScoring(leadId, dto);
+    return this.leadIntelligenceService.triggerScoring(leadId, dto, actor);
   }
 
   @Post(['scoring/callback', 'callback'])
@@ -85,6 +90,7 @@ export class ScoringController {
   }
 
   @Get(['scoring/context/:leadId', 'context/:leadId'])
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: 'Get aggregated scoring context for a lead (UC04)',
     description:
@@ -99,6 +105,23 @@ export class ScoringController {
   @ApiResponse({ status: 404, description: 'Lead not found.' })
   async getScoringContext(
     @Param('leadId', ParseUUIDPipe) leadId: string,
+    @CurrentUser() actor?: AuthenticatedUser,
+  ): Promise<ScoringContextResponseDto> {
+    const context = await this.leadIntelligenceService.getScoringContext(
+      leadId,
+      actor,
+    );
+    return ScoringMapper.toContextResponseDto(context);
+  }
+
+  @Get(['scoring/context/:leadId/internal', 'context/:leadId/internal'])
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal service: Get aggregated scoring context for a lead',
+  })
+  @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
+  async getScoringContextInternal(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
   ): Promise<ScoringContextResponseDto> {
     const context =
       await this.leadIntelligenceService.getScoringContext(leadId);
@@ -106,6 +129,7 @@ export class ScoringController {
   }
 
   @Get('scores/:leadId')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: 'Get score history for a lead (UC04)',
     description:
@@ -119,12 +143,28 @@ export class ScoringController {
   })
   async getScores(
     @Param('leadId', ParseUUIDPipe) leadId: string,
+    @CurrentUser() actor?: AuthenticatedUser,
+  ): Promise<ScoringResponseDto[]> {
+    const records = await this.leadIntelligenceService.getScoresByLead(
+      leadId,
+      actor,
+    );
+    return ScoringMapper.toResponseDtoList(records);
+  }
+
+  @Get('scores/:leadId/internal')
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({ summary: 'Internal service: Get score history for a lead' })
+  @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
+  async getScoresInternal(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
   ): Promise<ScoringResponseDto[]> {
     const records = await this.leadIntelligenceService.getScoresByLead(leadId);
     return ScoringMapper.toResponseDtoList(records);
   }
 
   @Get('scores/:leadId/latest')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: 'Get latest score assessment for a lead (UC04)',
     description:
@@ -138,6 +178,23 @@ export class ScoringController {
   })
   @ApiResponse({ status: 404, description: 'No score found for this lead.' })
   async getLatestScore(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+    @CurrentUser() actor?: AuthenticatedUser,
+  ): Promise<ScoringResponseDto | null> {
+    const record = await this.leadIntelligenceService.getLatestScore(
+      leadId,
+      actor,
+    );
+    return record ? ScoringMapper.toResponseDto(record) : null;
+  }
+
+  @Get('scores/:leadId/latest/internal')
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal service: Get latest score assessment for a lead',
+  })
+  @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
+  async getLatestScoreInternal(
     @Param('leadId', ParseUUIDPipe) leadId: string,
   ): Promise<ScoringResponseDto | null> {
     const record = await this.leadIntelligenceService.getLatestScore(leadId);

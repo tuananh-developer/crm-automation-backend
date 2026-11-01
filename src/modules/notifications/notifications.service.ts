@@ -1,7 +1,14 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Notification } from './entities/notification.entity.js';
+import { User } from '../users/entities/user.entity.js';
+import { Lead } from '../leads/entities/lead.entity.js';
 import {
   DEFAULT_NOTIFICATION_LIMIT,
   QueryNotificationsDto,
@@ -15,6 +22,12 @@ export class NotificationsService {
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepository: Repository<Notification>,
+    @Optional()
+    @InjectRepository(User)
+    private readonly usersRepository?: Repository<User>,
+    @Optional()
+    @InjectRepository(Lead)
+    private readonly leadsRepository?: Repository<Lead>,
   ) {}
 
   async findForUser(query: QueryNotificationsDto): Promise<Notification[]> {
@@ -64,12 +77,38 @@ export class NotificationsService {
 
   /** Used by other modules (UC06, UC07) to raise an in-app notification. */
   async create(input: CreateNotificationInput): Promise<Notification> {
+    let targetUserId = input.userId;
+
+    if (!targetUserId && input.leadId && this.leadsRepository) {
+      const lead = await this.leadsRepository.findOne({
+        where: { id: input.leadId },
+      });
+      if (lead?.ownerId) {
+        targetUserId = lead.ownerId;
+      }
+    }
+
+    if (!targetUserId && this.usersRepository) {
+      const fallbackUser = await this.usersRepository.findOne({
+        order: { createdAt: 'ASC' },
+      });
+      if (fallbackUser) {
+        targetUserId = fallbackUser.id;
+      }
+    }
+
+    if (!targetUserId) {
+      throw new BadRequestException(
+        'Notification recipient userId is required',
+      );
+    }
+
     return this.notificationRepository.save(
       this.notificationRepository.create({
-        userId: input.userId,
+        userId: targetUserId,
         type: input.type,
         title: input.title,
-        content: input.content ?? null,
+        content: input.content ?? input.message ?? null,
         leadId: input.leadId ?? null,
         customerId: input.customerId ?? null,
         reviewTaskId: input.reviewTaskId ?? null,

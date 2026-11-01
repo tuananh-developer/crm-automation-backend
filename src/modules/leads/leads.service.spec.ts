@@ -423,6 +423,15 @@ describe('LeadsService', () => {
       );
     });
 
+    it('findOneInternal should return lead without actor authorization check', async () => {
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(
+        buildLead({ id: 'lead-123', ownerId: 'another-user' }),
+      );
+
+      const result = await service.findOneInternal('lead-123');
+      expect(result.id).toBe('lead-123');
+    });
+
     it('scopes Sales lead lists to the authenticated owner', async () => {
       const queryBuilder = {
         leftJoinAndSelect: jest.fn().mockReturnThis(),

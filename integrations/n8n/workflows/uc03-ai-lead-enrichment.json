@@ -32,7 +32,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/leads/' + $json.leadId }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/leads/' + $json.leadId + '/internal' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -40,6 +40,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
             }
           ]
         },
@@ -85,7 +89,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 6. Code: Normalize Provider Result — map provider fields into the agreed schema\nconst response = $input.first().json;\nconst prep = $('Code: Extract Domain').first().json;\n\nconst company = response.company || {};\nconst contact = response.contact || {};\n\nconst companyName = company.name || response.companyName || prep.companyName || null;\nconst companyWebsite = company.website || response.companyWebsite || prep.website || (prep.domain ? `https://${prep.domain}` : null);\nconst industry = company.industry || response.industry || response.companyIndustry || null;\n\nlet companySize = null;\nif (typeof company.size === 'number') {\n  companySize = company.size;\n} else if (typeof response.companySize === 'number') {\n  companySize = response.companySize;\n} else if (typeof company.size === 'string') {\n  const match = company.size.match(/\\d+/);\n  companySize = match ? parseInt(match[0], 10) : null;\n}\n\nconst jobTitle = contact.jobTitle || response.jobTitle || response.contactJobTitle || null;\nconst linkedInUrl = contact.linkedinUrl || response.linkedInUrl || response.contactLinkedinUrl || null;\n\nreturn [{\n  json: {\n    leadId: prep.leadId,\n    workflowRunId: prep.workflowRunId,\n    provider: 'MOCK',\n    companyName,\n    companyWebsite,\n    industry,\n    companySize,\n    jobTitle,\n    linkedInUrl,\n    rawResponse: response.rawResponse || response,\n    httpStatus: response.statusCode || 200\n  }\n}];"
+        "jsCode": "// 6. Code: Normalize Provider Result — map provider fields into the agreed schema\nconst response = $input.first().json;\nconst prep = $('Code: Extract Domain').first().json;\n\n// Detect HTTP/adapter errors (e.g. 500, timeout, connection error)\nconst isHttpError = Boolean(\n  response.error ||\n  (response.statusCode && response.statusCode >= 400) ||\n  (response.status && response.status >= 400) ||\n  response.code === 'ECONNREFUSED' ||\n  response.code === 'ETIMEDOUT'\n);\n\nif (isHttpError) {\n  const errorMsg =\n    response.message ||\n    (response.error && (response.error.message || response.error)) ||\n    `Adapter returned HTTP ${response.statusCode || response.status || 500}`;\n\n  return [{\n    json: {\n      leadId: prep.leadId,\n      workflowRunId: prep.workflowRunId,\n      provider: 'MOCK',\n      companyName: null,\n      companyWebsite: null,\n      industry: null,\n      companySize: null,\n      jobTitle: null,\n      linkedInUrl: null,\n      rawResponse: response.rawResponse || response,\n      httpStatus: response.statusCode || response.status || 500,\n      isHttpError: true,\n      errorMessage: String(errorMsg)\n    }\n  }];\n}\n\nconst company = response.company || {};\nconst contact = response.contact || {};\n\n// Never manufacture fallback firmographics from event data on error or missing fields\nconst companyName = company.name || response.companyName || null;\nconst companyWebsite = company.website || response.companyWebsite || null;\nconst industry = company.industry || response.industry || response.companyIndustry || null;\n\nlet companySize = null;\nif (typeof company.size === 'number') {\n  companySize = company.size;\n} else if (typeof response.companySize === 'number') {\n  companySize = response.companySize;\n} else if (typeof company.size === 'string') {\n  const match = company.size.match(/\\d+/);\n  companySize = match ? parseInt(match[0], 10) : null;\n}\n\nconst jobTitle = contact.jobTitle || response.jobTitle || response.contactJobTitle || null;\nconst linkedInUrl = contact.linkedinUrl || response.linkedInUrl || response.contactLinkedinUrl || null;\n\nreturn [{\n  json: {\n    leadId: prep.leadId,\n    workflowRunId: prep.workflowRunId,\n    provider: 'MOCK',\n    companyName,\n    companyWebsite,\n    industry,\n    companySize,\n    jobTitle,\n    linkedInUrl,\n    rawResponse: response.rawResponse || response,\n    httpStatus: response.statusCode || 200,\n    isHttpError: false,\n    errorMessage: null\n  }\n}];"
       },
       "id": "node-6-normalize-provider-result",
       "name": "Code: Normalize Provider Result",
@@ -95,7 +99,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 7. Code: Validate Completeness — distinguish SUCCESS, PARTIAL, and FAILED; never manufacture unknown data\nconst item = $input.first().json;\n\nconst hasCritical = Boolean(item.companyName && (item.industry || item.companySize));\nconst hasAny = Boolean(item.companyName || item.industry || item.companySize || item.jobTitle);\n\nlet status = 'FAILED';\nlet errorMessage = null;\n\nif (hasCritical && item.jobTitle) {\n  status = 'SUCCESS';\n} else if (hasAny) {\n  status = 'PARTIAL';\n  errorMessage = 'Partial firmographics enrichment: missing some company or contact attributes';\n} else {\n  status = 'FAILED';\n  errorMessage = 'Enrichment provider returned no usable firmographics data';\n}\n\nreturn [{\n  json: {\n    leadId: item.leadId,\n    workflowRunId: item.workflowRunId,\n    status,\n    provider: 'MOCK',\n    companyName: item.companyName,\n    companyWebsite: item.companyWebsite,\n    industry: item.industry,\n    companySize: item.companySize,\n    jobTitle: item.jobTitle,\n    linkedInUrl: item.linkedInUrl,\n    rawResponse: item.rawResponse,\n    errorMessage\n  }\n}];"
+        "jsCode": "// 7. Code: Validate Completeness — distinguish SUCCESS, PARTIAL, and FAILED; never manufacture unknown data\nconst item = $input.first().json;\n\nlet status = 'FAILED';\nlet errorMessage = null;\n\nif (item.isHttpError) {\n  status = 'FAILED';\n  errorMessage = item.errorMessage || 'Enrichment provider returned HTTP error';\n} else {\n  const hasCritical = Boolean(item.companyName && (item.industry || item.companySize));\n  const hasAny = Boolean(item.companyName || item.industry || item.companySize || item.jobTitle);\n\n  if (hasCritical && item.jobTitle) {\n    status = 'SUCCESS';\n  } else if (hasAny) {\n    status = 'PARTIAL';\n    errorMessage = 'Partial firmographics enrichment: missing some company or contact attributes';\n  } else {\n    status = 'FAILED';\n    errorMessage = 'Enrichment provider returned no usable firmographics data';\n  }\n}\n\nreturn [{\n  json: {\n    leadId: item.leadId,\n    workflowRunId: item.workflowRunId,\n    status,\n    provider: 'MOCK',\n    companyName: item.companyName,\n    companyWebsite: item.companyWebsite,\n    industry: item.industry,\n    companySize: item.companySize,\n    jobTitle: item.jobTitle,\n    linkedInUrl: item.linkedInUrl,\n    rawResponse: item.rawResponse,\n    errorMessage\n  }\n}];"
       },
       "id": "node-7-validate-completeness",
       "name": "Code: Validate Completeness",
@@ -164,7 +168,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/notifications' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/notifications/internal/create' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
@@ -181,7 +185,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  type: 'ENRICHMENT_ALERT',\n  leadId: $('Code: Validate Completeness').item.json.leadId,\n  title: 'Lead Enrichment Incomplete',\n  message: 'Lead enrichment ended with status: ' + $('Code: Validate Completeness').item.json.status + '. ' + ($('Code: Validate Completeness').item.json.errorMessage || '')\n}) }}",
+        "jsonBody": "={\n  \"userId\": \"{{ $('HTTP Request: Get Lead').item.json.ownerId || $('HTTP Request: Get Lead').item.json.createdBy || '00000000-0000-0000-0000-000000000001' }}\",\n  \"type\": \"WORKFLOW_COMPLETED\",\n  \"title\": \"Lead Enrichment Incomplete\",\n  \"message\": \"Lead enrichment ended with status: {{ $('Code: Validate Completeness').item.json.status }}. {{ $('Code: Validate Completeness').item.json.errorMessage || '' }}\",\n  \"severity\": \"{{ $('Code: Validate Completeness').item.json.status === 'FAILED' ? 'HIGH' : 'MEDIUM' }}\",\n  \"leadId\": \"{{ $('Code: Validate Completeness').item.json.leadId }}\"\n}",
         "options": {
           "timeout": 10000
         }

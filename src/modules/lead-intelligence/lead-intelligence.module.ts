@@ -8,6 +8,7 @@ import { Interaction } from '../leads/entities/interaction.entity.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { ReviewTask } from '../review/entities/review-task.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
+import { AuthModule } from '../auth/auth.module.js';
 import { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { LeadIntelligenceController } from './lead-intelligence.controller.js';
 import { EnrichmentController } from './enrichment.controller.js';
@@ -26,6 +27,7 @@ import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
       ReviewTask,
       Notification,
     ]),
+    AuthModule,
   ],
   controllers: [
     LeadIntelligenceController,
