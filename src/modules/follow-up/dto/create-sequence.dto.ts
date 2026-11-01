@@ -4,7 +4,6 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
-  IsUUID,
   MaxLength,
 } from 'class-validator';
 import { FollowUpSequenceStatus } from '../enums/follow-up.enum.js';
@@ -26,8 +25,4 @@ export class CreateSequenceDto {
   @IsOptional()
   @IsEnum(FollowUpSequenceStatus)
   status?: FollowUpSequenceStatus = FollowUpSequenceStatus.ACTIVE;
-
-  @IsOptional()
-  @IsUUID()
-  createdBy?: string;
 }

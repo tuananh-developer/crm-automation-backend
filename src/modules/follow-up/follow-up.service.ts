@@ -36,6 +36,8 @@ import type {
   ExecuteFollowUpResult,
   N8nFollowUpResponse,
 } from './interfaces/index.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole } from '../users/enums/user.enum.js';
 
 export const DEFAULT_MAX_RETRIES = 3;
 export const DEFAULT_RETRY_DELAY_MINUTES = 10;
@@ -70,7 +72,10 @@ export class FollowUpService {
     private readonly configService: ConfigService,
   ) {}
 
-  async execute(dto: ExecuteFollowUpDto): Promise<ExecuteFollowUpResult> {
+  async execute(
+    dto: ExecuteFollowUpDto,
+    actor?: AuthenticatedUser,
+  ): Promise<ExecuteFollowUpResult> {
     // 1. Load and validate the enrollment
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id: dto.enrollmentId },
@@ -95,6 +100,7 @@ export class FollowUpService {
         `Lead '${enrollment.leadId}' of follow-up enrollment '${enrollment.id}' not found`,
       );
     }
+    if (actor) this.assertLeadAccess(lead, actor);
 
     // 2. Resolve the step to execute (requested step or current step of the enrollment)
     const step = await this.resolveStep(enrollment, dto.stepId);
@@ -250,6 +256,7 @@ export class FollowUpService {
 
   async findExecutions(
     query: QueryFollowUpExecutionDto,
+    actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<FollowUpExecutionResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -258,6 +265,9 @@ export class FollowUpService {
         ...(query.enrollmentId ? { enrollmentId: query.enrollmentId } : {}),
         ...(query.stepId ? { stepId: query.stepId } : {}),
         ...(query.status ? { status: query.status } : {}),
+        ...(actor.role === UserRole.SALES
+          ? { enrollment: { lead: { ownerId: actor.id } } }
+          : {}),
       },
       order: { createdAt: 'DESC' },
       take: limit,
@@ -423,6 +433,7 @@ export class FollowUpService {
 
   async enrollLead(
     dto: EnrollLeadDto,
+    actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
     const lead = await this.leadsRepository.findOne({
       where: { id: dto.leadId },
@@ -431,6 +442,7 @@ export class FollowUpService {
     if (!lead) {
       throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
     }
+    this.assertLeadAccess(lead, actor);
 
     const sequence = await this.sequencesRepository.findOne({
       where: { id: dto.sequenceId },
@@ -488,7 +500,7 @@ export class FollowUpService {
         currentStepId: firstStep.id,
         status: EnrollmentStatus.ACTIVE,
         startedAt: now,
-        assignedBy: dto.assignedBy ?? null,
+        assignedBy: actor.id,
       });
 
       const savedEnrollment = await enrollmentsRepository.save(enrollment);
@@ -511,7 +523,7 @@ export class FollowUpService {
 
       await auditLogRepository.save(
         auditLogRepository.create({
-          userId: dto.assignedBy ?? null,
+          userId: actor.id,
           action: 'FOLLOW_UP_ENROLLED',
           entityType: 'LeadFollowUpEnrollment',
           entityId: savedEnrollment.id,
@@ -557,10 +569,11 @@ export class FollowUpService {
   async pauseEnrollment(
     id: string,
     dto: UpdateEnrollmentDto,
+    actor?: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollment> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
-      relations: { executions: true },
+      relations: { executions: true, lead: true },
     });
 
     if (!enrollment) {
@@ -568,6 +581,7 @@ export class FollowUpService {
         `Follow-up enrollment with ID '${id}' not found`,
       );
     }
+    if (actor) this.assertEnrollmentAccess(enrollment, actor);
 
     if (enrollment.status !== EnrollmentStatus.ACTIVE) {
       throw new ConflictException(
@@ -615,10 +629,13 @@ export class FollowUpService {
     });
   }
 
-  async resumeEnrollment(id: string): Promise<LeadFollowUpEnrollment> {
+  async resumeEnrollment(
+    id: string,
+    actor?: AuthenticatedUser,
+  ): Promise<LeadFollowUpEnrollment> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
-      relations: { executions: true },
+      relations: { executions: true, lead: true },
     });
 
     if (!enrollment) {
@@ -626,6 +643,7 @@ export class FollowUpService {
         `Follow-up enrollment with ID '${id}' not found`,
       );
     }
+    if (actor) this.assertEnrollmentAccess(enrollment, actor);
 
     if (enrollment.status !== EnrollmentStatus.PAUSED) {
       throw new ConflictException(
@@ -669,10 +687,11 @@ export class FollowUpService {
   async cancelEnrollment(
     id: string,
     dto: UpdateEnrollmentDto,
+    actor?: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollment> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
-      relations: { executions: true },
+      relations: { executions: true, lead: true },
     });
 
     if (!enrollment) {
@@ -680,6 +699,7 @@ export class FollowUpService {
         `Follow-up enrollment with ID '${id}' not found`,
       );
     }
+    if (actor) this.assertEnrollmentAccess(enrollment, actor);
 
     if (
       enrollment.status === EnrollmentStatus.CANCELLED ||
@@ -1227,5 +1247,25 @@ export class FollowUpService {
       'FOLLOW_UP_RETRY_DELAY_MINUTES',
       DEFAULT_RETRY_DELAY_MINUTES,
     );
+  }
+
+  private assertLeadAccess(lead: Lead, actor: AuthenticatedUser): void {
+    if (actor.role === UserRole.SALES && lead.ownerId !== actor.id) {
+      throw new NotFoundException(`Lead with ID '${lead.id}' not found`);
+    }
+  }
+
+  private assertEnrollmentAccess(
+    enrollment: LeadFollowUpEnrollment,
+    actor: AuthenticatedUser,
+  ): void {
+    if (
+      actor.role === UserRole.SALES &&
+      enrollment.lead?.ownerId !== actor.id
+    ) {
+      throw new NotFoundException(
+        `Follow-up enrollment with ID '${enrollment.id}' not found`,
+      );
+    }
   }
 }
