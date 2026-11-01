@@ -68,12 +68,4 @@ export class CreateScanDto {
   @ValidateNested()
   @Type(() => ScanFilterDto)
   filter?: ScanFilterDto;
-
-  @ApiPropertyOptional({
-    description: 'UUID of user triggering the scan',
-    format: 'uuid',
-  })
-  @IsOptional()
-  @IsUUID()
-  userId?: string;
 }

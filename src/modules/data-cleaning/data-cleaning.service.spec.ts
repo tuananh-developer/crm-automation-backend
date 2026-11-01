@@ -1,4 +1,9 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { DataCleaningService } from './data-cleaning.service.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
@@ -8,6 +13,8 @@ import type { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import type { AuditLog } from '../audit/entities/audit-log.entity.js';
 import type { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
 import type { DataCleaningFinding } from './interfaces/data-cleaning.interface.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('DataCleaningService', () => {
   let service: DataCleaningService;
@@ -70,6 +77,17 @@ describe('DataCleaningService', () => {
     startedAt: new Date(),
     finishedAt: null,
     createdAt: new Date(),
+    idempotencyKey: null,
+  };
+  const salesActor: AuthenticatedUser = {
+    id: 'sales-user',
+    name: 'Sales User',
+    email: 'sales@example.test',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
   };
 
   beforeEach(() => {
@@ -148,6 +166,22 @@ describe('DataCleaningService', () => {
       });
     });
 
+    it('should take the scan actor from the authenticated user argument', async () => {
+      const dto = Object.assign(
+        { scope: 'ALL' as const },
+        { userId: 'spoofed-user' },
+      );
+
+      await service.createScan(dto, 'jwt-user');
+
+      expect(workflowRunRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ triggeredByUserId: 'jwt-user' }),
+      );
+      expect(rabbitmqService.publishDataCleaningRequested).toHaveBeenCalledWith(
+        expect.objectContaining({ triggeredByUserId: 'jwt-user' }),
+      );
+    });
+
     it('should survive RabbitMQ failure in resilient fallback mode', async () => {
       (
         rabbitmqService.publishDataCleaningRequested as jest.Mock
@@ -181,6 +215,17 @@ describe('DataCleaningService', () => {
 
       await expect(service.getScan('wf-non-existent')).rejects.toThrow(
         NotFoundException,
+      );
+    });
+
+    it('should deny Sales access to a scan with no matching owner', async () => {
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockWorkflowRun,
+        triggeredByUserId: null,
+      });
+
+      await expect(service.getScan('wf-uuid-1', salesActor)).rejects.toThrow(
+        ForbiddenException,
       );
     });
   });
@@ -230,6 +275,43 @@ describe('DataCleaningService', () => {
           findings: [],
         }),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should reject a callback whose run belongs to a different workflow', async () => {
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockWorkflowRun,
+        workflowName: 'lead-scoring',
+      });
+
+      await expect(
+        service.handleCallback({
+          workflowRunId: 'wf-uuid-1',
+          status: 'SUCCESS',
+          summary: {} as any,
+          findings: [],
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(workflowRunRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('should treat duplicate terminal callbacks as idempotent', async () => {
+      const completedRun = {
+        ...mockWorkflowRun,
+        status: WorkflowStatus.PARTIAL,
+      };
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(
+        completedRun,
+      );
+
+      const result = await service.handleCallback({
+        workflowRunId: 'wf-uuid-1',
+        status: 'SUCCESS',
+        summary: {} as any,
+        findings: [],
+      });
+
+      expect(result.status).toBe(WorkflowStatus.PARTIAL);
+      expect(workflowRunRepository.save).not.toHaveBeenCalled();
     });
   });
 
@@ -288,6 +370,22 @@ describe('DataCleaningService', () => {
       expect(result.skippedCount).toBe(0);
       expect(result.results[0].status).toBe('APPLIED');
       expect(result.results[0].newValue).toBe('https://acme.com');
+    });
+
+    it('should deny Sales from applying a legacy scan with no owner', async () => {
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce({
+        ...completedWorkflowRun,
+        triggeredByUserId: null,
+      });
+
+      await expect(
+        service.applyCleaning(
+          'wf-uuid-1',
+          { acceptedFindingIds: ['finding-uuid-website'] },
+          salesActor,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
     it('should skip fields that are not in the whitelist', async () => {
@@ -564,7 +662,7 @@ describe('DataCleaningService', () => {
       );
     });
 
-    it('should prioritize userId over dto.userId and workflowRun.triggeredByUserId for audit log', async () => {
+    it('should prioritize authenticated user over workflowRun.triggeredByUserId for audit log', async () => {
       (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(
         completedWorkflowRun,
       );
@@ -577,7 +675,6 @@ describe('DataCleaningService', () => {
         'wf-uuid-1',
         {
           acceptedFindingIds: ['finding-uuid-website'],
-          userId: 'dto-user-id',
         },
         'jwt-user-id',
       );

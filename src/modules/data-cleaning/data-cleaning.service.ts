@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -11,7 +13,11 @@ import { Lead } from '../leads/entities/lead.entity.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
+import { Notification } from '../notifications/entities/notification.entity.js';
+import { NotificationType } from '../notifications/enums/notification.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import { UserRole } from '../users/enums/user.enum.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   CreateScanDto,
   DataCleaningCallbackDto,
@@ -84,7 +90,8 @@ export class DataCleaningService {
     status: WorkflowStatus;
     message: string;
   }> {
-    const effectiveUserId = dto.userId || userId || null;
+    // The authenticated actor comes from the JWT-bound controller argument.
+    const effectiveUserId = userId || null;
 
     const inputData: ScanInputPayload = {
       scope: dto.scope,
@@ -123,30 +130,33 @@ export class DataCleaningService {
     }
 
     // Resilient fallback worker: if n8n/RabbitMQ takes >20s or is delayed, automatically process in-process
-    setTimeout(() => {
-      void (async () => {
-        try {
-          const check = await this.workflowRunRepository.findOne({
-            where: { id: savedRun.id },
-          });
-          if (
-            check &&
-            (check.status === WorkflowStatus.PENDING ||
-              check.status === WorkflowStatus.RUNNING)
-          ) {
-            this.logger.log(
-              `Executing resilient in-process data cleaning for WorkflowRun ${savedRun.id}`,
+    const nodeEnv = (process.env.NODE_ENV || '').toLowerCase();
+    if (nodeEnv !== 'test') {
+      setTimeout(() => {
+        void (async () => {
+          try {
+            const check = await this.workflowRunRepository.findOne({
+              where: { id: savedRun.id },
+            });
+            if (
+              check &&
+              (check.status === WorkflowStatus.PENDING ||
+                check.status === WorkflowStatus.RUNNING)
+            ) {
+              this.logger.log(
+                `Executing resilient in-process data cleaning for WorkflowRun ${savedRun.id}`,
+              );
+              await this.executeInProcessScan(savedRun.id);
+            }
+          } catch (err: unknown) {
+            const errText = err instanceof Error ? err.message : String(err);
+            this.logger.error(
+              `Error in fallback data cleaning worker: ${errText}`,
             );
-            await this.executeInProcessScan(savedRun.id);
           }
-        } catch (err: unknown) {
-          const errText = err instanceof Error ? err.message : String(err);
-          this.logger.error(
-            `Error in fallback data cleaning worker: ${errText}`,
-          );
-        }
-      })();
-    }, 20000).unref();
+        })();
+      }, 20000).unref();
+    }
 
     return {
       workflowRunId: savedRun.id,
@@ -158,7 +168,10 @@ export class DataCleaningService {
   /**
    * Retrieves scan status and findings report for a given WorkflowRun (UC10 - Step 11).
    */
-  async getScan(workflowRunId: string): Promise<Record<string, unknown>> {
+  async getScan(
+    workflowRunId: string,
+    user?: AuthenticatedUser,
+  ): Promise<Record<string, unknown>> {
     const workflowRun = await this.workflowRunRepository.findOne({
       where: { id: workflowRunId },
     });
@@ -166,6 +179,16 @@ export class DataCleaningService {
     if (!workflowRun) {
       throw new NotFoundException(
         `Data cleaning workflow run '${workflowRunId}' not found`,
+      );
+    }
+
+    if (
+      user &&
+      user.role !== UserRole.ADMIN &&
+      workflowRun.triggeredByUserId !== user.id
+    ) {
+      throw new ForbiddenException(
+        'You do not have permission to view this scan',
       );
     }
 
@@ -499,7 +522,10 @@ export class DataCleaningService {
     status: WorkflowStatus;
   }> {
     const workflowRun = await this.workflowRunRepository.findOne({
-      where: { id: dto.workflowRunId },
+      where: {
+        id: dto.workflowRunId,
+        workflowName: 'UC10_DATA_CLEANING',
+      },
     });
 
     if (!workflowRun) {
@@ -508,10 +534,37 @@ export class DataCleaningService {
       );
     }
 
-    const isSuccess = dto.status !== 'FAILED';
-    workflowRun.status = isSuccess
-      ? WorkflowStatus.SUCCESS
-      : WorkflowStatus.FAILED;
+    if (
+      workflowRun.workflowName !== 'UC10_DATA_CLEANING' ||
+      ![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(
+        workflowRun.status,
+      )
+    ) {
+      if (
+        workflowRun.workflowName === 'UC10_DATA_CLEANING' &&
+        [
+          WorkflowStatus.SUCCESS,
+          WorkflowStatus.PARTIAL,
+          WorkflowStatus.FAILED,
+        ].includes(workflowRun.status)
+      ) {
+        return {
+          success: true,
+          workflowRunId: workflowRun.id,
+          status: workflowRun.status,
+        };
+      }
+      throw new ConflictException(
+        'WorkflowRun is not an active data-cleaning run',
+      );
+    }
+
+    workflowRun.status =
+      dto.status === 'FAILED'
+        ? WorkflowStatus.FAILED
+        : dto.status === 'PARTIAL'
+          ? WorkflowStatus.PARTIAL
+          : WorkflowStatus.SUCCESS;
 
     const existingOutput =
       (workflowRun.outputPayload as unknown as ScanOutputPayload) || {};
@@ -546,14 +599,29 @@ export class DataCleaningService {
   async applyCleaning(
     workflowRunId: string,
     dto: ApplyCleaningDto,
-    userId?: string,
+    userOrUserId?: AuthenticatedUser | string,
   ): Promise<ApplyCleaningResult> {
+    const user =
+      typeof userOrUserId === 'object' && userOrUserId !== null
+        ? userOrUserId
+        : undefined;
+
     const workflowRun = await this.workflowRunRepository.findOne({
       where: { id: workflowRunId },
     });
 
     if (!workflowRun) {
       throw new NotFoundException(`Workflow run '${workflowRunId}' not found`);
+    }
+
+    if (
+      user &&
+      user.role !== UserRole.ADMIN &&
+      workflowRun.triggeredByUserId !== user.id
+    ) {
+      throw new ForbiddenException(
+        'You do not have permission to apply cleaning proposals for this scan',
+      );
     }
 
     if (workflowRun.status !== WorkflowStatus.SUCCESS) {
@@ -578,13 +646,31 @@ export class DataCleaningService {
     }
 
     const effectiveUserId =
-      userId || dto.userId || workflowRun.triggeredByUserId || null;
+      user?.id ||
+      (typeof userOrUserId === 'string' ? userOrUserId : null) ||
+      workflowRun.triggeredByUserId ||
+      null;
 
-    const previouslyAppliedIds: string[] = output.appliedFindingIds || [];
-    const newlyAppliedIds: string[] = [];
-
-    // Execute updates within an ACID transaction
+    // Execute updates within an ACID transaction with pessimistic lock to prevent lost updates
     const result = await this.dataSource.transaction(async (manager) => {
+      // Re-read WorkflowRun with pessimistic write lock to serialize concurrent apply requests
+      let targetWorkflowRun = workflowRun;
+      if (manager.queryRunner) {
+        const locked = await manager.findOne(WorkflowRun, {
+          where: { id: workflowRunId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (locked) {
+          targetWorkflowRun = locked;
+        }
+      }
+
+      const currentTargetOutput =
+        (targetWorkflowRun.outputPayload as unknown as ScanOutputPayload) || {};
+      const previouslyAppliedIds: string[] =
+        currentTargetOutput.appliedFindingIds || [];
+      const newlyAppliedIds: string[] = [];
+
       const results: AppliedFindingResult[] = [];
 
       // Group requested findings by leadId to minimize lock overhead
@@ -689,6 +775,7 @@ export class DataCleaningService {
           // 2. Concurrency re-validation: Check if field has been modified since scan
           const scannedVal = finding.currentValue;
 
+          // Normalize string comparison to tolerate trivial whitespace discrepancies and detect null -> value changes
           const currentLeadStr =
             typeof currentLeadVal === 'string'
               ? currentLeadVal
@@ -704,11 +791,12 @@ export class DataCleaningService {
                 ? String(scannedVal)
                 : '';
 
-          // Normalize string comparison to tolerate trivial whitespace discrepancies in current val
-          const isStale =
-            scannedVal !== null &&
-            scannedVal !== undefined &&
-            currentLeadStr.trim() !== scannedValStr.trim();
+          const normalizedCurrent =
+            currentLeadVal == null ? '' : currentLeadStr.trim();
+          const normalizedScanned =
+            scannedVal == null ? '' : scannedValStr.trim();
+
+          const isStale = normalizedCurrent !== normalizedScanned;
 
           if (isStale) {
             results.push({
@@ -796,7 +884,7 @@ export class DataCleaningService {
 
       // Update WorkflowRun metadata with applied summary
       const currentOutput =
-        (workflowRun.outputPayload as unknown as ScanOutputPayload) || {};
+        (targetWorkflowRun.outputPayload as unknown as ScanOutputPayload) || {};
       const existingAppliedStats: AppliedStatItem[] =
         currentOutput.appliedStats || [];
 
@@ -817,13 +905,13 @@ export class DataCleaningService {
         new Set([...previouslyAppliedIds, ...newlyAppliedIds]),
       );
 
-      workflowRun.outputPayload = {
+      targetWorkflowRun.outputPayload = {
         ...currentOutput,
         appliedFindingIds: mergedAppliedFindingIds,
         appliedStats: updatedAppliedStats,
       } as Record<string, any>;
 
-      await manager.save(workflowRun);
+      await manager.save(targetWorkflowRun);
 
       return {
         workflowRunId,
@@ -839,5 +927,111 @@ export class DataCleaningService {
     );
 
     return result;
+  }
+
+  /** Internal n8n context. Only UC10_DATA_CLEANING workflow runs are exposed. */
+  async getInternalScanContext(
+    workflowRunId: string,
+  ): Promise<Record<string, unknown>> {
+    const run = await this.workflowRunRepository.findOne({
+      where: { id: workflowRunId, workflowName: 'UC10_DATA_CLEANING' },
+    });
+    if (!run)
+      throw new NotFoundException('Data cleaning WorkflowRun not found');
+    const output = (run.outputPayload as unknown as ScanOutputPayload) || {};
+    const findings = output.findings ?? [];
+    return {
+      workflowRunId: run.id,
+      status: run.status,
+      triggeredByUserId: run.triggeredByUserId,
+      input: run.inputPayload,
+      summary: output.summary ?? null,
+      findingsCount: findings.length,
+      requiresHumanReview: findings.some(
+        (finding) => finding.requiresHumanApproval || !finding.safeToApply,
+      ),
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+    };
+  }
+
+  /** Ensure exactly one reviewer notification after the scan callback is persisted. */
+  async ensureScanReviewerNotification(
+    workflowRunId: string,
+    idempotencyKey: string,
+  ): Promise<Record<string, unknown>> {
+    if (idempotencyKey !== workflowRunId) {
+      throw new BadRequestException('Idempotency-Key must equal workflowRunId');
+    }
+    return this.dataSource.transaction(async (manager) => {
+      const runRepo = manager.getRepository(WorkflowRun);
+      const notificationRepo = manager.getRepository(Notification);
+      const run = await runRepo.findOne({
+        where: { id: workflowRunId, workflowName: 'UC10_DATA_CLEANING' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!run)
+        throw new NotFoundException('Data cleaning WorkflowRun not found');
+      if (
+        ![WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL].includes(run.status)
+      ) {
+        throw new ConflictException(
+          'Scan callback must complete before reviewer notification',
+        );
+      }
+      const output = (run.outputPayload as unknown as ScanOutputPayload) || {};
+      const findings = output.findings ?? [];
+      const reviewRequired = findings.some(
+        (finding) => finding.requiresHumanApproval || !finding.safeToApply,
+      );
+      if (!reviewRequired)
+        return {
+          workflowRunId,
+          reviewRequired: false,
+          notificationFound: false,
+        };
+      const recipientId = run.triggeredByUserId;
+      if (!recipientId) {
+        return {
+          workflowRunId,
+          reviewRequired: true,
+          notificationFound: false,
+          reason: 'WorkflowRun has no requesting user',
+        };
+      }
+      const key = `wf08:${workflowRunId}:${recipientId}`;
+      let notification = await notificationRepo.findOne({
+        where: { idempotencyKey: key },
+      });
+      const reused = Boolean(notification);
+      if (!notification) {
+        notification = await notificationRepo.save(
+          notificationRepo.create({
+            userId: recipientId,
+            type: NotificationType.HUMAN_REVIEW_REQUIRED,
+            title: 'Data cleaning scan requires review',
+            content: `Data cleaning scan ${workflowRunId} contains findings requiring human review.`,
+            leadId: null,
+            customerId: null,
+            reviewTaskId: null,
+            isRead: false,
+            readAt: null,
+            idempotencyKey: key,
+          }),
+        );
+      }
+      run.outputPayload = {
+        ...(run.outputPayload ?? {}),
+        reviewNotificationId: notification.id,
+      };
+      await runRepo.save(run);
+      return {
+        workflowRunId,
+        reviewRequired: true,
+        notificationFound: true,
+        notificationId: notification.id,
+        reused,
+      };
+    });
   }
 }

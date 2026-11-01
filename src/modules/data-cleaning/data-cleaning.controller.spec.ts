@@ -28,7 +28,7 @@ describe('DataCleaningController', () => {
   });
 
   describe('createScan', () => {
-    it('should call service.createScan with dto', async () => {
+    it('should call service.createScan with dto and userId', async () => {
       const dto: CreateScanDto = { scope: 'ALL' };
       const expectedResponse = {
         workflowRunId: 'wf-123',
@@ -38,13 +38,13 @@ describe('DataCleaningController', () => {
       (service.createScan as jest.Mock).mockResolvedValueOnce(expectedResponse);
 
       const res = await controller.createScan(dto);
-      expect(service.createScan).toHaveBeenCalledWith(dto);
+      expect(service.createScan).toHaveBeenCalledWith(dto, undefined);
       expect(res).toBe(expectedResponse);
     });
   });
 
   describe('getScan', () => {
-    it('should call service.getScan with workflowRunId', async () => {
+    it('should call service.getScan with workflowRunId and user', async () => {
       const expectedResponse = {
         workflowRunId: 'wf-123',
         status: WorkflowStatus.SUCCESS,
@@ -53,7 +53,7 @@ describe('DataCleaningController', () => {
       (service.getScan as jest.Mock).mockResolvedValueOnce(expectedResponse);
 
       const res = await controller.getScan('wf-123');
-      expect(service.getScan).toHaveBeenCalledWith('wf-123');
+      expect(service.getScan).toHaveBeenCalledWith('wf-123', undefined);
       expect(res).toBe(expectedResponse);
     });
   });
@@ -106,7 +106,7 @@ describe('DataCleaningController', () => {
   });
 
   describe('applyCleaning', () => {
-    it('should call service.applyCleaning with workflowRunId, dto, and userId from user', async () => {
+    it('should call service.applyCleaning with workflowRunId, dto, and user context', async () => {
       const dto: ApplyCleaningDto = {
         acceptedFindingIds: ['f-1', 'f-2'],
       };
@@ -135,7 +135,7 @@ describe('DataCleaningController', () => {
       expect(service.applyCleaning).toHaveBeenCalledWith(
         'wf-123',
         dto,
-        'user-jwt-123',
+        mockUser,
       );
       expect(res).toBe(expectedResponse);
     });
@@ -167,6 +167,24 @@ describe('DataCleaningController', () => {
 
   describe('Authorization and Guard Metadata', () => {
     /* eslint-disable @typescript-eslint/unbound-method */
+    it('should protect createScan endpoint with JwtAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        DataCleaningController.prototype.createScan,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtAuthGuard);
+    });
+
+    it('should protect getScan endpoint with JwtAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        DataCleaningController.prototype.getScan,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtAuthGuard);
+    });
+
     it('should protect applyCleaning endpoint with JwtAuthGuard metadata', () => {
       const guards = Reflect.getMetadata(
         '__guards__',
