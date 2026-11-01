@@ -1,70 +1,85 @@
 {
-  "name": "UC02 - AI Lead Qualification Engine (Enterprise Edition)",
+  "name": "T12-WF01 - AI CRM Lead Qualification Agent",
   "nodes": [
     {
       "parameters": {
-        "content": "## 📥 1. EVENT INGESTION & ROUTING\nLắng nghe hàng đợi RabbitMQ, chuẩn hóa payload (hỗ trợ buffer, string, json) và phân loại sự kiện.",
-        "height": 480,
-        "width": 620,
+        "content": "## 1. RabbitMQ Ingestion & Validation\nDedicated queue receives qualification requests only.",
+        "height": 270,
+        "width": 520,
         "color": 4
       },
-      "id": "sticky_ingestion",
-      "name": "Sticky Note 1",
+      "id": "b404b494-b8c1-450a-b601-8dd2bf070b10",
+      "name": "Sticky 1 - Ingestion",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [60, 120]
+      "position": [
+        60,
+        100
+      ]
     },
     {
       "parameters": {
-        "content": "## 🧠 2. DATA ENRICHMENT & GEMINI 1.5 PRO\nLấy thông tin Lead từ NestJS API và gọi Google Gemini 1.5 Pro phân tích theo chuẩn B2B ICP & BANT.",
-        "height": 300,
-        "width": 680,
+        "content": "## 2. Authoritative CRM Context\nRead Lead and recent interactions from NestJS using workflow-run scope.",
+        "height": 270,
+        "width": 620,
         "color": 6
       },
-      "id": "sticky_ai",
-      "name": "Sticky Note 2",
+      "id": "02e21726-1e84-4ac3-bf45-59fb0bd70455",
+      "name": "Sticky 2 - Context",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [720, 120]
+      "position": [
+        620,
+        100
+      ]
     },
     {
       "parameters": {
-        "content": "## ⚖️ 3. BUSINESS RULES & CRM SYNC\nÁp dụng quy tắc Confidence >= 0.80 tự động duyệt, < 0.80 tạo Review Task; đồng bộ callback về Backend.",
-        "height": 300,
-        "width": 660,
+        "content": "## 3. Gemini Qualification & Confidence Policy\nStructured output only. Confidence <= 0.80 requires human review.",
+        "height": 270,
+        "width": 700,
         "color": 2
       },
-      "id": "sticky_decision",
-      "name": "Sticky Note 3",
+      "id": "8d29a75a-8ba2-4685-8398-84515ea8ab91",
+      "name": "Sticky 3 - AI & Policy",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [1440, 120]
+      "position": [
+        1280,
+        100
+      ]
     },
     {
       "parameters": {
-        "content": "## 🛡️ 4. AUDIT & EXCEPTION GUARD\nChủ động ghi log sự kiện không thuộc diện thẩm định AI mà không làm gián đoạn hàng đợi hay tốn chi phí token.",
-        "height": 220,
-        "width": 560,
+        "content": "## 4. Callback & Review Receipt\nNestJS owns persistence, ReviewTask and Notification lifecycle.",
+        "height": 270,
+        "width": 540,
         "color": 5
       },
-      "id": "sticky_guard",
-      "name": "Sticky Note 4",
+      "id": "fb131bec-c7b7-4d4b-9a59-f60498c5e89f",
+      "name": "Sticky 4 - Callback",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [720, 440]
+      "position": [
+        2020,
+        100
+      ]
     },
     {
       "parameters": {
-        "queue": "crm_events_queue",
+        "queue": "n8n.lead-qualification.q",
         "options": {
           "arguments": {}
         }
       },
-      "id": "1",
-      "name": "📥 RabbitMQ Ingestion",
+      "id": "ab883a4d-175e-474a-a237-88d4fea9e44e",
+      "name": "RabbitMQ Trigger",
       "type": "n8n-nodes-base.rabbitmqTrigger",
       "typeVersion": 1,
-      "position": [100, 320],
+      "position": [
+        100,
+        430
+      ],
       "credentials": {
         "rabbitmq": {
           "id": "GKnNmUH7wKGKSgzi",
@@ -74,91 +89,105 @@
     },
     {
       "parameters": {
-        "jsCode": "// Robust Payload Normalizer: handles buffer, raw string, or parsed JSON\nconst raw = $input.first().json;\nlet payload = {};\n\nif (raw.content) {\n  if (typeof raw.content === 'string') {\n    try {\n      payload = JSON.parse(raw.content);\n    } catch (e) {\n      payload = { text: raw.content };\n    }\n  } else if (typeof raw.content === 'object') {\n    payload = raw.content;\n  }\n} else {\n  payload = raw;\n}\n\n// If payload is serialized Node.js Buffer: { type: 'Buffer', data: [...] }\nif (payload && payload.type === 'Buffer' && Array.isArray(payload.data)) {\n  try {\n    payload = JSON.parse(Buffer.from(payload.data).toString('utf8'));\n  } catch (e) {}\n}\n\nconst eventType = payload.eventType || raw.eventType || raw.fields?.routingKey || 'unknown';\nconst data = payload.data || payload;\nconst leadId = data.leadId || payload.leadId || null;\nconst workflowRunId = data.workflowRunId || payload.workflowRunId || null;\n\n// Qualification is targeted when eventType matches or leadId is explicitly provided\nconst isQualificationEvent = eventType === 'lead.qualification.requested' || (!payload.eventType && !!leadId);\nconst isValid = !!leadId && isQualificationEvent;\n\nreturn [{\n  json: {\n    eventId: payload.eventId || 'evt-' + Date.now(),\n    eventType,\n    leadId,\n    workflowRunId,\n    isQualificationEvent,\n    isValid,\n    routingStatus: isValid ? 'ROUTE_TO_AI' : 'SKIP_NON_QUALIFICATION',\n    receivedAt: new Date().toISOString(),\n    rawPayload: payload\n  }\n}];"
+        "mode": "runOnceForAllItems",
+        "jsCode": "const raw = $input.first().json || {};\nlet envelope = raw;\nif (raw.content !== undefined) {\n  if (typeof raw.content === 'string') envelope = JSON.parse(raw.content);\n  else if (raw.content && raw.content.type === 'Buffer' && Array.isArray(raw.content.data)) envelope = JSON.parse(Buffer.from(raw.content.data).toString('utf8'));\n  else if (raw.content && typeof raw.content === 'object') envelope = raw.content;\n}\nconst data = envelope.data || {};\nconst eventType = envelope.eventType || raw.fields?.routingKey;\nconst uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\nif (eventType !== 'lead.qualification.requested') throw new Error('Unexpected eventType: ' + String(eventType));\nif (envelope.version !== 1) throw new Error('Unsupported qualification event version');\nif (!uuid.test(String(envelope.eventId || ''))) throw new Error('eventId must be UUID');\nif (!uuid.test(String(data.leadId || ''))) throw new Error('data.leadId must be UUID');\nif (!uuid.test(String(data.workflowRunId || ''))) throw new Error('data.workflowRunId must be UUID');\nreturn [{json:{eventId:envelope.eventId,eventType,version:envelope.version,occurredAt:envelope.occurredAt,leadId:data.leadId,workflowRunId:data.workflowRunId,receivedAt:new Date().toISOString()}}];"
       },
-      "id": "2",
-      "name": "⚙️ Normalize Event Payload",
+      "id": "4903732a-9d51-4c47-903a-e15fbbc77683",
+      "name": "Code: Validate Event",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [300, 320]
+      "position": [
+        320,
+        430
+      ]
     },
     {
       "parameters": {
-        "conditions": {
-          "boolean": [
+        "method": "GET",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/leads/' + $json.leadId + '?workflowRunId=' + $json.workflowRunId }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
             {
-              "value1": "={{ $json.isValid }}",
-              "value2": true
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         }
       },
-      "id": "3",
-      "name": "⚖️ Is Qualification Request?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [500, 320]
+      "id": "53dd5908-e97d-497d-9e07-3de07ae72434",
+      "name": "HTTP Request: Get Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        560,
+        350
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/leads/' + $json.leadId }}",
         "method": "GET",
-        "options": {}
-      },
-      "id": "4",
-      "name": "🔍 Fetch Lead Profile",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [760, 240]
-    },
-    {
-      "parameters": {
-        "jsCode": "const lead = $input.first().json;\nconst meta = $('⚙️ Normalize Event Payload').first().json;\n\nconst prompt = `\nYou are an enterprise B2B Lead Qualification AI Assistant for a CRM Automation platform.\nEvaluate the following incoming lead using B2B ICP (Ideal Customer Profile) and BANT framework:\n\nContact: ${lead.firstName} ${lead.lastName || ''}\nEmail: ${lead.email}\nPhone: ${lead.phone || 'N/A'}\nCompany: ${lead.companyName || 'Not specified'}\nWebsite: ${lead.companyWebsite || 'Not specified'}\nJob Title: ${lead.jobTitle || 'Not specified'}\nIndustry: ${lead.industry || 'Not specified'}\nCompany Size: ${lead.companySize || 'Not specified'}\nNotes: ${lead.notes || 'None'}\n\nEvaluation Rules:\n1. Qualification Status must be one of: \"QUALIFIED\", \"DISQUALIFIED\", \"NEEDS_REVIEW\".\n2. Confidence score must be a number between 0.00 and 1.00.\n3. If decision maker level (Director, Manager, C-level) and company size > 10, confidence >= 0.85.\n4. If personal email (gmail/yahoo) or missing company, confidence should be lower and set reviewRequired to true.\n\nRespond ONLY in this exact JSON schema:\n{\n  \"qualification\": \"QUALIFIED\" | \"DISQUALIFIED\" | \"NEEDS_REVIEW\",\n  \"confidence\": 0.90,\n  \"intent\": \"Brief summary of customer purchase intent\",\n  \"reason\": \"Detailed rationale behind this evaluation\",\n  \"nextAction\": \"Actionable recommended sales step\",\n  \"reviewRequired\": false\n}\n`;\n\nreturn [{\n  json: {\n    leadId: lead.id,\n    workflowRunId: meta.workflowRunId,\n    leadProfile: lead,\n    prompt\n  }\n}];"
-      },
-      "id": "5",
-      "name": "🧠 Synthesize B2B Prompt",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [980, 240]
-    },
-    {
-      "parameters": {
-        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-1.5-pro') + ':generateContent?key=' + $env.GEMINI_API_KEY }}",
-        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/leads/' + $node['Code: Validate Event'].json.leadId + '/interactions?workflowRunId=' + $node['Code: Validate Event'].json.workflowRunId + '&limit=20' }}",
+        "options": {
+          "timeout": 15000
+        },
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
-              "name": "Content-Type",
+              "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": {{ JSON.stringify($json.prompt) }}\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.2,\n    \"responseMimeType\": \"application/json\"\n  }\n}"
+        }
       },
-      "onError": "continueRegularOutput",
-      "id": "6",
-      "name": "🤖 Gemini 1.5 Pro AI",
+      "id": "d0b10821-2436-4933-9661-3826d5177448",
+      "name": "HTTP Request: Get Interaction Context",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1200, 240]
+      "position": [
+        800,
+        350
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json;\nconst prep = $('🧠 Synthesize B2B Prompt').first().json;\n\nlet aiOutput;\ntry {\n  const content = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (!content) throw new Error('No candidate response');\n  aiOutput = JSON.parse(content);\n} catch (err) {\n  const profile = prep.leadProfile || {};\n  const isBusiness = profile.email && !profile.email.includes('@gmail.com') && !profile.email.includes('@yahoo.com');\n  const hasCompany = Boolean(profile.companyName && profile.companyName !== 'Not specified');\n  if (isBusiness && hasCompany) {\n    aiOutput = {\n      qualification: 'QUALIFIED',\n      confidence: 0.88,\n      intent: 'B2B CRM Consultation & Automation Solution',\n      reason: `Lead is verified with enterprise corporate domain and active business entity (${profile.companyName}).`,\n      nextAction: 'Schedule technical discovery demo',\n      reviewRequired: false\n    };\n  } else {\n    aiOutput = {\n      qualification: 'NEEDS_REVIEW',\n      confidence: 0.65,\n      intent: 'Inbound Exploration Consultation',\n      reason: 'Lead profile requires human review (personal email domain or unverified firmographics).',\n      nextAction: 'Assign sales rep for manual review',\n      reviewRequired: true\n    };\n  }\n}\n\nconst confidence = typeof aiOutput.confidence === 'number' ? aiOutput.confidence : 0.65;\nconst reviewRequired = confidence < 0.80 || aiOutput.qualification === 'NEEDS_REVIEW' || aiOutput.reviewRequired === true;\n\nreturn [{\n  json: {\n    leadId: prep.leadId,\n    workflowRunId: prep.workflowRunId,\n    status: aiOutput.qualification || 'NEEDS_REVIEW',\n    intent: aiOutput.intent || 'B2B CRM Consultation',\n    confidence: Math.min(1, Math.max(0, confidence)),\n    reason: aiOutput.reason || 'AI automated assessment',\n    nextAction: aiOutput.nextAction || 'Contact prospect',\n    reviewRequired,\n    modelProvider: 'google',\n    modelName: $env.GEMINI_MODEL || 'gemini-1.5-pro',\n    modelVersion: 'v1beta',\n    inputSnapshot: prep.leadProfile,\n    outputSnapshot: aiOutput,\n    evaluatedAt: new Date().toISOString()\n  }\n}];"
+        "mode": "runOnceForAllItems",
+        "jsCode": "const event = $node['Code: Validate Event'].json;\nconst leadResponse = $node['HTTP Request: Get Lead'].json;\nconst interactionResponse = $node['HTTP Request: Get Interaction Context'].json;\nconst lead = leadResponse.data || leadResponse;\nconst interactions = interactionResponse.items || interactionResponse.data?.items || [];\nif (!lead.id || lead.id !== event.leadId) throw new Error('Lead response does not match requested leadId');\nconst compactLead = {\n  id: lead.id, firstName: lead.firstName || null, lastName: lead.lastName || null,\n  email: lead.email || null, phone: lead.phone || null, companyName: lead.companyName || null,\n  companyWebsite: lead.companyWebsite || null, jobTitle: lead.jobTitle || null,\n  companySize: lead.companySize ?? null, industry: lead.industry || null,\n  status: lead.status || null, notes: lead.notes || null\n};\nconst compactInteractions = interactions.slice(0,20).map(x=>({id:x.id,type:x.type,channel:x.channel,subject:x.subject,content:typeof x.content==='string'?x.content.slice(0,2000):null,occurredAt:x.occurredAt}));\nconst context = {lead:compactLead,interactions:compactInteractions};\nconst prompt = `You are a B2B lead qualification analyst. Use only supplied evidence; never invent facts.\\nReturn JSON only with: status (QUALIFIED|DISQUALIFIED|NEEDS_REVIEW), confidence (0..1), intent (<=100 chars), reason, nextAction, reviewRequired (boolean).\\nUse NEEDS_REVIEW when evidence is insufficient or contradictory. Do not calculate HOT/WARM/COLD lead score.\\nLEAD_CONTEXT:\\n${JSON.stringify(context)}`;\nreturn [{json:{...event,leadId:lead.id,context,prompt}}];"
       },
-      "id": "7",
-      "name": "📊 Evaluate Confidence Gate",
+      "id": "41a3502c-40a7-4907-bcaf-19ad68f9bbda",
+      "name": "Code: Normalize Qualification Input",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1480, 240]
+      "position": [
+        1040,
+        350
+      ]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/lead-intelligence/qualification/callback' }}",
         "method": "POST",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-1.5-pro') + ':generateContent' }}",
+        "options": {
+          "timeout": 45000
+        },
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -167,137 +196,310 @@
               "value": "application/json"
             },
             {
-              "name": "x-n8n-api-key",
-              "value": "={{ $env.N8N_API_KEY || $env.N8N_WEBHOOK_SECRET }}"
-            },
-            {
-              "name": "Authorization",
-              "value": "={{ 'Bearer ' + ($env.N8N_API_KEY || $env.N8N_WEBHOOK_SECRET) }}"
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json) }}",
-        "options": {}
+        "jsonBody": "={{ { contents: [{ role: 'user', parts: [{ text: $node[\"Code: Normalize Qualification Input\"].json.prompt }] }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } } }}"
       },
-      "id": "8",
-      "name": "🚀 Callback NestJS API",
+      "id": "05f7baed-167e-42ad-891a-dc4db517d638",
+      "name": "HTTP Request: Gemini Qualification",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1720, 240]
+      "position": [
+        1280,
+        350
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "GEMINI_API_KEY is read from n8n environment. Do not embed credentials in workflow JSON.",
+      "notesInFlow": true
     },
     {
       "parameters": {
-        "jsCode": "const callbackRes = $input.first().json;\nconst decision = $('📊 Evaluate Confidence Gate').first().json;\n\nreturn [{\n  json: {\n    auditStatus: 'QUALIFICATION_SUCCESS',\n    leadId: decision.leadId,\n    assignedStatus: decision.status,\n    confidenceScore: decision.confidence,\n    requiresHumanReview: decision.reviewRequired,\n    model: decision.modelName,\n    completedAt: new Date().toISOString(),\n    backendResponse: callbackRes\n  }\n}];"
+        "mode": "runOnceForAllItems",
+        "jsCode": "const response = $input.first().json || {};\nconst prep = $node['Code: Normalize Qualification Input'].json;\nconst text = response.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('') || '';\nif (!text) throw new Error('Gemini returned no candidate text');\nconst cleaned = text.replace(/^```(?:json)?\\s*/i,'').replace(/\\s*```$/,'').trim();\nlet result; try { result = JSON.parse(cleaned); } catch { throw new Error('Gemini output is not valid JSON'); }\nconst allowed = ['QUALIFIED','DISQUALIFIED','NEEDS_REVIEW'];\nif (!allowed.includes(result.status)) throw new Error('Invalid qualification status');\nif (typeof result.confidence !== 'number' || !Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1) throw new Error('Invalid confidence; expected number 0..1');\nif (typeof result.reason !== 'string' || !result.reason.trim()) throw new Error('Qualification reason is required');\nif (typeof result.reviewRequired !== 'boolean') throw new Error('reviewRequired must be boolean');\nreturn [{json:{...prep,aiResult:{status:result.status,confidence:result.confidence,intent:String(result.intent||'').slice(0,100),reason:result.reason,nextAction:String(result.nextAction||'Manual review').slice(0,500),reviewRequired:result.reviewRequired}}}];"
       },
-      "id": "9",
-      "name": "✅ Audit: Succeeded",
+      "id": "2d3925b3-0549-4b59-bc7d-de8b125e988c",
+      "name": "Code: Parse Structured Output",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1940, 240]
+      "position": [
+        1520,
+        350
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const meta = $('⚙️ Normalize Event Payload').first().json;\n\nreturn [{\n  json: {\n    auditStatus: 'EVENT_SKIPPED_SAFELY',\n    eventId: meta.eventId,\n    receivedEventType: meta.eventType,\n    leadId: meta.leadId || 'N/A',\n    reason: meta.leadId ? `Event type '${meta.eventType}' does not trigger AI Qualification (targeted only for 'lead.qualification.requested')` : 'Payload missing leadId identifier.',\n    actionTaken: 'Safely acknowledged and dropped without consuming LLM API tokens',\n    loggedAt: new Date().toISOString()\n  }\n}];"
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p = $input.first().json;\nconst a = p.aiResult;\nconst reviewRequired = a.reviewRequired || a.status === 'NEEDS_REVIEW' || a.confidence <= 0.80;\nconst status = reviewRequired && a.status === 'QUALIFIED' ? 'NEEDS_REVIEW' : a.status;\nconst callbackPayload = {\n  leadId:p.leadId, workflowRunId:p.workflowRunId, status,\n  intent:a.intent, confidence:a.confidence, reason:a.reason, nextAction:a.nextAction,\n  reviewRequired, modelProvider:'google', modelName:$env.GEMINI_MODEL||'gemini-1.5-pro',\n  modelVersion:'v1beta', inputSnapshot:p.context, outputSnapshot:a, evaluatedAt:new Date().toISOString()\n};\nreturn [{json:{...p,status,reviewRequired,callbackPayload}}];"
       },
-      "id": "10",
-      "name": "📋 Audit: Event Skipped",
+      "id": "daa0aee1-3967-4e47-a25e-91a5ae35893e",
+      "name": "Code: Apply Confidence Policy",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [760, 520]
+      "position": [
+        1760,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/lead-qualification/callback' }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $node['Code: Apply Confidence Policy'].json.workflowRunId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $node['Code: Apply Confidence Policy'].json.callbackPayload }}"
+      },
+      "id": "dafc12ec-de29-4a28-bc51-41a815fa8e8c",
+      "name": "HTTP Request: Qualification Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2000,
+        350
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "552caa1b-6be1-42a3-8eac-419fd6d9c31f",
+              "leftValue": "={ $json.reviewRequired }",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "51bd781a-a7d1-43af-8a90-fcd07a8eb883",
+      "name": "IF: Review Required",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2240,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/lead-qualification/notify-reviewer' }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "X-Idempotency-Key",
+              "value": "={{ $node['Code: Apply Confidence Policy'].json.workflowRunId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { eventId: $node['Code: Validate Event'].json.eventId, leadId: $node['Code: Apply Confidence Policy'].json.leadId, workflowRunId: $node['Code: Apply Confidence Policy'].json.workflowRunId, reviewTaskId: $json.reviewTaskId, qualificationId: $json.qualification?.id } }}"
+      },
+      "id": "1c6c5376-9e79-4252-afd5-dfd210ba8e2d",
+      "name": "HTTP Request: Notify Reviewer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2480,
+        270
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Read-only receipt endpoint. Callback owns ReviewTask/Notification creation; this node must not create a duplicate.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const policy = $node['Code: Apply Confidence Policy'].json;\nconst callback = $node['HTTP Request: Qualification Callback'].json;\nlet receipt = null; try { receipt = $node['HTTP Request: Notify Reviewer'].json; } catch {}\nreturn [{json:{workflow:'T12-WF01',status:'COMPLETED',eventId:policy.eventId,workflowRunId:policy.workflowRunId,leadId:policy.leadId,qualificationStatus:policy.status,confidence:policy.callbackPayload.confidence,reviewRequired:policy.reviewRequired,reviewTaskId:callback.reviewTaskId||null,notificationFound:receipt?.notificationFound??null,completedAt:new Date().toISOString()}}];"
+      },
+      "id": "0bbce6ac-551a-43a9-a462-83b8ab24deba",
+      "name": "Code: Build Final Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        350
+      ]
     }
   ],
   "connections": {
-    "📥 RabbitMQ Ingestion": {
+    "RabbitMQ Trigger": {
       "main": [
         [
           {
-            "node": "⚙️ Normalize Event Payload",
+            "node": "Code: Validate Event",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "⚙️ Normalize Event Payload": {
+    "Code: Validate Event": {
       "main": [
         [
           {
-            "node": "⚖️ Is Qualification Request?",
+            "node": "HTTP Request: Get Lead",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "⚖️ Is Qualification Request?": {
+    "HTTP Request: Get Lead": {
       "main": [
         [
           {
-            "node": "🔍 Fetch Lead Profile",
+            "node": "HTTP Request: Get Interaction Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get Interaction Context": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalize Qualification Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize Qualification Input": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Gemini Qualification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Gemini Qualification": {
+      "main": [
+        [
+          {
+            "node": "Code: Parse Structured Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Parse Structured Output": {
+      "main": [
+        [
+          {
+            "node": "Code: Apply Confidence Policy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Apply Confidence Policy": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Qualification Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Qualification Callback": {
+      "main": [
+        [
+          {
+            "node": "IF: Review Required",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Review Required": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Notify Reviewer",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "📋 Audit: Event Skipped",
+            "node": "Code: Build Final Result",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "🔍 Fetch Lead Profile": {
+    "HTTP Request: Notify Reviewer": {
       "main": [
         [
           {
-            "node": "🧠 Synthesize B2B Prompt",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "🧠 Synthesize B2B Prompt": {
-      "main": [
-        [
-          {
-            "node": "🤖 Gemini 1.5 Pro AI",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "🤖 Gemini 1.5 Pro AI": {
-      "main": [
-        [
-          {
-            "node": "📊 Evaluate Confidence Gate",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "📊 Evaluate Confidence Gate": {
-      "main": [
-        [
-          {
-            "node": "🚀 Callback NestJS API",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "🚀 Callback NestJS API": {
-      "main": [
-        [
-          {
-            "node": "✅ Audit: Succeeded",
+            "node": "Code: Build Final Result",
             "type": "main",
             "index": 0
           }
@@ -306,6 +508,15 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
-  }
+    "executionOrder": "v1",
+    "saveExecutionProgress": true
+  },
+  "staticData": null,
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [],
+  "description": "Owner: Tuấn Anh. Related Use Case: UC02. Exactly 12 functional nodes; Sticky Notes excluded. Backend persistence and ReviewTask lifecycle remain NestJS-owned."
 }

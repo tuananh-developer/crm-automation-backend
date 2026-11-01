@@ -43,21 +43,28 @@
       "arguments": {}
     },
     {
-      "name": "lead.enrichment.queue",
+      "name": "n8n.lead-qualification.q",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
       "arguments": {}
     },
     {
-      "name": "lead.scoring.queue",
+      "name": "n8n.lead-enrichment.q",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
       "arguments": {}
     },
     {
-      "name": "data.cleaning.queue",
+      "name": "n8n.lead-scoring.q",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "n8n.data-cleaning.q",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
@@ -68,15 +75,15 @@
     {
       "source": "crm.events",
       "vhost": "/",
-      "destination": "crm_events_queue",
+      "destination": "n8n.lead-qualification.q",
       "destination_type": "queue",
-      "routing_key": "lead.*",
+      "routing_key": "lead.qualification.requested",
       "arguments": {}
     },
     {
       "source": "crm.events",
       "vhost": "/",
-      "destination": "lead.enrichment.queue",
+      "destination": "n8n.lead-enrichment.q",
       "destination_type": "queue",
       "routing_key": "lead.enrichment.requested",
       "arguments": {}
@@ -84,7 +91,7 @@
     {
       "source": "crm.events",
       "vhost": "/",
-      "destination": "lead.scoring.queue",
+      "destination": "n8n.lead-scoring.q",
       "destination_type": "queue",
       "routing_key": "lead.scoring.requested",
       "arguments": {}
@@ -92,7 +99,7 @@
     {
       "source": "crm.events",
       "vhost": "/",
-      "destination": "data.cleaning.queue",
+      "destination": "n8n.data-cleaning.q",
       "destination_type": "queue",
       "routing_key": "data.cleaning.requested",
       "arguments": {}

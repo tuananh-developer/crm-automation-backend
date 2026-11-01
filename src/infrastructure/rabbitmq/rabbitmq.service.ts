@@ -14,8 +14,11 @@ import { randomUUID } from 'node:crypto';
 import {
   CRM_EVENTS,
   CRM_EXCHANGE,
-  DEFAULT_CRM_QUEUE,
   DATA_CLEANING_QUEUE,
+  ENRICHMENT_QUEUE,
+  LEGACY_CRM_QUEUE,
+  QUALIFICATION_QUEUE,
+  SCORING_QUEUE,
 } from './rabbitmq.constants.js';
 import type {
   CrmEvent,
@@ -37,9 +40,6 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     const url = this.getRabbitmqUrl();
-    const queueName =
-      this.configService.get<string>('RABBITMQ_QUEUE') || DEFAULT_CRM_QUEUE;
-
     try {
       this.connection = amqp.connect([url]);
 
@@ -57,46 +57,7 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
 
       this.channelWrapper = this.connection.createChannel({
         json: true,
-        setup: async (channel: ConfirmChannel) => {
-          await channel.assertExchange(CRM_EXCHANGE, 'topic', {
-            durable: true,
-          });
-          await channel.assertQueue(queueName, { durable: true });
-          await channel.bindQueue(queueName, CRM_EXCHANGE, 'lead.#');
-          await channel.bindQueue(
-            queueName,
-            CRM_EXCHANGE,
-            CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED,
-          );
-
-          // Assert dedicated queue for AI Lead Enrichment (UC03)
-          await channel.assertQueue('lead.enrichment.queue', { durable: true });
-          await channel.bindQueue(
-            'lead.enrichment.queue',
-            CRM_EXCHANGE,
-            CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
-          );
-
-          // Assert dedicated queue for AI Lead Scoring (UC04)
-          await channel.assertQueue('lead.scoring.queue', { durable: true });
-          await channel.bindQueue(
-            'lead.scoring.queue',
-            CRM_EXCHANGE,
-            CRM_EVENTS.LEAD_SCORING_REQUESTED,
-          );
-
-          // Assert dedicated queue for AI CRM Data Cleaning (UC10)
-          await channel.assertQueue(DATA_CLEANING_QUEUE, { durable: true });
-          await channel.bindQueue(
-            DATA_CLEANING_QUEUE,
-            CRM_EXCHANGE,
-            CRM_EVENTS.DATA_CLEANING_REQUESTED,
-          );
-
-          this.logger.log(
-            `Exchange '${CRM_EXCHANGE}', default queue '${queueName}', 'lead.enrichment.queue', 'lead.scoring.queue', and '${DATA_CLEANING_QUEUE}' asserted and bound`,
-          );
-        },
+        setup: (channel: ConfirmChannel) => this.setupChannel(channel),
       });
 
       if (this.channelWrapper) {
@@ -108,6 +69,37 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
         `Failed to establish initial RabbitMQ connection: ${msg}. Event publishing will run in resilient fallback mode.`,
       );
     }
+  }
+
+  private async setupChannel(channel: ConfirmChannel): Promise<void> {
+    await channel.assertExchange(CRM_EXCHANGE, 'topic', { durable: true });
+
+    const consumers = [
+      [QUALIFICATION_QUEUE, CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED],
+      [ENRICHMENT_QUEUE, CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED],
+      [SCORING_QUEUE, CRM_EVENTS.LEAD_SCORING_REQUESTED],
+      [DATA_CLEANING_QUEUE, CRM_EVENTS.DATA_CLEANING_REQUESTED],
+    ] as const;
+
+    for (const [queue, routingKey] of consumers) {
+      await channel.assertQueue(queue, { durable: true });
+      await channel.bindQueue(queue, CRM_EXCHANGE, routingKey);
+    }
+
+    // Keep the old durable queue so existing messages are preserved, but stop
+    // routing new events into its former broad consumer binding.
+    await channel.assertQueue(LEGACY_CRM_QUEUE, { durable: true });
+    await channel.unbindQueue(LEGACY_CRM_QUEUE, CRM_EXCHANGE, 'lead.#');
+    await channel.unbindQueue(LEGACY_CRM_QUEUE, CRM_EXCHANGE, 'lead.*');
+    await channel.unbindQueue(
+      LEGACY_CRM_QUEUE,
+      CRM_EXCHANGE,
+      CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED,
+    );
+
+    this.logger.log(
+      `Exchange '${CRM_EXCHANGE}' and dedicated workflow queues asserted and bound`,
+    );
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -180,10 +172,16 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.error(`Failed to publish event '${eventType}': ${msg}`);
+        throw new Error(`Failed to publish event '${eventType}': ${msg}`, {
+          cause: err,
+        });
       }
     } else {
       this.logger.warn(
         `RabbitMQ channel not ready. Event '${eventType}' could not be sent to broker.`,
+      );
+      throw new Error(
+        `RabbitMQ channel not ready; event '${eventType}' was not published.`,
       );
     }
 

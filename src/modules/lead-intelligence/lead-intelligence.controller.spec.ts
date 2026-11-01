@@ -4,10 +4,23 @@ import { QualificationStatus } from './enums/lead-intelligence.enum.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
 import type { LeadQualification } from './entities/lead-qualification.entity.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('LeadIntelligenceController', () => {
   let controller: LeadIntelligenceController;
   let service: jest.Mocked<Partial<LeadIntelligenceService>>;
+  const actor: AuthenticatedUser = {
+    id: 'user-owner-123',
+    name: 'Sales Rep',
+    email: 'sales@example.test',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 
   const mockQualification: LeadQualification = {
     id: 'qual-123',
@@ -85,11 +98,16 @@ describe('LeadIntelligenceController', () => {
   });
 
   it('should trigger qualification via service', async () => {
-    const result = await controller.triggerQualification('lead-123');
+    const result = await controller.triggerQualification(
+      'lead-123',
+      undefined,
+      actor,
+    );
 
     expect(service.triggerQualification).toHaveBeenCalledWith(
       'lead-123',
       undefined,
+      actor,
     );
     expect(result.workflowRunId).toBe('wf-run-123');
   });
@@ -97,6 +115,7 @@ describe('LeadIntelligenceController', () => {
   it('should handle callback via service', async () => {
     const dto = {
       leadId: 'lead-123',
+      workflowRunId: 'wf-run-123',
       status: QualificationStatus.QUALIFIED,
       confidence: 0.92,
     };
@@ -108,16 +127,22 @@ describe('LeadIntelligenceController', () => {
   });
 
   it('should get all qualifications for a lead', async () => {
-    const result = await controller.getQualifications('lead-123');
+    const result = await controller.getQualifications('lead-123', actor);
 
-    expect(service.getQualificationsByLead).toHaveBeenCalledWith('lead-123');
+    expect(service.getQualificationsByLead).toHaveBeenCalledWith(
+      'lead-123',
+      actor,
+    );
     expect(result).toHaveLength(1);
   });
 
   it('should get latest qualification for a lead', async () => {
-    const result = await controller.getLatestQualification('lead-123');
+    const result = await controller.getLatestQualification('lead-123', actor);
 
-    expect(service.getLatestQualification).toHaveBeenCalledWith('lead-123');
+    expect(service.getLatestQualification).toHaveBeenCalledWith(
+      'lead-123',
+      actor,
+    );
     expect(result?.id).toBe('qual-123');
   });
 
@@ -140,31 +165,57 @@ describe('LeadIntelligenceController', () => {
   });
 
   it('should trigger enrichment via service', async () => {
-    const result = await controller.triggerEnrichment('lead-123');
+    const result = await controller.triggerEnrichment(
+      'lead-123',
+      undefined,
+      actor,
+    );
 
     expect(service.triggerEnrichment).toHaveBeenCalledWith(
       'lead-123',
       undefined,
+      actor,
     );
     expect(result.workflowRunId).toBe('wf-run-123');
   });
 
   it('should get all enrichments for a lead', async () => {
-    const result = await controller.getEnrichments('lead-123');
+    const result = await controller.getEnrichments('lead-123', actor);
 
-    expect(service.getEnrichmentsByLead).toHaveBeenCalledWith('lead-123');
+    expect(service.getEnrichmentsByLead).toHaveBeenCalledWith(
+      'lead-123',
+      actor,
+    );
     expect(result).toHaveLength(1);
   });
 
   it('should get latest enrichment for a lead', async () => {
-    const result = await controller.getLatestEnrichment('lead-123');
+    const result = await controller.getLatestEnrichment('lead-123', actor);
 
-    expect(service.getLatestEnrichment).toHaveBeenCalledWith('lead-123');
+    expect(service.getLatestEnrichment).toHaveBeenCalledWith('lead-123', actor);
     expect(result?.id).toBe('enrich-123');
   });
 
   describe('Authorization and Route Metadata', () => {
     /* eslint-disable @typescript-eslint/unbound-method */
+    it('should protect triggerQualification endpoint with JwtAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        LeadIntelligenceController.prototype.triggerQualification,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtAuthGuard);
+    });
+
+    it('should protect triggerEnrichment endpoint with JwtAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        LeadIntelligenceController.prototype.triggerEnrichment,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtAuthGuard);
+    });
+
     it('should protect handleCallback endpoint with N8nAuthGuard metadata', () => {
       const guards = Reflect.getMetadata(
         '__guards__',

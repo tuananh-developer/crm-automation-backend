@@ -16,8 +16,7 @@ export class EnrichmentCallbackDto {
   leadId!: string;
 
   @IsUUID()
-  @IsOptional()
-  workflowRunId?: string;
+  workflowRunId!: string;
 
   @IsEnum(EnrichmentStatus)
   status!: EnrichmentStatus;
