@@ -1,0 +1,541 @@
+{
+  "name": "T12-WF11 - AI Sales Meeting Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 1. Protected Meeting Dispatch\nNestJS authorizes meeting source/attendees and creates WorkflowRun.",
+        "height": 260,
+        "width": 520,
+        "color": 4
+      },
+      "id": "b0321da1-0195-47c4-b9be-085058380d62",
+      "name": "Sticky 1 - Internal Request",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        60,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2. Validate & Minimize Transcript\nRedact/minimize before any AI provider call; backend privacy policy remains authoritative.",
+        "height": 260,
+        "width": 720,
+        "color": 6
+      },
+      "id": "c8e5434c-629c-4bc0-ba12-8f11339f5cb3",
+      "name": "Sticky 2 - Transcript Privacy",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        620,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 3. Meeting Analysis\nStructured summary, decisions, risks and proposed action items with evidence.",
+        "height": 260,
+        "width": 680,
+        "color": 2
+      },
+      "id": "b1c55e29-cd3b-4ab0-a539-fc9659f8a538",
+      "name": "Sticky 3 - AI Analysis",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1380,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 4. Dedicated Records\nPersist transcript, summary and pending action items through NestJS; notify via backend.",
+        "height": 260,
+        "width": 600,
+        "color": 5
+      },
+      "id": "88d888c3-9eb6-4e7b-afb7-54f4b9cd54dd",
+      "name": "Sticky 4 - Persist & Notify",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "internal/t12-wf11-sales-meeting",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "2c65c579-e9e8-4a95-bf5e-f5e48fd895e3",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        100,
+        430
+      ],
+      "webhookId": "853c4d4c-3cb3-4918-a69e-bf522bf443b0",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_AFTER_IMPORT",
+          "name": "CRM Internal Webhook Header"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p=$input.first().json.body||$input.first().json;const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\nif(!uuid.test(String(p.meetingId||''))||!uuid.test(String(p.workflowRunId||'')))throw new Error('meetingId and workflowRunId must be UUIDs');\nif(typeof p.transcript!=='string'||p.transcript.trim().length<20||p.transcript.length>150000)throw new Error('Transcript must contain 20..150000 characters');\nif(!Array.isArray(p.attendeeIds)||p.attendeeIds.some(x=>!uuid.test(String(x))))throw new Error('attendeeIds must be an array of UUIDs');\nreturn [{json:{meetingId:p.meetingId,workflowRunId:p.workflowRunId,transcript:p.transcript,attendeeIds:p.attendeeIds,meetingPurpose:String(p.meetingPurpose||'').slice(0,500),sourceType:p.sourceType||'MEETING_TRANSCRIPT',idempotencyKey:p.workflowRunId}}];"
+      },
+      "id": "7f014c73-d6bb-4db1-8bfc-e1c309cb9bb8",
+      "name": "Code: Validate Meeting Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        430
+      ],
+      "notes": "Header Auth credential required. Dispatch must originate from NestJS, never from browser/source connector.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p=$input.first().json;\nlet text=p.transcript.normalize('NFKC');\n// Lightweight minimization only; backend remains authoritative for transcript privacy/redaction.\ntext=text.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi,'[REDACTED_EMAIL]');\ntext=text.replace(/(?:\\+?\\d[\\d .()\\-]{7,}\\d)/g,'[REDACTED_PHONE]');\ntext=text.replace(/\\b(?:\\d{3}-\\d{2}-\\d{4}|\\d{9,12})\\b/g,'[REDACTED_IDENTIFIER]');\nif(text.length>120000)throw new Error('Redacted transcript exceeds AI context limit');\nreturn [{json:{...p,redactedTranscript:text,redactionMode:'n8n_regex_minimization_v1'}}];"
+      },
+      "id": "77cdee96-8d07-418d-a83e-ab3bdac2bed0",
+      "name": "Code: Normalize and Redact Transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        430
+      ],
+      "notes": "Regex minimization is not a substitute for backend privacy controls or a proper PII redaction provider.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/conversation-transcripts' }}",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.idempotencyKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { meetingId: $json.meetingId, workflowRunId: $json.workflowRunId, sourceType: $json.sourceType, transcript: $json.redactedTranscript, redactionMode: $json.redactionMode, idempotencyKey: $json.idempotencyKey } }}"
+      },
+      "id": "c65f2180-d355-49d7-b349-c4875a9bd440",
+      "name": "HTTP Request: Save Redacted Meeting Transcript",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        800,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Backend must enforce transcript ownership, attendee scope, retention and final privacy/redaction policy; n8n regex minimization is not sufficient by itself.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/sales-meetings/' + $node['Code: Validate Meeting Input'].json.meetingId + '/context' }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "bd56feb8-5492-4494-b695-0ca2e4ddf368",
+      "name": "HTTP Request: Get CRM Attendee Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1040,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Canonical meeting read path, but backend phase must allow a scoped n8n service identity and return only authorized attendee/CRM context.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input=$input.first().json;\nconst transcript=$node['HTTP Request: Save Redacted Meeting Transcript'].json;\nconst meeting=$node['HTTP Request: Get CRM Attendee Context'].json;\nconst context={meeting:meeting.data||meeting,transcriptId:transcript.id||transcript.data?.id||null,redactedTranscript:input.redactedTranscript,meetingPurpose:input.meetingPurpose,attendeeIds:input.attendeeIds};\nconst prompt=`Analyze this authorized sales meeting transcript. Use only statements supported by the transcript and CRM context. Do not invent commitments, owners, deadlines, prices or customer facts. Return JSON only: {\"summary\":\"...\",\"decisions\":[{\"text\":\"...\",\"evidence\":\"...\"}],\"risks\":[{\"text\":\"...\",\"evidence\":\"...\",\"confidence\":0.0}],\"actionItems\":[{\"title\":\"...\",\"description\":\"...\",\"ownerAttendeeId\":null,\"dueDate\":null,\"evidence\":\"...\",\"confidence\":0.0,\"requiresConfirmation\":true}]}. If owner or due date was not explicit, use null and requiresConfirmation=true.\\nCONTEXT=${JSON.stringify(context)}`;\nreturn [{json:{...input,context,prompt}}];"
+      },
+      "id": "f0695d58-b156-492c-bcd6-319c41eb4218",
+      "name": "Code: Build Meeting Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-1.5-pro') + ':generateContent' }}",
+        "options": {
+          "timeout": 45000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { contents: [{ role: 'user', parts: [{ text: $node[\"Code: Build Meeting Prompt\"].json.prompt }] }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } } }}"
+      },
+      "id": "6c26f657-3d1a-44f7-ac28-960a65266c64",
+      "name": "HTTP Request: Gemini Meeting Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1520,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "GEMINI_API_KEY is read from n8n environment. Do not embed credentials in workflow JSON.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const ai=$input.first().json||{};const p=$node['Code: Build Meeting Prompt'].json;\nconst t=ai.candidates?.[0]?.content?.parts?.map(x=>x.text||'').join('')||'';if(!t)throw new Error('Gemini returned no meeting analysis');\nconst clean=t.replace(/^```(?:json)?\\s*/i,'').replace(/\\s*```$/,'').trim();const result=JSON.parse(clean);\nif(typeof result.summary!=='string'||!result.summary.trim())throw new Error('Meeting summary is required');\nfor(const k of ['decisions','risks','actionItems'])if(!Array.isArray(result[k]))throw new Error(k+' must be an array');\nconst attendees=new Set(p.attendeeIds);\nconst actionItems=result.actionItems.map(a=>({title:String(a.title||'').slice(0,200),description:String(a.description||'').slice(0,2000),ownerAttendeeId:a.ownerAttendeeId&&attendees.has(a.ownerAttendeeId)?a.ownerAttendeeId:null,dueDate:a.dueDate||null,evidence:String(a.evidence||'').slice(0,1000),confidence:typeof a.confidence==='number'?Math.min(1,Math.max(0,a.confidence)):0,requiresConfirmation:a.requiresConfirmation!==false,status:'PENDING_CONFIRMATION'}));\nreturn [{json:{...p,meetingAnalysis:{summary:result.summary.slice(0,10000),decisions:result.decisions,risks:result.risks,actionItems},transcriptId:p.context.transcriptId}}];"
+      },
+      "id": "6d22d675-2559-40eb-8a9c-7201121453b1",
+      "name": "Code: Parse and Validate Meeting Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/sales-meetings/' + $node['Code: Parse and Validate Meeting Output'].json.meetingId + '/summary' }}",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.workflowRunId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { workflowRunId: $json.workflowRunId, transcriptId: $json.transcriptId, summary: $json.meetingAnalysis.summary, decisions: $json.meetingAnalysis.decisions, risks: $json.meetingAnalysis.risks, idempotencyKey: $json.workflowRunId } }}"
+      },
+      "id": "f4533007-7404-4b7c-bd4d-3c1be4e40def",
+      "name": "HTTP Request: Save Meeting Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2000,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "BACKEND API: this dedicated summary persistence route is implemented by the T12 workflow backend patch; validate after applying migration.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/conversation-summaries/' + ($node['HTTP Request: Save Meeting Summary'].json.id || $node['HTTP Request: Save Meeting Summary'].json.data?.id) + '/action-items' }}",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $node['Code: Parse and Validate Meeting Output'].json.workflowRunId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { workflowRunId: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId, actionItems: $node['Code: Parse and Validate Meeting Output'].json.meetingAnalysis.actionItems, idempotencyKey: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId } }}"
+      },
+      "id": "a1c6b578-2514-4673-a98a-eb6de7d0dfdb",
+      "name": "HTTP Request: Save Meeting Action Items",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2240,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/sales-meetings/notify' }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $node['Code: Parse and Validate Meeting Output'].json.workflowRunId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { workflowRunId: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId, meetingId: $node['Code: Parse and Validate Meeting Output'].json.meetingId, summaryId: $node['HTTP Request: Save Meeting Summary'].json.id || $node['HTTP Request: Save Meeting Summary'].json.data?.id, attendeeIds: $node['Code: Parse and Validate Meeting Output'].json.attendeeIds, idempotencyKey: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId } }}"
+      },
+      "id": "4aed7fd9-438b-4b57-ae89-a756ce9bde9c",
+      "name": "HTTP Request: Notify Owner and Attendees",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2480,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "BACKEND API: backend persists deduplicated in-app notifications; external channels remain out of scope for this release.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p=$node['Code: Parse and Validate Meeting Output'].json;const summary=$node['HTTP Request: Save Meeting Summary'].json;const actions=$node['HTTP Request: Save Meeting Action Items'].json;const notify=$input.first().json;\nreturn [{json:{workflow:'T12-WF11',status:'COMPLETED',workflowRunId:p.workflowRunId,meetingId:p.meetingId,transcriptId:p.transcriptId,summaryId:summary.id||summary.data?.id||null,actionItems:actions.items||actions.data||actions,notificationStatus:notify.status||'REQUESTED',completedAt:new Date().toISOString()}}];"
+      },
+      "id": "cc60049a-74bf-4a65-853a-f8670f73ac2f",
+      "name": "Code: Finalize Meeting Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        340
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate Meeting Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Validate Meeting Input": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalize and Redact Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize and Redact Transcript": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Save Redacted Meeting Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Save Redacted Meeting Transcript": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Get CRM Attendee Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get CRM Attendee Context": {
+      "main": [
+        [
+          {
+            "node": "Code: Build Meeting Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Build Meeting Prompt": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Gemini Meeting Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Gemini Meeting Analysis": {
+      "main": [
+        [
+          {
+            "node": "Code: Parse and Validate Meeting Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Parse and Validate Meeting Output": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Save Meeting Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Save Meeting Summary": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Save Meeting Action Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Save Meeting Action Items": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Notify Owner and Attendees",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Notify Owner and Attendees": {
+      "main": [
+        [
+          {
+            "node": "Code: Finalize Meeting Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true
+  },
+  "staticData": null,
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [],
+  "description": "Owner: Tuấn Anh. Protected internal webhook. Transcript is minimized before AI. Summary/action-item/notification APIs require backend contract completion where marked provisional."
+}

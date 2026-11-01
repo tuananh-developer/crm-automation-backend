@@ -1,0 +1,550 @@
+{
+  "name": "T12-WF12 - AI Quote and Proposal Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 1. Sales Request\nNestJS authenticates Sales, checks Customer/Lead scope and creates WorkflowRun.",
+        "height": 260,
+        "width": 520,
+        "color": 4
+      },
+      "id": "a8a46217-e2b9-4d19-aeb0-e92e4f7861b5",
+      "name": "Sticky 1 - Authorized Dispatch",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        60,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2. Customer & Catalog\nUse known catalog item IDs and explicitly labelled demo/live provenance.",
+        "height": 260,
+        "width": 700,
+        "color": 6
+      },
+      "id": "c63017f0-ec88-4895-bd85-aa74d05811e0",
+      "name": "Sticky 2 - Catalog Context",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        620,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 3. AI Drafting & Validation\nAI writes proposal language only. It cannot set authoritative prices.",
+        "height": 260,
+        "width": 700,
+        "color": 2
+      },
+      "id": "95ad317d-d326-44ad-b45c-49751a3f374d",
+      "name": "Sticky 3 - Proposal Draft",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1360,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 4. Backend Pricing & Approval\nNestJS calculates money, persists draft and owns Quote approval state.",
+        "height": 260,
+        "width": 600,
+        "color": 5
+      },
+      "id": "b8aecd57-2dce-46ac-9e91-61d3314c1829",
+      "name": "Sticky 4 - Pricing & Approval",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2080,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "internal/t12-wf12-quote-proposal",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "ca4798bd-362b-42fb-a093-cc7806241589",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        100,
+        430
+      ],
+      "webhookId": "539f6b91-32f6-4354-9998-324772a1b5e5",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_AFTER_IMPORT",
+          "name": "CRM Internal Webhook Header"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p=$input.first().json.body||$input.first().json;const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\nif(!uuid.test(String(p.workflowRunId||''))||!uuid.test(String(p.customerId||p.leadId||'')))throw new Error('workflowRunId and customerId/leadId must be UUIDs');\nif(!Array.isArray(p.requestedItems)||p.requestedItems.length<1||p.requestedItems.length>50)throw new Error('requestedItems must contain 1..50 catalog item requests');\nfor(const x of p.requestedItems){if(!uuid.test(String(x.catalogItemId||''))||!Number.isInteger(x.quantity)||x.quantity<1||x.quantity>10000)throw new Error('Each requested item needs catalogItemId UUID and integer quantity 1..10000');}\nreturn [{json:{workflowRunId:p.workflowRunId,customerId:p.customerId||null,leadId:p.leadId||null,requestedItems:p.requestedItems,requirements:String(p.requirements||'').slice(0,10000),currency:p.currency||'VND',requestedBy:p.requestedBy||null,idempotencyKey:p.workflowRunId}}];"
+      },
+      "id": "8af22083-969d-4fe4-96f1-679accb2e1fe",
+      "name": "Code: Validate Requirements",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        430
+      ],
+      "notes": "Header Auth credential required. Browser must call NestJS, never this webhook directly.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/quotes/entity-context?customerId=' + ($node['Code: Validate Requirements'].json.customerId || '') + '&leadId=' + ($node['Code: Validate Requirements'].json.leadId || '') + '&workflowRunId=' + $node['Code: Validate Requirements'].json.workflowRunId }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "2dffa5f8-8b89-4006-9269-c18fe8e94a42",
+      "name": "HTTP Request: Get Customer Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        560,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Canonical customer route; backend service identity must enforce the caller/resource scope. Lead-to-customer context may need an equivalent internal route.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/catalog/items?workflowRunId=' + $node['Code: Validate Requirements'].json.workflowRunId }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "95e7aef2-9e3c-4cc4-920d-2b0a1dc4e36f",
+      "name": "HTTP Request: Get Product and Pricing Catalog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        800,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const req=$node['Code: Validate Requirements'].json;const c=$node['HTTP Request: Get Customer Context'].json;const catalog=$input.first().json;\nconst items=catalog.items||catalog.data?.items||catalog.data||[];if(!Array.isArray(items))throw new Error('Catalog response must be array');\nconst byId=new Map(items.map(i=>[i.id,i]));const normalized=req.requestedItems.map(x=>{const item=byId.get(x.catalogItemId);if(!item)throw new Error('Unknown catalogItemId: '+x.catalogItemId);if(item.isActive===false||item.status==='INACTIVE')throw new Error('Catalog item is inactive: '+x.catalogItemId);return {catalogItemId:item.id,sku:item.sku||null,name:item.name,description:item.description||'',quantity:x.quantity,currency:item.currency||req.currency};});\nconst customerContext=c.data||c;\nconst prompt=`Draft a concise professional B2B quote proposal using ONLY this customer context, requested requirements, and selected catalog items. Do not invent prices, discounts, tax rates, payment terms, contract terms, delivery dates or legal commitments. The backend is the only source of truth for all prices and taxes. Return JSON only: {\"title\":\"...\",\"executiveSummary\":\"...\",\"body\":\"...\",\"lineItems\":[{\"catalogItemId\":\"...\",\"quantity\":1,\"description\":\"...\"}]}. Include only catalogItemId and quantity exactly as supplied; never add products or alter quantities.\nCUSTOMER=${JSON.stringify(customerContext)}\nREQUIREMENTS=${req.requirements}\nCATALOG=${JSON.stringify(normalized)}`;\nreturn [{json:{...req,customerContext,catalogItems:normalized,prompt}}];"
+      },
+      "id": "463bcbc5-aa8b-4e21-ad81-c692d64ddede",
+      "name": "Code: Normalize Requirements",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-1.5-pro') + ':generateContent' }}",
+        "options": {
+          "timeout": 45000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { contents: [{ role: 'user', parts: [{ text: $node[\"Code: Normalize Requirements\"].json.prompt }] }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } } }}"
+      },
+      "id": "414720ac-63d7-4987-9a32-60bdfcb2696a",
+      "name": "HTTP Request: Gemini Proposal Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1280,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "GEMINI_API_KEY is read from n8n environment. Do not embed credentials in workflow JSON.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const ai=$input.first().json||{};const p=$node['HTTP Request: Gemini Proposal Draft'].json;const ctx=$node['Code: Normalize Requirements'].json;\nconst t=ai.candidates?.[0]?.content?.parts?.map(x=>x.text||'').join('')||'';if(!t)throw new Error('Gemini returned no proposal draft');const clean=t.replace(/^```(?:json)?\\s*/i,'').replace(/\\s*```$/,'').trim();const r=JSON.parse(clean);\nif(typeof r.title!=='string'||typeof r.executiveSummary!=='string'||typeof r.body!=='string')throw new Error('Proposal title, executiveSummary and body are required');\nconst lineItems=Array.isArray(r.lineItems)?r.lineItems:ctx.catalogItems.map(x=>({catalogItemId:x.catalogItemId,quantity:x.quantity,description:x.name}));\nconst allowed=new Map(ctx.catalogItems.map(x=>[x.catalogItemId,x]));for(const item of lineItems){if(!allowed.has(item.catalogItemId))throw new Error('AI referenced item outside requested catalog selection');if(item.quantity!==undefined&&(!Number.isInteger(item.quantity)||item.quantity<1))throw new Error('Invalid quantity in AI draft');}\nreturn [{json:{...ctx,proposalDraft:{title:r.title.slice(0,200),executiveSummary:r.executiveSummary.slice(0,4000),body:r.body.slice(0,15000),lineItems:ctx.catalogItems.map(x=>({catalogItemId:x.catalogItemId,quantity:x.quantity,description:x.name}))}}}];"
+      },
+      "id": "f22ff1ef-2e25-4306-a210-abd2f40434ac",
+      "name": "Code: Parse Line Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/quotes/price-preview' }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $node['Code: Validate Requirements'].json.workflowRunId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { workflowRunId: $node['Code: Validate Requirements'].json.workflowRunId, customerId: $node['Code: Validate Requirements'].json.customerId, leadId: $node['Code: Validate Requirements'].json.leadId, items: $node['Code: Parse Line Items'].json.proposalDraft.lineItems, currency: $node['Code: Parse Line Items'].json.currency, idempotencyKey: $node['Code: Validate Requirements'].json.workflowRunId } }}"
+      },
+      "id": "c1c662f8-a371-4b9b-8f3d-f5abdda88680",
+      "name": "HTTP Request: Backend Pricing Validation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1760,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "BACKEND API: price-preview is implemented by the T12 workflow backend patch. Must calculate totals/taxes/discounts in NestJS only.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p=$input.first().json;const price=$node['HTTP Request: Backend Pricing Validation'].json;\nif(!price||!(price.data||price).currency)throw new Error('Backend price validation response is missing currency');\nconst result=price.data||price;const quoteTotal=Number(result.totalAmount);if(!Number.isFinite(quoteTotal)||quoteTotal<0)throw new Error('Backend did not return a valid calculated totalAmount');\nconst approvalRequired=Boolean(result.approvalRequired||result.requiresApproval);\nreturn [{json:{...p,pricingResult:result,approvalRequired,calculatedTotal:quoteTotal,currency:result.currency}}];"
+      },
+      "id": "d34d18db-8bd0-43e5-a58e-77dc0a03b85d",
+      "name": "Code: Determine Approval Requirement",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/quotes' }}",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $node['Code: Determine Approval Requirement'].json.workflowRunId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { workflowRunId: $node['Code: Determine Approval Requirement'].json.workflowRunId, customerId: $node['Code: Determine Approval Requirement'].json.customerId, leadId: $node['Code: Determine Approval Requirement'].json.leadId, title: $node['Code: Determine Approval Requirement'].json.proposalDraft.title, executiveSummary: $node['Code: Determine Approval Requirement'].json.proposalDraft.executiveSummary, body: $node['Code: Determine Approval Requirement'].json.proposalDraft.body, items: $node['Code: Determine Approval Requirement'].json.proposalDraft.lineItems, currency: $node['Code: Determine Approval Requirement'].json.currency } }}"
+      },
+      "id": "a201162a-82c8-4f83-be04-03c8690e6d30",
+      "name": "HTTP Request: Save Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2240,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "40a0d670-6452-445d-a4c9-4e051fe15ea6",
+              "leftValue": "={ $json.approvalRequired }",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cb777418-c95c-4f1f-a4e4-7a48435e9858",
+      "name": "IF: Approval Required",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2480,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/quotes/' + ($node['HTTP Request: Save Draft'].json.id || $node['HTTP Request: Save Draft'].json.data?.id) + '/submit-for-approval' }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $node['Code: Determine Approval Requirement'].json.workflowRunId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { workflowRunId: $node['Code: Determine Approval Requirement'].json.workflowRunId, idempotencyKey: $node['Code: Determine Approval Requirement'].json.workflowRunId } }}"
+      },
+      "id": "ca2e6046-c09b-488c-ad1c-fdabab7303bd",
+      "name": "HTTP Request: Create Approval Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2720,
+        250
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Canonical quote submit-for-approval endpoint. NestJS creates/reuses the approval task and controls state transitions.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate Requirements",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Validate Requirements": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Get Customer Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get Customer Context": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Get Product and Pricing Catalog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get Product and Pricing Catalog": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalize Requirements",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize Requirements": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Gemini Proposal Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Gemini Proposal Draft": {
+      "main": [
+        [
+          {
+            "node": "Code: Parse Line Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Parse Line Items": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Backend Pricing Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Backend Pricing Validation": {
+      "main": [
+        [
+          {
+            "node": "Code: Determine Approval Requirement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Determine Approval Requirement": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Save Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Save Draft": {
+      "main": [
+        [
+          {
+            "node": "IF: Approval Required",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Approval Required": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Create Approval Task",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true
+  },
+  "staticData": null,
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [],
+  "description": "Owner: Tuấn Anh. Protected internal webhook. NestJS catalog/pricing/quote service is authoritative. Backend price-preview route is provisional and must be implemented before activation."
+}
