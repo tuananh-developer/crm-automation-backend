@@ -2,6 +2,7 @@ export enum WorkflowStatus {
   PENDING = 'PENDING',
   RUNNING = 'RUNNING',
   SUCCESS = 'SUCCESS',
+  PARTIAL = 'PARTIAL',
   FAILED = 'FAILED',
   CANCELLED = 'CANCELLED',
 }

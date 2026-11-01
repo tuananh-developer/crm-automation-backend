@@ -4,6 +4,8 @@ import type { Repository } from 'typeorm';
 import type { Customer } from './entities/customer.entity.js';
 import type { CustomerSegment } from './entities/customer-segment.entity.js';
 import type { Segment } from './entities/segment.entity.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('CustomersService', () => {
   let service: CustomersService;
@@ -29,6 +31,21 @@ describe('CustomersService', () => {
     notes: null,
     createdAt: new Date('2026-10-03T00:00:00.000Z'),
     updatedAt: new Date('2026-10-03T00:00:00.000Z'),
+  };
+  const adminActor: AuthenticatedUser = {
+    id: 'admin-1',
+    name: 'Admin',
+    email: 'admin@example.com',
+    role: UserRole.ADMIN,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const salesActor: AuthenticatedUser = {
+    ...adminActor,
+    id: 'user-1',
+    role: UserRole.SALES,
   };
 
   const createQueryBuilder = () => {
@@ -64,7 +81,7 @@ describe('CustomersService', () => {
     qb.getManyAndCount.mockResolvedValue([[mockCustomer], 1]);
     (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
 
-    const result = await service.findAll({ page: 1, limit: 20 });
+    const result = await service.findAll({ page: 1, limit: 20 }, adminActor);
 
     expect(result.data).toHaveLength(1);
     expect(result.meta).toEqual({
@@ -82,7 +99,7 @@ describe('CustomersService', () => {
     qb.getManyAndCount.mockResolvedValue([[], 0]);
     (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
 
-    await service.findAll({ search: 'acme' });
+    await service.findAll({ search: 'acme' }, adminActor);
 
     expect(qb.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('search'),
@@ -97,10 +114,22 @@ describe('CustomersService', () => {
     qb.getManyAndCount.mockResolvedValue([[], 0]);
     (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
 
-    await service.findAll({ status: 'CONVERTED' });
+    await service.findAll({ status: 'CONVERTED' }, adminActor);
 
     expect(qb.andWhere).toHaveBeenCalledWith('customer.status = :status', {
       status: 'CONVERTED',
+    });
+  });
+
+  it('scopes Sales customer lists to customers they created', async () => {
+    const qb = createQueryBuilder();
+    qb.getManyAndCount.mockResolvedValue([[], 0]);
+    (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+    await service.findAll({}, salesActor);
+
+    expect(qb.andWhere).toHaveBeenCalledWith('customer.createdBy = :actorId', {
+      actorId: salesActor.id,
     });
   });
 
@@ -114,7 +143,7 @@ describe('CustomersService', () => {
       ],
     });
 
-    const result = await service.findOne('customer-1');
+    const result = await service.findOne('customer-1', adminActor);
 
     expect(result.convertedLeads).toHaveLength(1);
     expect(result.customerSegments).toHaveLength(2);
@@ -127,7 +156,7 @@ describe('CustomersService', () => {
       customerSegments: [],
     });
 
-    const result = await service.findOne('customer-1');
+    const result = await service.findOne('customer-1', adminActor);
 
     expect(result.segmentCount).toBe(0);
   });
@@ -135,8 +164,19 @@ describe('CustomersService', () => {
   it('rejects an unknown customer id', async () => {
     (customersRepository.findOne as jest.Mock).mockResolvedValue(null);
 
-    await expect(service.findOne('missing')).rejects.toBeInstanceOf(
+    await expect(service.findOne('missing', adminActor)).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('hides customers created by other users from Sales users', async () => {
+    (customersRepository.findOne as jest.Mock).mockResolvedValue({
+      ...mockCustomer,
+      createdBy: 'other-user',
+    });
+
+    await expect(
+      service.findOne('customer-1', salesActor),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });

@@ -4,7 +4,9 @@
     "moduleResolution": "node",
     "ignoreDeprecations": "6.0",
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": [
+      "ES2023"
+    ],
     "rootDir": ".",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
@@ -14,8 +16,29 @@
     "noImplicitAny": false,
     "skipLibCheck": true,
     "sourceMap": true,
-    "types": ["jest", "node"]
+    "types": [
+      "jest",
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ],
+      "@module/*": [
+        "./src/common/*"
+      ],
+      "@config/*": [
+        "./src/config/*"
+      ]
+    }
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }

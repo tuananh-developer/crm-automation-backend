@@ -9,6 +9,7 @@ import { SegmentsService } from './segments.service.js';
 import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
 import { CustomersController } from './customers.controller.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { CustomersController } from './customers.controller.js';
       LeadScore,
       User,
     ]),
+    AuthModule,
   ],
   controllers: [SegmentsController, CustomersController],
   providers: [SegmentsService, CustomersService],

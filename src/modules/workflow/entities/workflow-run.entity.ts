@@ -15,6 +15,10 @@ import type { User } from '../../users/entities/user.entity.js';
 import type { ReviewTask } from '../../review/entities/review-task.entity.js';
 
 @Entity('workflow_runs')
+@Index('UQ_workflow_runs_idempotency_key', ['idempotencyKey'], {
+  unique: true,
+  where: '"idempotency_key" IS NOT NULL',
+})
 @Index('IDX_workflow_runs_n8n_execution_id', ['n8nExecutionId'], {
   unique: true,
 })
@@ -68,6 +72,14 @@ export class WorkflowRun {
 
   @Column({ name: 'finished_at', type: 'timestamptz', nullable: true })
   finishedAt!: Date | null;
+
+  @Column({
+    name: 'idempotency_key',
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+  })
+  idempotencyKey!: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
