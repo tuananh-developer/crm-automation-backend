@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -9,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { Lead } from './entities/lead.entity.js';
 import { LeadSource } from './entities/lead-source.entity.js';
+import { Interaction } from './entities/interaction.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { Customer } from '../customers/entities/customer.entity.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
@@ -16,7 +18,6 @@ import { LeadStatus } from './enums/lead.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
 import type { PaginatedResponseDto } from '../../common/index.js';
 import {
-  ConvertLeadDto,
   ConvertLeadResponseDto,
   CreateLeadDto,
   CreateLeadSourceDto,
@@ -26,6 +27,8 @@ import {
   UpdateLeadDto,
 } from './dto/index.js';
 import { LeadMapper } from './mappers/lead.mapper.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole } from '../users/enums/user.enum.js';
 import type {
   ConvertLeadResult,
   CustomerMatchSource,
@@ -42,6 +45,8 @@ export class LeadsService {
     private readonly leadsRepository: Repository<Lead>,
     @InjectRepository(LeadSource)
     private readonly leadSourcesRepository: Repository<LeadSource>,
+    @InjectRepository(Interaction)
+    private readonly interactionsRepository: Repository<Interaction>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     @InjectRepository(Customer)
@@ -52,7 +57,10 @@ export class LeadsService {
     private readonly rabbitmqService: RabbitMQService,
   ) {}
 
-  async create(dto: CreateLeadDto): Promise<LeadResponseDto> {
+  async create(
+    dto: CreateLeadDto,
+    actor: AuthenticatedUser,
+  ): Promise<LeadResponseDto> {
     const normalizedEmail = dto.email.trim().toLowerCase();
 
     // 1. Check duplicate lead by email
@@ -81,18 +89,30 @@ export class LeadsService {
     }
 
     // 3. Validate owner if provided
-    if (dto.ownerId) {
+    if (
+      actor.role === UserRole.SALES &&
+      dto.ownerId &&
+      dto.ownerId !== actor.id
+    ) {
+      throw new ForbiddenException(
+        'Sales users can only assign leads to themselves',
+      );
+    }
+
+    const ownerId = actor.role === UserRole.SALES ? actor.id : dto.ownerId;
+    if (ownerId) {
       const owner = await this.usersRepository.findOne({
-        where: { id: dto.ownerId },
+        where: { id: ownerId },
       });
       if (!owner) {
-        throw new NotFoundException(`User with ID '${dto.ownerId}' not found`);
+        throw new NotFoundException(`User with ID '${ownerId}' not found`);
       }
     }
 
     // 4. Create and save lead
     const lead = this.leadsRepository.create({
       ...dto,
+      ownerId: ownerId ?? null,
       email: normalizedEmail,
       status: LeadStatus.NEW,
     });
@@ -124,6 +144,7 @@ export class LeadsService {
 
   async findAll(
     query: QueryLeadDto,
+    actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<LeadResponseDto>> {
     const page = query.page && query.page > 0 ? query.page : 1;
     const limit = query.limit && query.limit > 0 ? query.limit : 10;
@@ -144,6 +165,9 @@ export class LeadsService {
 
     if (query.ownerId) {
       qb.andWhere('lead.ownerId = :ownerId', { ownerId: query.ownerId });
+    }
+    if (actor.role === UserRole.SALES) {
+      qb.andWhere('lead.ownerId = :actorOwnerId', { actorOwnerId: actor.id });
     }
 
     if (query.search && query.search.trim()) {
@@ -186,8 +210,12 @@ export class LeadsService {
     };
   }
 
-  async findOne(id: string): Promise<LeadResponseDto> {
+  async findOne(
+    id: string,
+    actor: AuthenticatedUser,
+  ): Promise<LeadResponseDto> {
     const lead = await this.findLeadEntity(id);
+    this.assertLeadAccess(lead, actor);
     return LeadMapper.toResponseDto(lead);
   }
 
@@ -211,8 +239,21 @@ export class LeadsService {
     return lead;
   }
 
-  async update(id: string, dto: UpdateLeadDto): Promise<LeadResponseDto> {
+  async update(
+    id: string,
+    dto: UpdateLeadDto,
+    actor: AuthenticatedUser,
+  ): Promise<LeadResponseDto> {
     const lead = await this.findLeadEntity(id);
+    this.assertLeadAccess(lead, actor);
+
+    if (
+      actor.role === UserRole.SALES &&
+      dto.ownerId !== undefined &&
+      dto.ownerId !== actor.id
+    ) {
+      throw new ForbiddenException('Sales users cannot reassign leads');
+    }
 
     // If updating email, check uniqueness
     if (dto.email) {
@@ -284,8 +325,12 @@ export class LeadsService {
     return LeadMapper.toResponseDto(updated);
   }
 
-  async remove(id: string): Promise<{ success: boolean; message: string }> {
+  async remove(
+    id: string,
+    actor: AuthenticatedUser,
+  ): Promise<{ success: boolean; message: string }> {
     const lead = await this.findLeadEntity(id);
+    this.assertLeadAccess(lead, actor);
     await this.leadsRepository.remove(lead);
     this.logger.log(`Deleted lead ${id}`);
     return {
@@ -298,13 +343,13 @@ export class LeadsService {
 
   async convert(
     id: string,
-    dto: ConvertLeadDto,
+    actor: AuthenticatedUser,
   ): Promise<ConvertLeadResponseDto> {
     const user = await this.usersRepository.findOne({
-      where: { id: dto.userId },
+      where: { id: actor.id },
     });
     if (!user) {
-      throw new NotFoundException(`User with ID '${dto.userId}' not found`);
+      throw new NotFoundException(`User with ID '${actor.id}' not found`);
     }
 
     const result = await this.dataSource.transaction(async (manager) => {
@@ -316,6 +361,7 @@ export class LeadsService {
       if (!lead) {
         throw new NotFoundException(`Lead with ID '${id}' not found`);
       }
+      this.assertLeadAccess(lead, actor);
 
       if (
         lead.status === LeadStatus.CONVERTED ||
@@ -497,6 +543,13 @@ export class LeadsService {
     return fullName || lead.email.trim();
   }
 
+  private assertLeadAccess(lead: Lead, actor: AuthenticatedUser): void {
+    if (actor.role === UserRole.SALES && lead.ownerId !== actor.id) {
+      // Use 404 to avoid disclosing the existence of another user's lead.
+      throw new NotFoundException(`Lead with ID '${lead.id}' not found`);
+    }
+  }
+
   // --- Lead Sources Management ---
 
   async findAllSources(): Promise<LeadSourceResponseDto[]> {
@@ -549,5 +602,28 @@ export class LeadsService {
       }
       throw error;
     }
+  }
+
+  /**
+   * List the latest interactions for a lead. n8n workflows use this to build
+   * AI context (WF01 qualification, WF10 Next Best Action, WF11 Sales Meeting).
+   */
+  async findInteractions(
+    leadId: string,
+    limit: number | undefined,
+    actor: AuthenticatedUser,
+  ): Promise<Interaction[]> {
+    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
+    if (!lead) {
+      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
+    }
+    this.assertLeadAccess(lead, actor);
+
+    const safeLimit = Math.max(1, Math.min(limit ?? 20, 100));
+    return this.interactionsRepository.find({
+      where: { leadId },
+      order: { occurredAt: 'DESC' },
+      take: safeLimit,
+    });
   }
 }

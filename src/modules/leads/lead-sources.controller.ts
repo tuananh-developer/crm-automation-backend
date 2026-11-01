@@ -7,6 +7,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBody,
@@ -16,10 +17,15 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { LeadsService } from './leads.service.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { RolesGuard } from '../../common/guards/roles.guard.js';
+import { Roles } from '../../common/decorators/roles.decorator.js';
+import { UserRole } from '../users/enums/user.enum.js';
 import { CreateLeadSourceDto, LeadSourceResponseDto } from './dto/index.js';
 
 @ApiTags('Lead Sources')
 @Controller('lead-sources')
+@UseGuards(JwtAuthGuard)
 export class LeadSourcesController {
   constructor(private readonly leadsService: LeadsService) {}
 
@@ -50,6 +56,8 @@ export class LeadSourcesController {
   }
 
   @Post()
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a new lead source' })
   @ApiBody({ type: CreateLeadSourceDto })

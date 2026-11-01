@@ -6,23 +6,28 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
   ApiBody,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { LeadsService } from './leads.service.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { PaginatedResponseDto } from '../../common/index.js';
 import {
-  ConvertLeadDto,
   ConvertLeadResponseDto,
   CreateLeadDto,
   LeadResponseDto,
@@ -32,6 +37,7 @@ import {
 
 @ApiTags('Leads')
 @Controller('leads')
+@UseGuards(JwtAuthGuard)
 export class LeadsController {
   constructor(private readonly leadsService: LeadsService) {}
 
@@ -62,8 +68,11 @@ export class LeadsController {
     description:
       'Too many requests. Rate limit exceeded (maximum 10 requests per minute).',
   })
-  async create(@Body() createLeadDto: CreateLeadDto): Promise<LeadResponseDto> {
-    return this.leadsService.create(createLeadDto);
+  async create(
+    @Body() createLeadDto: CreateLeadDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<LeadResponseDto> {
+    return this.leadsService.create(createLeadDto, actor);
   }
 
   @Get()
@@ -79,8 +88,9 @@ export class LeadsController {
   })
   async findAll(
     @Query() query: QueryLeadDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<LeadResponseDto>> {
-    return this.leadsService.findAll(query);
+    return this.leadsService.findAll(query, actor);
   }
 
   @Get(':id')
@@ -94,8 +104,9 @@ export class LeadsController {
   @ApiResponse({ status: 404, description: 'Lead not found.' })
   async findOne(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<LeadResponseDto> {
-    return this.leadsService.findOne(id);
+    return this.leadsService.findOne(id, actor);
   }
 
   @Patch(':id')
@@ -111,8 +122,9 @@ export class LeadsController {
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateLeadDto: UpdateLeadDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<LeadResponseDto> {
-    return this.leadsService.update(id, updateLeadDto);
+    return this.leadsService.update(id, updateLeadDto, actor);
   }
 
   @Post(':id/convert')
@@ -127,7 +139,6 @@ export class LeadsController {
     description: 'UUID của lead cần convert',
     format: 'uuid',
   })
-  @ApiBody({ type: ConvertLeadDto })
   @ApiResponse({
     status: 201,
     description: 'Chuyển đổi lead thành công.',
@@ -145,9 +156,9 @@ export class LeadsController {
   })
   async convert(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() convertLeadDto: ConvertLeadDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ConvertLeadResponseDto> {
-    return this.leadsService.convert(id, convertLeadDto);
+    return this.leadsService.convert(id, actor);
   }
 
   @Delete(':id')
@@ -158,7 +169,27 @@ export class LeadsController {
   @ApiResponse({ status: 404, description: 'Lead not found.' })
   async remove(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<{ success: boolean; message: string }> {
-    return this.leadsService.remove(id);
+    return this.leadsService.remove(id, actor);
+  }
+
+  @Get(':id/interactions')
+  @ApiOperation({
+    summary: 'List interactions for a lead',
+    description:
+      'Returns the latest interactions and profile signals for a lead. Used by n8n workflows to build AI context.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the lead' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'List of interactions.' })
+  @ApiResponse({ status: 404, description: 'Lead not found.' })
+  async findInteractions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('limit', new ParseIntPipe({ optional: true }))
+    limit: number | undefined,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.leadsService.findInteractions(id, limit ?? 20, actor);
   }
 }
