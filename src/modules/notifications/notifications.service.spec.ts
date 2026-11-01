@@ -20,6 +20,7 @@ describe('NotificationsService', () => {
     isRead: false,
     readAt: null,
     createdAt: new Date('2026-10-04T00:00:00.000Z'),
+    idempotencyKey: null,
   };
 
   beforeEach(() => {

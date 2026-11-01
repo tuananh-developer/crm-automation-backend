@@ -1,11 +1,13 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { ReviewService } from './review.service.js';
 import {
@@ -25,10 +27,15 @@ import {
   ApiBearerAuth,
   ApiParam,
 } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole } from '../users/enums/user.enum.js';
 
 @ApiTags('Review Tasks')
 @ApiBearerAuth('JWT-auth')
 @Controller('review-tasks')
+@UseGuards(JwtAuthGuard)
 export class ReviewController {
   constructor(private readonly reviewService: ReviewService) {}
 
@@ -45,8 +52,9 @@ export class ReviewController {
   @ApiForbiddenResponse({ description: 'Workflow run does not belong to lead' })
   async create(
     @Body() dto: CreateReviewTaskDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ReviewTaskResponseDto> {
-    return this.reviewService.create(dto);
+    return this.reviewService.create(dto, actor);
   }
 
   @Get()
@@ -58,8 +66,10 @@ export class ReviewController {
     description: 'Review tasks retrieved successfully',
     type: [ReviewTaskResponseDto],
   })
-  async findAll(): Promise<ReviewTaskResponseDto[]> {
-    return this.reviewService.findAll();
+  async findAll(
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<ReviewTaskResponseDto[]> {
+    return this.reviewService.findAll(actor);
   }
 
   @Get(':id')
@@ -80,8 +90,9 @@ export class ReviewController {
   })
   async findOne(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ReviewTaskResponseDto> {
-    return this.reviewService.findOne(id);
+    return this.reviewService.findOne(id, actor);
   }
 
   @Patch(':id/assign')
@@ -110,8 +121,14 @@ export class ReviewController {
   async assign(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignReviewTaskDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ReviewTaskResponseDto> {
-    return this.reviewService.assign(id, dto);
+    if (actor.role !== UserRole.ADMIN && dto.reviewerId !== actor.id) {
+      throw new ForbiddenException(
+        'Sales users may only claim tasks for themselves',
+      );
+    }
+    return this.reviewService.assign(id, dto, actor);
   }
 
   @Patch(':id/start')
@@ -138,8 +155,9 @@ export class ReviewController {
   })
   async start(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ReviewTaskResponseDto> {
-    return this.reviewService.start(id);
+    return this.reviewService.start(id, actor);
   }
 
   @Patch(':id/resolve')
@@ -169,7 +187,8 @@ export class ReviewController {
   async resolve(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ResolveReviewTaskDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ReviewTaskResponseDto> {
-    return this.reviewService.resolve(id, dto);
+    return this.reviewService.resolve(id, dto, actor);
   }
 }

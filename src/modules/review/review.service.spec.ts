@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ReviewService } from './review.service.js';
 import { ReviewDecision, ReviewStatus } from './enums/review.enum.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
@@ -11,6 +15,7 @@ import type { User } from '../users/entities/user.entity.js';
 import type { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import type { Notification } from '../notifications/entities/notification.entity.js';
 import type { AuditLog } from '../audit/entities/audit-log.entity.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   CreateReviewTaskDto,
   AssignReviewTaskDto,
@@ -26,6 +31,26 @@ describe('ReviewService', () => {
   let notificationRepository: jest.Mocked<Partial<Repository<Notification>>>;
   let auditLogRepository: jest.Mocked<Partial<Repository<AuditLog>>>;
   let dataSource: jest.Mocked<Partial<DataSource>>;
+  const actor: AuthenticatedUser = {
+    id: 'reviewer-123',
+    name: 'Jane Smith',
+    email: 'jane.smith@example.com',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const adminActor: AuthenticatedUser = {
+    id: 'admin-123',
+    name: 'Bob Admin',
+    email: 'bob.admin@example.com',
+    role: UserRole.ADMIN,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 
   const mockLead: Lead = {
     id: 'lead-123',
@@ -40,7 +65,7 @@ describe('ReviewService', () => {
     industry: 'Technology',
     status: LeadStatus.NEW,
     sourceId: 'source-123',
-    ownerId: null,
+    ownerId: 'reviewer-123',
     convertedCustomerId: null,
     convertedBy: null,
     convertedAt: null,
@@ -100,6 +125,7 @@ describe('ReviewService', () => {
     startedAt: new Date(),
     finishedAt: new Date(),
     createdAt: new Date(),
+    idempotencyKey: null,
   };
 
   const mockReviewTask: ReviewTask = {
@@ -220,7 +246,7 @@ describe('ReviewService', () => {
         reason: 'Low confidence score',
       };
 
-      const result = await service.create(dto);
+      const result = await service.create(dto, actor);
 
       expect(result).toBeDefined();
       expect(result.leadId).toBe('lead-123');
@@ -240,7 +266,7 @@ describe('ReviewService', () => {
         reason: 'Manual review needed',
       };
 
-      const result = await service.create(dto);
+      const result = await service.create(dto, actor);
 
       expect(result).toBeDefined();
       expect(result.leadId).toBe('lead-123');
@@ -253,7 +279,9 @@ describe('ReviewService', () => {
 
       const dto: CreateReviewTaskDto = { leadId: 'non-existent-lead' };
 
-      await expect(service.create(dto)).rejects.toThrow(NotFoundException);
+      await expect(service.create(dto, actor)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('should throw NotFoundException when workflowRun does not exist', async () => {
@@ -265,7 +293,9 @@ describe('ReviewService', () => {
         workflowRunId: 'non-existent-wf',
       };
 
-      await expect(service.create(dto)).rejects.toThrow(NotFoundException);
+      await expect(service.create(dto, actor)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('should throw BadRequestException when workflowRun does not belong to lead', async () => {
@@ -280,7 +310,9 @@ describe('ReviewService', () => {
         workflowRunId: 'wf-run-123',
       };
 
-      await expect(service.create(dto)).rejects.toThrow(BadRequestException);
+      await expect(service.create(dto, actor)).rejects.toThrow(
+        BadRequestException,
+      );
     });
   });
 
@@ -290,10 +322,15 @@ describe('ReviewService', () => {
         mockReviewTask,
       ]);
 
-      const result = await service.findAll();
+      const result = await service.findAll(actor);
 
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe('review-task-123');
+      expect(reviewTaskRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: [{ lead: { ownerId: actor.id } }, { assignedTo: actor.id }],
+        }),
+      );
     });
   });
 
@@ -303,7 +340,7 @@ describe('ReviewService', () => {
         mockReviewTask,
       );
 
-      const result = await service.findOne('review-task-123');
+      const result = await service.findOne('review-task-123', actor);
 
       expect(result).toBeDefined();
       expect(result.id).toBe('review-task-123');
@@ -312,7 +349,18 @@ describe('ReviewService', () => {
     it('should throw NotFoundException when review task does not exist', async () => {
       (reviewTaskRepository.findOne as jest.Mock).mockResolvedValue(null);
 
-      await expect(service.findOne('non-existent')).rejects.toThrow(
+      await expect(service.findOne('non-existent', actor)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should hide a task for a Lead outside the actor scope', async () => {
+      (reviewTaskRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockReviewTask,
+        lead: { ...mockLead, ownerId: 'another-user' },
+      });
+
+      await expect(service.findOne('review-task-123', actor)).rejects.toThrow(
         NotFoundException,
       );
     });
@@ -331,7 +379,7 @@ describe('ReviewService', () => {
 
     it('should assign a reviewer successfully', async () => {
       const dto: AssignReviewTaskDto = { reviewerId: 'reviewer-123' };
-      const result = await service.assign('review-task-123', dto);
+      const result = await service.assign('review-task-123', dto, adminActor);
 
       expect(result.assignedTo).toBe('reviewer-123');
       expect(notificationRepository.save).toHaveBeenCalled();
@@ -341,9 +389,9 @@ describe('ReviewService', () => {
       (reviewTaskRepository.findOne as jest.Mock).mockResolvedValue(null);
 
       const dto: AssignReviewTaskDto = { reviewerId: 'reviewer-123' };
-      await expect(service.assign('non-existent', dto)).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.assign('non-existent', dto, adminActor),
+      ).rejects.toThrow(NotFoundException);
     });
 
     it('should throw BadRequestException when task is not PENDING', async () => {
@@ -353,39 +401,47 @@ describe('ReviewService', () => {
       });
 
       const dto: AssignReviewTaskDto = { reviewerId: 'reviewer-123' };
-      await expect(service.assign('review-task-123', dto)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.assign('review-task-123', dto, adminActor),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('should throw NotFoundException when reviewer does not exist', async () => {
       (userRepository.findOne as jest.Mock).mockResolvedValue(null);
 
       const dto: AssignReviewTaskDto = { reviewerId: 'non-existent' };
-      await expect(service.assign('review-task-123', dto)).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.assign('review-task-123', dto, adminActor),
+      ).rejects.toThrow(NotFoundException);
     });
 
     it('should throw BadRequestException when reviewer is not SALES role', async () => {
       (userRepository.findOne as jest.Mock).mockResolvedValue(mockNonSalesUser);
 
       const dto: AssignReviewTaskDto = { reviewerId: 'non-sales-123' };
-      await expect(service.assign('review-task-123', dto)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.assign('review-task-123', dto, adminActor),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('should throw BadRequestException when reviewer is not ACTIVE', async () => {
       (userRepository.findOne as jest.Mock).mockResolvedValue(mockInactiveUser);
 
       const dto: AssignReviewTaskDto = { reviewerId: 'inactive-123' };
-      await expect(service.assign('review-task-123', dto)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.assign('review-task-123', dto, adminActor),
+      ).rejects.toThrow(BadRequestException);
     });
 
-    it('should throw BadRequestException when task is already assigned to different reviewer', async () => {
+    it('should prevent Sales from assigning a task to another reviewer', async () => {
+      const dto: AssignReviewTaskDto = { reviewerId: 'another-reviewer' };
+      await expect(
+        service.assign('review-task-123', dto, actor),
+      ).rejects.toThrow(ForbiddenException);
+      expect(userRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('should allow Admin to reassign a pending task', async () => {
       (reviewTaskRepository.findOne as jest.Mock).mockResolvedValue({
         ...mockReviewTask,
         assignedTo: 'different-reviewer',
@@ -393,9 +449,8 @@ describe('ReviewService', () => {
       (userRepository.findOne as jest.Mock).mockResolvedValue(mockReviewer);
 
       const dto: AssignReviewTaskDto = { reviewerId: 'reviewer-123' };
-      await expect(service.assign('review-task-123', dto)).rejects.toThrow(
-        BadRequestException,
-      );
+      const result = await service.assign('review-task-123', dto, adminActor);
+      expect(result.assignedTo).toBe('reviewer-123');
     });
 
     it('should allow re-assigning to the same reviewer', async () => {
@@ -405,7 +460,7 @@ describe('ReviewService', () => {
       (userRepository.findOne as jest.Mock).mockResolvedValue(mockReviewer);
 
       const dto: AssignReviewTaskDto = { reviewerId: 'reviewer-123' };
-      const result = await service.assign('review-task-123', dto);
+      const result = await service.assign('review-task-123', dto, adminActor);
 
       expect(result.assignedTo).toBe('reviewer-123');
     });
@@ -419,7 +474,7 @@ describe('ReviewService', () => {
       );
 
       const dto: AssignReviewTaskDto = { reviewerId: 'reviewer-123' };
-      await service.assign('review-task-123', dto);
+      await service.assign('review-task-123', dto, adminActor);
 
       expect(notificationRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -442,7 +497,7 @@ describe('ReviewService', () => {
         Promise.resolve({ ...mockAssignedReviewTask }),
       );
 
-      const result = await service.start('review-task-123');
+      const result = await service.start('review-task-123', actor);
 
       expect(result.status).toBe(ReviewStatus.IN_REVIEW);
       expect(result.startedAt).toBeInstanceOf(Date);
@@ -451,7 +506,7 @@ describe('ReviewService', () => {
     it('should throw NotFoundException when review task does not exist', async () => {
       (reviewTaskRepository.findOne as jest.Mock).mockResolvedValue(null);
 
-      await expect(service.start('non-existent')).rejects.toThrow(
+      await expect(service.start('non-existent', actor)).rejects.toThrow(
         NotFoundException,
       );
     });
@@ -464,9 +519,9 @@ describe('ReviewService', () => {
         }),
       );
 
-      await expect(service.start('review-task-123')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.start('review-task-123', adminActor),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('should throw BadRequestException when task has no reviewer', async () => {
@@ -474,8 +529,20 @@ describe('ReviewService', () => {
         Promise.resolve({ ...mockReviewTask }),
       );
 
-      await expect(service.start('review-task-123')).rejects.toThrow(
-        BadRequestException,
+      await expect(
+        service.start('review-task-123', adminActor),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should hide a task assigned to a different Sales user', async () => {
+      (reviewTaskRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockAssignedReviewTask,
+        assignedTo: 'another-user',
+        assignee: { ...mockReviewer, id: 'another-user' },
+      });
+
+      await expect(service.start('review-task-123', actor)).rejects.toThrow(
+        NotFoundException,
       );
     });
   });
@@ -503,7 +570,7 @@ describe('ReviewService', () => {
         reviewComment: 'Approved',
       };
 
-      const result = await service.resolve('review-task-123', dto);
+      const result = await service.resolve('review-task-123', dto, actor);
 
       expect(result.status).toBe(ReviewStatus.RESOLVED);
       expect(result.decision).toBe(ReviewDecision.APPROVE);
@@ -519,7 +586,7 @@ describe('ReviewService', () => {
         reviewComment: 'Rejected',
       };
 
-      const result = await service.resolve('review-task-123', dto);
+      const result = await service.resolve('review-task-123', dto, actor);
 
       expect(result.status).toBe(ReviewStatus.RESOLVED);
       expect(result.decision).toBe(ReviewDecision.REJECT);
@@ -534,7 +601,7 @@ describe('ReviewService', () => {
         reviewComment: 'Modified',
       };
 
-      const result = await service.resolve('review-task-123', dto);
+      const result = await service.resolve('review-task-123', dto, actor);
 
       expect(result.status).toBe(ReviewStatus.RESOLVED);
       expect(result.decision).toBe(ReviewDecision.MODIFY);
@@ -550,9 +617,9 @@ describe('ReviewService', () => {
         reviewComment: '',
       };
 
-      await expect(service.resolve('review-task-123', dto)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.resolve('review-task-123', dto, actor),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('should throw NotFoundException when review task does not exist', async () => {
@@ -562,9 +629,27 @@ describe('ReviewService', () => {
         decision: ReviewDecision.APPROVE,
         reviewComment: 'Approved',
       };
-      await expect(service.resolve('non-existent', dto)).rejects.toThrow(
+      await expect(service.resolve('non-existent', dto, actor)).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('should prevent a non-assignee from resolving a task for another Lead', async () => {
+      (reviewTaskRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockInReviewTask,
+        lead: { ...mockLead, ownerId: 'another-owner' },
+        assignedTo: 'another-reviewer',
+      });
+      const dto: ResolveReviewTaskDto = {
+        decision: ReviewDecision.APPROVE,
+        reviewComment: 'Approved',
+      };
+
+      await expect(
+        service.resolve('review-task-123', dto, actor),
+      ).rejects.toThrow(NotFoundException);
+      expect(reviewTaskRepository.save).not.toHaveBeenCalled();
+      expect(auditLogRepository.save).not.toHaveBeenCalled();
     });
 
     it('should throw BadRequestException when task is not IN_REVIEW', async () => {
@@ -577,9 +662,9 @@ describe('ReviewService', () => {
         decision: ReviewDecision.APPROVE,
         reviewComment: 'Approved',
       };
-      await expect(service.resolve('review-task-123', dto)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.resolve('review-task-123', dto, adminActor),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('should throw BadRequestException when task has no reviewer', async () => {
@@ -592,9 +677,9 @@ describe('ReviewService', () => {
         decision: ReviewDecision.APPROVE,
         reviewComment: 'Approved',
       };
-      await expect(service.resolve('review-task-123', dto)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.resolve('review-task-123', dto, adminActor),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('should create audit log with correct data', async () => {
@@ -603,7 +688,7 @@ describe('ReviewService', () => {
         reviewComment: 'Approved',
       };
 
-      await service.resolve('review-task-123', dto);
+      await service.resolve('review-task-123', dto, actor);
 
       expect(auditLogRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -622,7 +707,7 @@ describe('ReviewService', () => {
         reviewComment: 'Approved',
       };
 
-      await service.resolve('review-task-123', dto);
+      await service.resolve('review-task-123', dto, actor);
 
       expect(leadRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ status: LeadStatus.QUALIFIED }),
@@ -635,7 +720,7 @@ describe('ReviewService', () => {
         reviewComment: 'Rejected',
       };
 
-      await service.resolve('review-task-123', dto);
+      await service.resolve('review-task-123', dto, actor);
 
       expect(leadRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ status: LeadStatus.LOST }),
@@ -648,7 +733,7 @@ describe('ReviewService', () => {
         reviewComment: 'Modified',
       };
 
-      await service.resolve('review-task-123', dto);
+      await service.resolve('review-task-123', dto, actor);
 
       expect(leadRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ status: LeadStatus.QUALIFYING }),
