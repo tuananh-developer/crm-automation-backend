@@ -61,6 +61,7 @@ describe('LeadIntelligenceService', () => {
   };
 
   const mockWorkflowRun: WorkflowRun = {
+    idempotencyKey: null,
     id: 'wf-run-123',
     workflowName: 'lead-qualification',
     n8nExecutionId: null,
