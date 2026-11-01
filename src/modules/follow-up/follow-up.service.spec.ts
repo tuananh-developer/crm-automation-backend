@@ -17,6 +17,8 @@ import { Customer } from '../customers/entities/customer.entity.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import { N8nClientService } from '../../infrastructure/n8n/n8n-client.service.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
+import { UserRole } from '../users/enums/user.enum.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 describe('FollowUpService', () => {
   let service: FollowUpService;
@@ -594,9 +596,12 @@ describe('FollowUpService', () => {
         1,
       ]);
 
-      const result = await service.findExecutions({
-        enrollmentId: 'enrollment-1',
-      });
+      const result = await service.findExecutions(
+        {
+          enrollmentId: 'enrollment-1',
+        },
+        { id: 'user-123', role: UserRole.SALES } as AuthenticatedUser,
+      );
 
       expect(result.data).toHaveLength(1);
       expect(result.meta).toEqual({
@@ -607,7 +612,10 @@ describe('FollowUpService', () => {
       });
       expect(executionsRepository.findAndCount).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { enrollmentId: 'enrollment-1' },
+          where: {
+            enrollmentId: 'enrollment-1',
+            enrollment: { lead: { ownerId: 'user-123' } },
+          },
           take: 20,
           skip: 0,
         }),

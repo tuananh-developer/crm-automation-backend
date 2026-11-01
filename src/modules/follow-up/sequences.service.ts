@@ -39,6 +39,8 @@ import {
   SequenceLeadEnrollmentResponseDto,
 } from './dto/sequence-response.dto.js';
 import { LeadFollowUpEnrollmentResponseDto } from './dto/lead-follow-up-enrollment-response.dto.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole } from '../users/enums/user.enum.js';
 
 @Injectable()
 export class SequencesService {
@@ -68,6 +70,7 @@ export class SequencesService {
 
   async createSequence(
     dto: CreateSequenceDto,
+    actor: AuthenticatedUser,
   ): Promise<FollowUpSequenceResponseDto> {
     const existing = await this.sequencesRepository.findOne({
       where: { name: dto.name },
@@ -78,20 +81,11 @@ export class SequencesService {
       );
     }
 
-    let createdBy = dto.createdBy;
-    if (!createdBy) {
-      // Find a default user (admin / first user)
-      const [defaultUser] = await this.usersRepository.find({
-        order: { createdAt: 'ASC' },
-        take: 1,
-      });
-      if (defaultUser) {
-        createdBy = defaultUser.id;
-      }
-    }
-
-    if (!createdBy) {
-      throw new BadRequestException('A valid user ID (createdBy) is required');
+    const actorRecord = await this.usersRepository.findOne({
+      where: { id: actor.id },
+    });
+    if (!actorRecord) {
+      throw new NotFoundException(`User with ID '${actor.id}' not found`);
     }
 
     let status = dto.status ?? FollowUpSequenceStatus.ACTIVE;
@@ -105,7 +99,7 @@ export class SequencesService {
       name: dto.name,
       description: dto.description ?? null,
       status,
-      createdBy,
+      createdBy: actor.id,
     });
 
     const saved = await this.sequencesRepository.save(sequence);
@@ -116,6 +110,9 @@ export class SequencesService {
   async findAllSequences(
     status?: FollowUpSequenceStatus,
   ): Promise<FollowUpSequenceResponseDto[]> {
+    // Follow-up sequence definitions are shared workspace configuration:
+    // any authenticated user may read them. Ownership is not enforced here,
+    // consistent with Segment definitions (see docs/05_BUSINESS_RULES_AND_ARCHITECTURE.md).
     const where = status ? { status } : {};
     const sequences = await this.sequencesRepository.find({
       where,
@@ -158,6 +155,7 @@ export class SequencesService {
   async updateSequence(
     id: string,
     dto: UpdateSequenceDto,
+    actor: AuthenticatedUser,
   ): Promise<FollowUpSequenceResponseDto> {
     const sequence = await this.sequencesRepository.findOne({
       where: { id },
@@ -191,9 +189,7 @@ export class SequencesService {
         ? FollowUpSequenceStatus.ACTIVE
         : FollowUpSequenceStatus.PAUSED;
     }
-    if (dto.updatedBy !== undefined) {
-      sequence.updatedBy = dto.updatedBy ?? null;
-    }
+    sequence.updatedBy = actor.id;
 
     const updated = await this.sequencesRepository.save(sequence);
     this.logger.log(
@@ -297,6 +293,8 @@ export class SequencesService {
       step.stepOrder = dto.stepOrder;
     }
 
+    await this.findSequenceById(step.sequenceId);
+
     if (dto.delayMinutes !== undefined) step.delayMinutes = dto.delayMinutes;
     if (dto.channel !== undefined) step.channel = dto.channel;
     if (dto.actionType !== undefined) step.actionType = dto.actionType;
@@ -342,6 +340,7 @@ export class SequencesService {
    */
   async enrollLead(
     dto: EnrollLeadDto,
+    actor: AuthenticatedUser,
   ): Promise<SequenceLeadEnrollmentResponseDto> {
     // 1. Validate Lead
     const lead = await this.leadsRepository.findOne({
@@ -350,6 +349,7 @@ export class SequencesService {
     if (!lead) {
       throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
     }
+    this.assertLeadAccess(lead, actor);
 
     if (!dto.sequenceId) {
       throw new BadRequestException('A valid sequenceId is required');
@@ -403,7 +403,7 @@ export class SequencesService {
         currentStepId: firstStep.id,
         status: EnrollmentStatus.ACTIVE,
         startedAt: new Date(),
-        assignedBy: dto.assignedBy ?? null,
+        assignedBy: actor.id,
       });
       const savedEnrollment = await repos.enrollmentRepo.save(enrollment);
 
@@ -423,7 +423,7 @@ export class SequencesService {
         errorMessage: null,
         retryCount: 0,
       });
-      await repos.executionRepo.save(execution);
+      const savedExecution = await repos.executionRepo.save(execution);
 
       // Log activity / interaction
       const interaction = repos.interactionRepo.create({
@@ -433,14 +433,15 @@ export class SequencesService {
         subject: 'Follow-up Sequence Enrollment',
         content: `Enrolled in follow-up sequence: ${sequence.name} (Step ${firstStep.stepOrder}: ${firstStep.actionType})`,
         occurredAt: new Date(),
-        createdBy: dto.assignedBy ?? null,
+        createdBy: actor.id,
       });
       await repos.interactionRepo.save(interaction);
 
-      return { savedEnrollment, scheduledDate };
+      return { savedEnrollment, savedExecution, scheduledDate };
     };
 
     let savedEnrollment: LeadFollowUpEnrollment;
+    let savedExecution: FollowUpExecution;
     let scheduledDate: Date;
 
     if (this.dataSource) {
@@ -452,6 +453,7 @@ export class SequencesService {
         });
       });
       savedEnrollment = txResult.savedEnrollment;
+      savedExecution = txResult.savedExecution;
       scheduledDate = txResult.scheduledDate;
     } else {
       const result = await executeEnrollment({
@@ -460,6 +462,7 @@ export class SequencesService {
         interactionRepo: this.interactionsRepository,
       });
       savedEnrollment = result.savedEnrollment;
+      savedExecution = result.savedExecution;
       scheduledDate = result.scheduledDate;
     }
 
@@ -470,6 +473,7 @@ export class SequencesService {
     // 6. Publish event to RabbitMQ
     await this.rabbitmqService.publishEvent(CRM_EVENTS.FOLLOW_UP_TRIGGERED, {
       enrollmentId: savedEnrollment.id,
+      executionId: savedExecution.id,
       leadId: lead.id,
       sequenceId: sequence.id,
       stepId: firstStep.id,
@@ -486,15 +490,21 @@ export class SequencesService {
     };
   }
 
-  async findAllEnrollments(query?: {
-    leadId?: string;
-    sequenceId?: string;
-    status?: EnrollmentStatus;
-  }): Promise<LeadFollowUpEnrollmentResponseDto[]> {
+  async findAllEnrollments(
+    query: {
+      leadId?: string;
+      sequenceId?: string;
+      status?: EnrollmentStatus;
+    },
+    actor: AuthenticatedUser,
+  ): Promise<LeadFollowUpEnrollmentResponseDto[]> {
     const where: FindOptionsWhere<LeadFollowUpEnrollment> = {};
     if (query?.leadId) where.leadId = query.leadId;
     if (query?.sequenceId) where.sequenceId = query.sequenceId;
     if (query?.status) where.status = query.status;
+    if (actor.role === UserRole.SALES) {
+      where.lead = { ownerId: actor.id };
+    }
 
     const enrollments = await this.enrollmentsRepository.find({
       where,
@@ -512,6 +522,7 @@ export class SequencesService {
 
   async findEnrollmentById(
     id: string,
+    actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
@@ -532,17 +543,20 @@ export class SequencesService {
         `Lead follow-up enrollment with ID '${id}' not found`,
       );
     }
+    this.assertEnrollmentAccess(enrollment, actor);
 
     return LeadFollowUpEnrollmentMapper.toResponseDto(enrollment);
   }
 
   async findEnrollmentsByLead(
     leadId: string,
+    actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto[]> {
     const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
     if (!lead) {
       throw new NotFoundException(`Lead with ID '${leadId}' not found`);
     }
+    this.assertLeadAccess(lead, actor);
 
     const enrollments = await this.enrollmentsRepository.find({
       where: { leadId },
@@ -560,16 +574,18 @@ export class SequencesService {
   async cancelEnrollment(
     id: string,
     dto?: CancelEnrollmentDto,
+    actor?: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
-      relations: { executions: true },
+      relations: { executions: true, lead: true },
     });
     if (!enrollment) {
       throw new NotFoundException(
         `Lead follow-up enrollment with ID '${id}' not found`,
       );
     }
+    if (actor) this.assertEnrollmentAccess(enrollment, actor);
 
     if (enrollment.status === EnrollmentStatus.COMPLETED) {
       throw new BadRequestException(
@@ -599,16 +615,18 @@ export class SequencesService {
 
   async pauseEnrollment(
     id: string,
+    actor?: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
-      relations: { executions: true },
+      relations: { executions: true, lead: true },
     });
     if (!enrollment) {
       throw new NotFoundException(
         `Lead follow-up enrollment with ID '${id}' not found`,
       );
     }
+    if (actor) this.assertEnrollmentAccess(enrollment, actor);
 
     if (
       enrollment.status === EnrollmentStatus.COMPLETED ||
@@ -628,16 +646,18 @@ export class SequencesService {
 
   async resumeEnrollment(
     id: string,
+    actor?: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
-      relations: { executions: true },
+      relations: { executions: true, lead: true },
     });
     if (!enrollment) {
       throw new NotFoundException(
         `Lead follow-up enrollment with ID '${id}' not found`,
       );
     }
+    if (actor) this.assertEnrollmentAccess(enrollment, actor);
 
     if (enrollment.status !== EnrollmentStatus.PAUSED) {
       throw new BadRequestException('Only PAUSED enrollments can be resumed');
@@ -654,27 +674,50 @@ export class SequencesService {
     id: string,
     status: EnrollmentStatus,
     reason?: string,
+    actor?: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
     if (status === EnrollmentStatus.CANCELLED) {
-      return this.cancelEnrollment(id, { cancellationReason: reason });
+      return this.cancelEnrollment(id, { cancellationReason: reason }, actor);
     }
     if (status === EnrollmentStatus.PAUSED) {
-      return this.pauseEnrollment(id);
+      return this.pauseEnrollment(id, actor);
     }
     if (status === EnrollmentStatus.ACTIVE) {
-      return this.resumeEnrollment(id);
+      return this.resumeEnrollment(id, actor);
     }
     const enrollment = await this.enrollmentsRepository.findOne({
       where: { id },
+      relations: { lead: true },
     });
     if (!enrollment) {
       throw new NotFoundException(
         `Lead follow-up enrollment with ID '${id}' not found`,
       );
     }
+    if (actor) this.assertEnrollmentAccess(enrollment, actor);
     enrollment.status = status;
     return LeadFollowUpEnrollmentMapper.toResponseDto(
       await this.enrollmentsRepository.save(enrollment),
     );
+  }
+
+  private assertLeadAccess(lead: Lead, actor: AuthenticatedUser): void {
+    if (actor.role === UserRole.SALES && lead.ownerId !== actor.id) {
+      throw new NotFoundException(`Lead with ID '${lead.id}' not found`);
+    }
+  }
+
+  private assertEnrollmentAccess(
+    enrollment: LeadFollowUpEnrollment,
+    actor: AuthenticatedUser,
+  ): void {
+    if (
+      actor.role === UserRole.SALES &&
+      enrollment.lead?.ownerId !== actor.id
+    ) {
+      throw new NotFoundException(
+        `Lead follow-up enrollment with ID '${enrollment.id}' not found`,
+      );
+    }
   }
 }

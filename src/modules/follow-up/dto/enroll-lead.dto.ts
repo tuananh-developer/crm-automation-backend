@@ -8,8 +8,4 @@ export class EnrollLeadDto {
   @IsOptional()
   @IsUUID()
   sequenceId?: string;
-
-  @IsOptional()
-  @IsUUID()
-  assignedBy?: string;
 }
