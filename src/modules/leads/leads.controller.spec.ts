@@ -2,6 +2,8 @@ import { LeadsController } from './leads.controller.js';
 import type { LeadsService } from './leads.service.js';
 import { LeadStatus } from './enums/lead.enum.js';
 import type { LeadResponseDto } from './dto/index.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('LeadsController', () => {
   let controller: LeadsController;
@@ -30,6 +32,16 @@ describe('LeadsController', () => {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
+  const actor: AuthenticatedUser = {
+    id: 'user-123',
+    name: 'Sales User',
+    email: 'sales@example.com',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 
   beforeEach(() => {
     service = {
@@ -50,6 +62,7 @@ describe('LeadsController', () => {
       remove: jest
         .fn()
         .mockResolvedValue({ success: true, message: 'Removed' }),
+      convert: jest.fn(),
     };
 
     controller = new LeadsController(service as LeadsService);
@@ -61,39 +74,48 @@ describe('LeadsController', () => {
       email: 'john.doe@example.com',
       sourceId: 'source-123',
     };
-    const result = await controller.create(dto);
+    const result = await controller.create(dto, actor);
 
-    expect(service.create).toHaveBeenCalledWith(dto);
+    expect(service.create).toHaveBeenCalledWith(dto, actor);
     expect(result).toEqual(mockLead);
   });
 
   it('should call service.findAll with query', async () => {
     const query = { page: 1, limit: 10 };
-    const result = await controller.findAll(query);
+    const result = await controller.findAll(query, actor);
 
-    expect(service.findAll).toHaveBeenCalledWith(query);
+    expect(service.findAll).toHaveBeenCalledWith(query, actor);
     expect(result.data).toHaveLength(1);
   });
 
   it('should call service.findOne with id', async () => {
-    const result = await controller.findOne('lead-123');
+    const result = await controller.findOne('lead-123', actor);
 
-    expect(service.findOne).toHaveBeenCalledWith('lead-123');
+    expect(service.findOne).toHaveBeenCalledWith('lead-123', actor);
     expect(result).toEqual(mockLead);
   });
 
   it('should call service.update with id and dto', async () => {
     const dto = { firstName: 'Jane' };
-    const result = await controller.update('lead-123', dto);
+    const result = await controller.update('lead-123', dto, actor);
 
-    expect(service.update).toHaveBeenCalledWith('lead-123', dto);
+    expect(service.update).toHaveBeenCalledWith('lead-123', dto, actor);
     expect(result.firstName).toBe('Jane');
   });
 
   it('should call service.remove with id', async () => {
-    const result = await controller.remove('lead-123');
+    const result = await controller.remove('lead-123', actor);
 
-    expect(service.remove).toHaveBeenCalledWith('lead-123');
+    expect(service.remove).toHaveBeenCalledWith('lead-123', actor);
     expect(result.success).toBe(true);
+  });
+
+  it('uses the authenticated actor for lead conversion', async () => {
+    const result = {} as Awaited<ReturnType<LeadsService['convert']>>;
+    (service.convert as jest.Mock).mockResolvedValue(result);
+
+    await controller.convert('lead-123', actor);
+
+    expect(service.convert).toHaveBeenCalledWith('lead-123', actor);
   });
 });

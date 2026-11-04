@@ -57,7 +57,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -80,7 +80,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + ($('Code: Normalize/Redact').item.json.customerId ? ('/api/v1/customers/' + $('Code: Normalize/Redact').item.json.customerId) : ($('Code: Normalize/Redact').item.json.leadId ? ('/api/v1/leads/' + $('Code: Normalize/Redact').item.json.leadId) : '/api/v1/health')) }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + ($('Code: Normalize/Redact').item.json.customerId ? ('/api/v1/customers/' + $('Code: Normalize/Redact').item.json.customerId + '/internal') : ($('Code: Normalize/Redact').item.json.leadId ? ('/api/v1/leads/' + $('Code: Normalize/Redact').item.json.leadId + '/internal') : '/api/v1/health')) }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -88,6 +88,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -154,7 +158,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 8. Code: Parse and Validate Summary/Actions — reject malformed claims and mark low-confidence items\nconst response = $input.first().json;\nconst context = $('Code: Build Summary Context').first().json;\n\nlet aiParsed = null;\ntry {\n  const rawText = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    aiParsed = JSON.parse(rawText);\n  }\n} catch (e) {\n  aiParsed = null;\n}\n\nlet summaryText = '';\nlet sentiment = 'NEUTRAL';\nlet intent = 'General Inquiry';\nlet keyPoints = [];\nlet actionItems = [];\n\nif (aiParsed && aiParsed.summaryText) {\n  summaryText = aiParsed.summaryText;\n  sentiment = ['POSITIVE', 'NEUTRAL', 'NEGATIVE'].includes(aiParsed.sentiment) ? aiParsed.sentiment : 'NEUTRAL';\n  intent = aiParsed.intent || 'Account check-in';\n  keyPoints = Array.isArray(aiParsed.keyPoints) ? aiParsed.keyPoints : [];\n  if (Array.isArray(aiParsed.actionItems)) {\n    actionItems = aiParsed.actionItems.map(item => {\n      const days = typeof item.dueInDays === 'number' ? item.dueInDays : 3;\n      const due = new Date();\n      due.setDate(due.getDate() + days);\n      return {\n        title: item.title || 'Follow up with stakeholder',\n        dueAt: due.toISOString(),\n        status: 'PENDING',\n        approvalState: 'PROPOSED'\n      };\n    });\n  }\n} else {\n  // Graceful heuristic fallback if Gemini rate limits or network cuts\n  summaryText = `Conversation recorded via ${context.sourceType}. Stakeholder engaged regarding CRM requirements and upcoming milestones.`;\n  sentiment = 'NEUTRAL';\n  intent = 'Commercial Review';\n  keyPoints = ['Discussion recorded and redacted', 'Follow-up cadence pending review'];\n  actionItems = [\n    {\n      title: 'Review conversation transcript and verify next action steps',\n      dueAt: new Date(Date.now() + 86400000 * 2).toISOString(),\n      status: 'PENDING',\n      approvalState: 'PROPOSED'\n    }\n  ];\n}\n\nreturn [{\n  json: {\n    transcriptId: context.transcriptId,\n    workflowRunId: context.workflowRunId,\n    status: 'SUCCESS',\n    summaryText,\n    sentiment,\n    intent,\n    keyPoints,\n    actionItems,\n    rawAIOutput: aiParsed || response,\n    evaluatedAt: new Date().toISOString()\n  }\n}];"
+        "jsCode": "// 8. Code: Parse and Validate Summary/Actions — honest failure and provenance\nconst response = $input.first().json;\nconst context = $('Code: Build Summary Context').first().json;\n\nlet aiParsed = null;\nlet parseError = null;\ntry {\n  const rawText = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    aiParsed = JSON.parse(rawText);\n  } else if (response.error) {\n    parseError = response.error.message || JSON.stringify(response.error);\n  }\n} catch (e) {\n  parseError = e.message || 'Failed to parse Gemini response';\n  aiParsed = null;\n}\n\nif (!aiParsed || !aiParsed.summaryText || !aiParsed.summaryText.trim()) {\n  const providerError = parseError || response.error?.message || (response.promptFeedback?.blockReason ? `Blocked: ${response.promptFeedback.blockReason}` : 'Gemini failed to generate a valid summary');\n  return [{\n    json: {\n      transcriptId: context.transcriptId,\n      workflowRunId: context.workflowRunId,\n      status: 'FAILED',\n      errorMessage: providerError,\n      summaryText: null,\n      sentiment: null,\n      intent: null,\n      keyPoints: [],\n      actionItems: [],\n      rawAIOutput: aiParsed || response,\n      evaluatedAt: new Date().toISOString()\n    }\n  }];\n}\n\nconst sentiment = ['POSITIVE', 'NEUTRAL', 'NEGATIVE'].includes(aiParsed.sentiment) ? aiParsed.sentiment : 'NEUTRAL';\nconst intent = aiParsed.intent || 'Account check-in';\nconst keyPoints = Array.isArray(aiParsed.keyPoints) ? aiParsed.keyPoints : [];\nlet actionItems = [];\nif (Array.isArray(aiParsed.actionItems)) {\n  actionItems = aiParsed.actionItems.map(item => {\n    const days = typeof item.dueInDays === 'number' ? item.dueInDays : 3;\n    const due = new Date();\n    due.setDate(due.getDate() + days);\n    return {\n      title: item.title || 'Follow up with stakeholder',\n      dueAt: due.toISOString(),\n      status: 'PENDING',\n      approvalState: 'PROPOSED'\n    };\n  });\n}\n\nreturn [{\n  json: {\n    transcriptId: context.transcriptId,\n    workflowRunId: context.workflowRunId,\n    status: 'SUCCESS',\n    summaryText: aiParsed.summaryText.trim(),\n    sentiment,\n    intent,\n    keyPoints,\n    actionItems,\n    rawAIOutput: aiParsed || response,\n    evaluatedAt: new Date().toISOString()\n  }\n}];"
       },
       "id": "node-8-parse-validate-summary",
       "name": "Code: Parse and Validate Summary/Actions",
@@ -178,7 +182,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -212,7 +216,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -246,13 +250,13 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"userId\": {{ JSON.stringify($('Code: Validate Transcript').first().json.createdBy || $('HTTP Request: Save Conversation Summary').first().json.ownerId || $('HTTP Request: Save Conversation Summary').first().json.createdBy || $('HTTP Request: Get CRM Context').first().json.ownerId || $('HTTP Request: Get CRM Context').first().json.createdBy || '00000000-0000-0000-0000-000000000000') }},\n  \"type\": \"WORKFLOW_COMPLETED\",\n  \"severity\": \"INFO\",\n  \"title\": \"Conversation Summarized\",\n  \"message\": \"AI summary and action items are available for transcript.\",\n  \"customerId\": {{ JSON.stringify($('Code: Validate Transcript').first().json.customerId || undefined) }},\n  \"leadId\": {{ JSON.stringify($('Code: Validate Transcript').first().json.leadId || undefined) }}\n}",
+        "jsonBody": "={\n  \"userId\": {{ JSON.stringify($('Code: Validate Transcript').first().json.createdBy || $('HTTP Request: Save Conversation Summary').first().json.ownerId || $('HTTP Request: Save Conversation Summary').first().json.createdBy || $('HTTP Request: Get CRM Context').first().json.ownerId || $('HTTP Request: Get CRM Context').first().json.createdBy) }},\n  \"type\": \"WORKFLOW_COMPLETED\",\n  \"severity\": \"INFO\",\n  \"title\": \"Conversation Summarized\",\n  \"message\": \"AI summary and action items are available for transcript.\",\n  \"customerId\": {{ JSON.stringify($('Code: Validate Transcript').first().json.customerId || undefined) }},\n  \"leadId\": {{ JSON.stringify($('Code: Validate Transcript').first().json.leadId || undefined) }}\n}",
         "options": {
           "timeout": 10000
         }

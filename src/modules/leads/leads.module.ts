@@ -8,9 +8,11 @@ import { Customer } from '../customers/entities/customer.entity.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import { CustomersModule } from '../customers/customers.module.js';
 import { AuditModule } from '../audit/audit.module.js';
+import { AuthModule } from '../auth/auth.module.js';
 import { LeadsService } from './leads.service.js';
 import { LeadsController } from './leads.controller.js';
 import { LeadSourcesController } from './lead-sources.controller.js';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 
 @Module({
   imports: [
@@ -24,9 +26,10 @@ import { LeadSourcesController } from './lead-sources.controller.js';
     ]),
     CustomersModule,
     AuditModule,
+    AuthModule,
   ],
   controllers: [LeadsController, LeadSourcesController],
-  providers: [LeadsService],
+  providers: [LeadsService, N8nAuthGuard],
   exports: [LeadsService, TypeOrmModule],
 })
 export class LeadsModule {}

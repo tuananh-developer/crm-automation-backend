@@ -9,6 +9,8 @@ import { SegmentsService } from './segments.service.js';
 import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
 import { CustomersController } from './customers.controller.js';
+import { AuthModule } from '../auth/auth.module.js';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 
 @Module({
   imports: [
@@ -19,9 +21,10 @@ import { CustomersController } from './customers.controller.js';
       LeadScore,
       User,
     ]),
+    AuthModule,
   ],
   controllers: [SegmentsController, CustomersController],
-  providers: [SegmentsService, CustomersService],
+  providers: [SegmentsService, CustomersService, N8nAuthGuard],
   exports: [TypeOrmModule, SegmentsService, CustomersService],
 })
 export class CustomersModule {}

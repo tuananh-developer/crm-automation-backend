@@ -86,6 +86,7 @@ describe('ReviewService', () => {
   };
 
   const mockWorkflowRun: WorkflowRun = {
+    idempotencyKey: null,
     id: 'wf-run-123',
     workflowName: 'AI Qualification',
     n8nExecutionId: 'exec-123',

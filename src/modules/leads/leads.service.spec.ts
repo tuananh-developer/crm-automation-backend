@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { LeadsService } from './leads.service.js';
@@ -13,15 +14,19 @@ import {
 } from 'typeorm';
 import type { Lead } from './entities/lead.entity.js';
 import type { LeadSource } from './entities/lead-source.entity.js';
+import type { Interaction } from './entities/interaction.entity.js';
 import type { User } from '../users/entities/user.entity.js';
 import { Customer } from '../customers/entities/customer.entity.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import type { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('LeadsService', () => {
   let service: LeadsService;
   let leadsRepository: jest.Mocked<Partial<Repository<Lead>>>;
   let leadSourcesRepository: jest.Mocked<Partial<Repository<LeadSource>>>;
+  let interactionsRepository: jest.Mocked<Partial<Repository<Interaction>>>;
   let usersRepository: jest.Mocked<Partial<Repository<User>>>;
   let customersRepository: jest.Mocked<Partial<Repository<Customer>>>;
   let auditLogRepository: jest.Mocked<Partial<Repository<AuditLog>>>;
@@ -71,6 +76,29 @@ describe('LeadsService', () => {
     updatedAt: new Date(),
   };
 
+  const adminActor: AuthenticatedUser = {
+    id: 'user-123',
+    name: 'Admin User',
+    email: 'admin@example.com',
+    role: UserRole.ADMIN,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const mockAdminUser: User = {
+    ...mockUser,
+    name: 'Admin User',
+    email: 'admin@example.com',
+    role: UserRole.ADMIN,
+  };
+  const salesActor: AuthenticatedUser = {
+    ...adminActor,
+    id: 'sales-123',
+    email: 'sales@example.com',
+    role: UserRole.SALES,
+  };
+
   const buildLead = (overrides: Partial<Lead> = {}): Lead => ({
     ...mockLead,
     ...overrides,
@@ -110,6 +138,10 @@ describe('LeadsService', () => {
       find: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
+    };
+
+    interactionsRepository = {
+      find: jest.fn(),
     };
 
     usersRepository = {
@@ -162,6 +194,7 @@ describe('LeadsService', () => {
     service = new LeadsService(
       leadsRepository as Repository<Lead>,
       leadSourcesRepository as Repository<LeadSource>,
+      interactionsRepository as Repository<Interaction>,
       usersRepository as Repository<User>,
       customersRepository as Repository<Customer>,
       auditLogRepository as Repository<AuditLog>,
@@ -179,12 +212,15 @@ describe('LeadsService', () => {
       (leadsRepository.create as jest.Mock).mockReturnValue(mockLead);
       (leadsRepository.save as jest.Mock).mockResolvedValue(mockLead);
 
-      const result = await service.create({
-        firstName: 'John',
-        lastName: 'Doe',
-        email: 'john.doe@example.com',
-        sourceId: 'source-123',
-      });
+      const result = await service.create(
+        {
+          firstName: 'John',
+          lastName: 'Doe',
+          email: 'john.doe@example.com',
+          sourceId: 'source-123',
+        },
+        adminActor,
+      );
 
       expect(result).toEqual(mockLead);
       expect(leadsRepository.findOne).toHaveBeenCalledWith({
@@ -202,11 +238,14 @@ describe('LeadsService', () => {
       (leadsRepository.findOne as jest.Mock).mockResolvedValue(mockLead);
 
       await expect(
-        service.create({
-          firstName: 'John',
-          email: 'john.doe@example.com',
-          sourceId: 'source-123',
-        }),
+        service.create(
+          {
+            firstName: 'John',
+            email: 'john.doe@example.com',
+            sourceId: 'source-123',
+          },
+          adminActor,
+        ),
       ).rejects.toThrow(ConflictException);
 
       expect(leadsRepository.save).not.toHaveBeenCalled();
@@ -231,12 +270,15 @@ describe('LeadsService', () => {
       (leadsRepository.save as jest.Mock).mockRejectedValue(dbError);
 
       await expect(
-        service.create({
-          firstName: 'John',
-          lastName: 'Doe',
-          email: 'john.doe@example.com',
-          sourceId: 'source-123',
-        }),
+        service.create(
+          {
+            firstName: 'John',
+            lastName: 'Doe',
+            email: 'john.doe@example.com',
+            sourceId: 'source-123',
+          },
+          adminActor,
+        ),
       ).rejects.toThrow(ConflictException);
 
       expect(rabbitmqService.publishLeadCreated).not.toHaveBeenCalled();
@@ -247,11 +289,14 @@ describe('LeadsService', () => {
       (leadSourcesRepository.findOne as jest.Mock).mockResolvedValue(null);
 
       await expect(
-        service.create({
-          firstName: 'John',
-          email: 'john.doe@example.com',
-          sourceId: 'non-existent-source',
-        }),
+        service.create(
+          {
+            firstName: 'John',
+            email: 'john.doe@example.com',
+            sourceId: 'non-existent-source',
+          },
+          adminActor,
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -263,11 +308,14 @@ describe('LeadsService', () => {
       });
 
       await expect(
-        service.create({
-          firstName: 'John',
-          email: 'john.doe@example.com',
-          sourceId: 'source-123',
-        }),
+        service.create(
+          {
+            firstName: 'John',
+            email: 'john.doe@example.com',
+            sourceId: 'source-123',
+          },
+          adminActor,
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -279,13 +327,57 @@ describe('LeadsService', () => {
       (usersRepository.findOne as jest.Mock).mockResolvedValue(null);
 
       await expect(
-        service.create({
-          firstName: 'John',
-          email: 'john.doe@example.com',
-          sourceId: 'source-123',
-          ownerId: 'non-existent-user',
-        }),
+        service.create(
+          {
+            firstName: 'John',
+            email: 'john.doe@example.com',
+            sourceId: 'source-123',
+            ownerId: 'non-existent-user',
+          },
+          adminActor,
+        ),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('assigns a Sales-created lead to the authenticated Sales user', async () => {
+      const input = {
+        firstName: 'Jane',
+        email: 'jane@example.com',
+        sourceId: 'source-123',
+      };
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (leadSourcesRepository.findOne as jest.Mock).mockResolvedValue(
+        mockSource,
+      );
+      (usersRepository.findOne as jest.Mock).mockResolvedValue(mockUser);
+      (leadsRepository.create as jest.Mock).mockImplementation((data) => data);
+      (leadsRepository.save as jest.Mock).mockImplementation((data) => data);
+
+      await service.create(input, salesActor);
+
+      expect(leadsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: salesActor.id }),
+      );
+    });
+
+    it('prevents Sales users from assigning a new lead to another user', async () => {
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (leadSourcesRepository.findOne as jest.Mock).mockResolvedValue(
+        mockSource,
+      );
+
+      await expect(
+        service.create(
+          {
+            firstName: 'Jane',
+            email: 'jane@example.com',
+            sourceId: 'source-123',
+            ownerId: 'another-user',
+          },
+          salesActor,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(leadsRepository.save).not.toHaveBeenCalled();
     });
     it('should throw ConflictException if duplicate name triggers 23505 QueryFailedError on save', async () => {
       (leadSourcesRepository.findOne as jest.Mock).mockResolvedValue(null);
@@ -309,16 +401,58 @@ describe('LeadsService', () => {
     it('should return lead when found', async () => {
       (leadsRepository.findOne as jest.Mock).mockResolvedValue(mockLead);
 
-      const result = await service.findOne('lead-123');
+      const result = await service.findOne('lead-123', adminActor);
       expect(result).toEqual(mockLead);
     });
 
     it('should throw NotFoundException when lead is not found', async () => {
       (leadsRepository.findOne as jest.Mock).mockResolvedValue(null);
 
-      await expect(service.findOne('invalid-id')).rejects.toThrow(
+      await expect(service.findOne('invalid-id', adminActor)).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('hides leads owned by another user from Sales users', async () => {
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(
+        buildLead({ ownerId: 'another-user' }),
+      );
+
+      await expect(service.findOne('lead-123', salesActor)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('scopes Sales lead lists to the authenticated owner', async () => {
+      const queryBuilder = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      };
+      (leadsRepository.createQueryBuilder as jest.Mock).mockReturnValue(
+        queryBuilder,
+      );
+
+      await service.findAll({}, salesActor);
+
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'lead.ownerId = :actorOwnerId',
+        { actorOwnerId: salesActor.id },
+      );
+    });
+
+    it('prevents Sales users from updating a lead owned by someone else', async () => {
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(
+        buildLead({ ownerId: 'another-user' }),
+      );
+
+      await expect(
+        service.update('lead-123', { firstName: 'Changed' }, salesActor),
+      ).rejects.toThrow(NotFoundException);
+      expect(leadsRepository.save).not.toHaveBeenCalled();
     });
   });
 
@@ -327,17 +461,15 @@ describe('LeadsService', () => {
       (leadsRepository.findOne as jest.Mock).mockResolvedValue(mockLead);
       (leadsRepository.remove as jest.Mock).mockResolvedValue(mockLead);
 
-      const result = await service.remove('lead-123');
+      const result = await service.remove('lead-123', adminActor);
       expect(result.success).toBe(true);
       expect(leadsRepository.remove).toHaveBeenCalledWith(mockLead);
     });
   });
 
   describe('convert', () => {
-    const dto = { userId: 'user-123' };
-
     beforeEach(() => {
-      (usersRepository.findOne as jest.Mock).mockResolvedValue(mockUser);
+      (usersRepository.findOne as jest.Mock).mockResolvedValue(mockAdminUser);
       (customersRepository.create as jest.Mock).mockImplementation(
         (data: Customer) => data,
       );
@@ -358,7 +490,7 @@ describe('LeadsService', () => {
       (leadsRepository.findOne as jest.Mock).mockResolvedValue(qualifiedLead);
       (customersRepository.find as jest.Mock).mockResolvedValue([]);
 
-      const result = await service.convert('lead-123', dto);
+      const result = await service.convert('lead-123', adminActor);
 
       expect(customersRepository.find).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -417,7 +549,7 @@ describe('LeadsService', () => {
         existingCustomer,
       ]);
 
-      const result = await service.convert('lead-123', dto);
+      const result = await service.convert('lead-123', adminActor);
 
       expect(customersRepository.save).not.toHaveBeenCalled();
       expect(customersRepository.create).not.toHaveBeenCalled();
@@ -449,7 +581,7 @@ describe('LeadsService', () => {
         buildLead({ status: LeadStatus.NEW }),
       );
 
-      await expect(service.convert('lead-123', dto)).rejects.toThrow(
+      await expect(service.convert('lead-123', adminActor)).rejects.toThrow(
         BadRequestException,
       );
 
@@ -461,7 +593,7 @@ describe('LeadsService', () => {
     it('should throw NotFoundException when the lead does not exist', async () => {
       (leadsRepository.findOne as jest.Mock).mockResolvedValue(null);
 
-      await expect(service.convert('missing-lead', dto)).rejects.toThrow(
+      await expect(service.convert('missing-lead', adminActor)).rejects.toThrow(
         NotFoundException,
       );
 
@@ -471,7 +603,7 @@ describe('LeadsService', () => {
     it('should throw NotFoundException when the acting user does not exist', async () => {
       (usersRepository.findOne as jest.Mock).mockResolvedValue(null);
 
-      await expect(service.convert('lead-123', dto)).rejects.toThrow(
+      await expect(service.convert('lead-123', adminActor)).rejects.toThrow(
         NotFoundException,
       );
 
@@ -486,7 +618,7 @@ describe('LeadsService', () => {
         }),
       );
 
-      await expect(service.convert('lead-123', dto)).rejects.toThrow(
+      await expect(service.convert('lead-123', adminActor)).rejects.toThrow(
         ConflictException,
       );
 
@@ -503,11 +635,65 @@ describe('LeadsService', () => {
         buildCustomer({ id: 'customer-b' }),
       ]);
 
-      await expect(service.convert('lead-123', dto)).rejects.toThrow(
+      await expect(service.convert('lead-123', adminActor)).rejects.toThrow(
         ConflictException,
       );
 
       expect(customersRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findInteractions', () => {
+    it('should return the latest interactions for a lead', async () => {
+      const interactions = [
+        { id: 'int-1', type: 'NOTE', occurredAt: new Date() },
+        { id: 'int-2', type: 'CALL', occurredAt: new Date() },
+      ] as Interaction[];
+
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(buildLead());
+      (interactionsRepository.find as jest.Mock).mockResolvedValue(
+        interactions,
+      );
+
+      const result = await service.findInteractions('lead-123', 20, adminActor);
+
+      expect(result).toEqual(interactions);
+      expect(interactionsRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { leadId: 'lead-123' },
+          order: { occurredAt: 'DESC' },
+          take: 20,
+        }),
+      );
+    });
+
+    it('should cap the limit at 100', async () => {
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(buildLead());
+      (interactionsRepository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findInteractions('lead-123', 500, adminActor);
+
+      expect(interactionsRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 100 }),
+      );
+    });
+
+    it('should throw NotFoundException when the lead does not exist', async () => {
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.findInteractions('missing-lead', 20, adminActor),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should deny Sales access to leads they do not own', async () => {
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(
+        buildLead({ ownerId: 'other-owner' }),
+      );
+
+      await expect(
+        service.findInteractions('lead-123', 20, salesActor),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

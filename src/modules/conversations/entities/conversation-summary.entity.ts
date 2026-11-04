@@ -13,12 +13,12 @@ import type { ConversationTranscript } from './conversation-transcript.entity.js
 import type { ConversationActionItem } from './conversation-action-item.entity.js';
 
 @Entity('conversation_summaries')
-@Index('idx_summaries_transcript_id', ['transcriptId'])
+@Index('idx_summaries_transcript_id', ['transcriptId'], { unique: true })
 export class ConversationSummary {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ name: 'transcript_id', type: 'uuid' })
+  @Column({ name: 'transcript_id', type: 'uuid', unique: true })
   transcriptId!: string;
 
   @Column({ name: 'summary_text', type: 'text' })

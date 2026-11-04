@@ -18,14 +18,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
   ) {
-    const isProduction =
-      configService.get<string>('NODE_ENV') === 'production' ||
-      process.env.NODE_ENV === 'production';
+    const nodeEnv = (
+      configService.get<string>('NODE_ENV') ||
+      process.env.NODE_ENV ||
+      ''
+    ).toLowerCase();
+    const isDevOrTest = ['development', 'test'].includes(nodeEnv);
     const jwtSecret = configService.get<string>('JWT_SECRET');
 
-    if (isProduction && !jwtSecret) {
+    if (!isDevOrTest && !jwtSecret) {
       throw new Error(
-        'FATAL: JWT_SECRET environment variable is missing in production environment',
+        `FATAL: JWT_SECRET environment variable is missing in ${nodeEnv || 'production'} environment`,
       );
     }
 

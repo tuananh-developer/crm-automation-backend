@@ -15,6 +15,17 @@ Use Cases are `UC01`–`UC12`; Topic 12 workflows are `T12-WF01`–`T12-WF15`. C
 
 ## 3. Approved business policies
 
+### User data scope
+
+- Admin can access workspace-wide Leads and Customers.
+- Sales-created Leads are assigned to the authenticated Sales user. Sales can read and manage only Leads assigned to them; a Sales user cannot assign a Lead to another user.
+- Qualification, enrichment and scoring triggers/history use the same Lead ownership policy. Sales can operate on Leads they own; Admin can operate workspace-wide. Triggering user identity is derived from JWT, never a DTO field.
+- Customer read scope for Sales is based on `customers.created_by`, which records the authenticated actor that created or converted the Customer. Sales list/detail reads are restricted to that creator; Admin has workspace-wide access.
+- ReviewTask access is available to Admin, the Sales owner of its Lead, and the explicitly assigned reviewer. Sales may claim only a task for an owned Lead and may start/resolve only tasks assigned to themselves; Admin assigns active Sales reviewers. Review decisions are audited as the authenticated actor.
+- Segment definitions are shared workspace configuration; authenticated Sales/Admin users may create and edit them, but deleting a segment is Admin-only because it removes membership rows workspace-wide. Segment membership reads/evaluations and reported counts are restricted to Customers created by the Sales actor. Segment creator/updater and membership assignment identities always come from JWT.
+- Actor identity for conversion and audit comes from the validated JWT, never from a client-supplied user ID.
+- Future team-sharing or reassignment policies must be explicit backend policies and audited; UI filtering does not grant access.
+
 ### Lead qualification and review
 
 - If `confidence <= 0.80`, backend creates or reuses exactly one pending `ReviewTask`.

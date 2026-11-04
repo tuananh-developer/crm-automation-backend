@@ -29,7 +29,7 @@ export class CreateConversationTables1728500000000 implements MigrationInterface
 
       CREATE TABLE IF NOT EXISTS "conversation_summaries" (
         "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        "transcript_id" UUID NOT NULL,
+        "transcript_id" UUID NOT NULL UNIQUE,
         "summary_text" TEXT NOT NULL,
         "sentiment" VARCHAR(30),
         "intent" VARCHAR(100),
@@ -37,10 +37,11 @@ export class CreateConversationTables1728500000000 implements MigrationInterface
         "raw_ai_output" JSONB,
         "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
         "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT "UQ_summaries_transcript" UNIQUE ("transcript_id"),
         CONSTRAINT "FK_summaries_transcript" FOREIGN KEY ("transcript_id") REFERENCES "conversation_transcripts"("id") ON DELETE CASCADE
       );
 
-      CREATE INDEX IF NOT EXISTS "idx_summaries_transcript_id" ON "conversation_summaries" ("transcript_id");
+      CREATE UNIQUE INDEX IF NOT EXISTS "idx_summaries_transcript_id" ON "conversation_summaries" ("transcript_id");
 
       CREATE TABLE IF NOT EXISTS "conversation_action_items" (
         "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),

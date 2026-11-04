@@ -2,12 +2,13 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import {
   ConversationTranscript,
   TranscriptProcessingStatus,
@@ -64,6 +65,7 @@ export class ConversationsService {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
 
+    private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
   ) {}
 
@@ -250,14 +252,31 @@ export class ConversationsService {
       timestamp: new Date().toISOString(),
     };
 
+    const apiKey =
+      this.configService.get<string>('N8N_API_KEY') ||
+      this.configService.get<string>('N8N_WEBHOOK_SECRET');
+
+    if (!apiKey) {
+      const message =
+        'N8N_API_KEY is not configured; cannot securely dispatch to n8n (Fail-Closed)';
+      this.logger.error(message);
+      await this.workflowRunsRepository.update(workflowRunId, {
+        status: WorkflowStatus.FAILED,
+        errorMessage: message,
+        finishedAt: new Date(),
+      });
+      await this.transcriptsRepository.update(transcriptId, {
+        processingStatus: TranscriptProcessingStatus.FAILED,
+      });
+      throw new InternalServerErrorException(message);
+    }
+
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-N8N-API-KEY':
-            this.configService.get<string>('N8N_API_KEY') ||
-            'crm-automation-n8n-secret-key',
+          'X-N8N-API-KEY': apiKey,
         },
         body: JSON.stringify(payload),
       });
@@ -349,17 +368,83 @@ export class ConversationsService {
       throw new NotFoundException(`Transcript ${dto.transcriptId} not found`);
     }
 
-    const isSuccess = dto.status === 'SUCCESS';
-    transcript.processingStatus = isSuccess
-      ? TranscriptProcessingStatus.COMPLETED
-      : TranscriptProcessingStatus.FAILED;
-    await this.transcriptsRepository.save(transcript);
-
-    // Update WorkflowRun
     const workflowRun = await this.workflowRunsRepository.findOne({
       where: { id: dto.workflowRunId },
     });
-    if (workflowRun) {
+    if (!workflowRun) {
+      throw new NotFoundException(`WorkflowRun ${dto.workflowRunId} not found`);
+    }
+
+    // Correlation check: transcript must match workflowRun
+    if (
+      transcript.workflowRunId &&
+      transcript.workflowRunId !== workflowRun.id
+    ) {
+      throw new BadRequestException(
+        'WorkflowRun ID does not match transcript correlation',
+      );
+    }
+
+    // Correlation check: workflowName must be t12-wf09-conversation-summarizer
+    if (workflowRun.workflowName !== 't12-wf09-conversation-summarizer') {
+      throw new BadRequestException(
+        `WorkflowRun ${workflowRun.id} belongs to ${workflowRun.workflowName}, expected t12-wf09-conversation-summarizer`,
+      );
+    }
+
+    // Correlation check: customer alignment
+    if (
+      workflowRun.customerId &&
+      transcript.customerId &&
+      workflowRun.customerId !== transcript.customerId
+    ) {
+      throw new BadRequestException(
+        'WorkflowRun customer does not match transcript customer',
+      );
+    }
+
+    // Correlation check: lead alignment
+    if (
+      workflowRun.leadId &&
+      transcript.leadId &&
+      workflowRun.leadId !== transcript.leadId
+    ) {
+      throw new BadRequestException(
+        'WorkflowRun lead does not match transcript lead',
+      );
+    }
+
+    const isSuccess = dto.status === 'SUCCESS';
+
+    // Idempotency: If already succeeded and summary exists, return existing summary
+    if (isSuccess) {
+      const existingSummary = await this.summariesRepository.findOne({
+        where: { transcriptId: transcript.id },
+        relations: { actionItems: true },
+      });
+      if (existingSummary) {
+        this.logger.log(
+          `Summary already exists for transcript ${transcript.id}; returning existing idempotent result`,
+        );
+        return {
+          success: true,
+          transcriptId: transcript.id,
+          summaryId: existingSummary.id,
+          ownerId: transcript.createdBy,
+          createdBy: transcript.createdBy,
+          actionItemCount: existingSummary.actionItems?.length || 0,
+          processingStatus: transcript.processingStatus,
+        };
+      }
+    }
+
+    // Persist callback updates atomically in a single transaction
+    return await this.dataSource.transaction(async (manager) => {
+      transcript.processingStatus = isSuccess
+        ? TranscriptProcessingStatus.COMPLETED
+        : TranscriptProcessingStatus.FAILED;
+      await manager.save(transcript);
+
       workflowRun.status = isSuccess
         ? WorkflowStatus.SUCCESS
         : WorkflowStatus.FAILED;
@@ -380,75 +465,94 @@ export class ConversationsService {
             errorMessage: dto.errorMessage,
             rawAIOutput: dto.rawAIOutput,
           };
-      await this.workflowRunsRepository.save(workflowRun);
-    }
+      await manager.save(workflowRun);
 
-    if (!isSuccess) {
+      if (!isSuccess) {
+        return {
+          success: false,
+          transcriptId: transcript.id,
+          status: transcript.processingStatus,
+          errorMessage: workflowRun.errorMessage,
+        };
+      }
+
+      // Check concurrency in case another callback inserted summary
+      let summary = await manager.findOne(ConversationSummary, {
+        where: { transcriptId: transcript.id },
+      });
+      if (!summary) {
+        summary = manager.create(ConversationSummary, {
+          transcriptId: transcript.id,
+          summaryText: dto.summaryText ?? '',
+          sentiment: dto.sentiment ?? 'NEUTRAL',
+          intent: dto.intent ?? 'Account check-in / Commercial update',
+          keyPoints: dto.keyPoints || [],
+          rawAIOutput: dto.rawAIOutput ?? null,
+        });
+        summary = await manager.save(summary);
+      }
+
+      // Persist ConversationActionItems if provided in callback (deduplicated by title)
+      const existingItems = await manager.find(ConversationActionItem, {
+        where: { summaryId: summary.id },
+      });
+      const existingTitles = new Set(
+        existingItems.map((i) => (i.title || '').trim().toLowerCase()),
+      );
+      const savedItems: ConversationActionItem[] = [];
+
+      if (Array.isArray(dto.actionItems) && dto.actionItems.length > 0) {
+        for (const item of dto.actionItems) {
+          const normalizedTitle = (item.title || '').trim().toLowerCase();
+          if (!normalizedTitle || existingTitles.has(normalizedTitle)) {
+            continue;
+          }
+          existingTitles.add(normalizedTitle);
+
+          const actionItem = manager.create(ConversationActionItem, {
+            summaryId: summary.id,
+            title: item.title,
+            assignedTo: item.assignedTo ?? transcript.createdBy ?? null,
+            dueAt: item.dueAt ? new Date(item.dueAt) : null,
+            status:
+              (item.status as ActionItemStatus) || ActionItemStatus.PENDING,
+            approvalState:
+              (item.approvalState as ActionItemApprovalState) ||
+              ActionItemApprovalState.PROPOSED,
+          });
+          savedItems.push(await manager.save(actionItem));
+        }
+      }
+
+      // Create an in-app notification for the transcript creator
+      if (transcript.createdBy) {
+        try {
+          const notification = manager.create(Notification, {
+            userId: transcript.createdBy,
+            type: NotificationType.CONVERSATION_SUMMARY_READY,
+            title: 'Conversation Summary Ready',
+            content: `AI has generated summary and ${savedItems.length} proposed action item(s) for your ${transcript.sourceType.toLowerCase()}.`,
+            customerId: transcript.customerId,
+            leadId: transcript.leadId,
+          });
+          await manager.save(notification);
+        } catch (err: unknown) {
+          this.logger.warn(
+            `Could not save notification: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
       return {
-        success: false,
+        success: true,
         transcriptId: transcript.id,
-        status: transcript.processingStatus,
-        errorMessage: workflowRun?.errorMessage ?? dto.errorMessage,
+        summaryId: summary.id,
+        ownerId: transcript.createdBy,
+        createdBy: transcript.createdBy,
+        actionItemCount: savedItems.length + existingItems.length,
+        processingStatus: transcript.processingStatus,
       };
-    }
-
-    // Persist ConversationSummary for SUCCESS
-    const summary = this.summariesRepository.create({
-      transcriptId: transcript.id,
-      summaryText: dto.summaryText ?? '',
-      sentiment: dto.sentiment ?? 'NEUTRAL',
-      intent: dto.intent ?? 'Account check-in / Commercial update',
-      keyPoints: dto.keyPoints || [],
-      rawAIOutput: dto.rawAIOutput ?? null,
     });
-    const savedSummary = await this.summariesRepository.save(summary);
-
-    // Persist ConversationActionItems if provided in callback
-    const savedItems: ConversationActionItem[] = [];
-    if (Array.isArray(dto.actionItems) && dto.actionItems.length > 0) {
-      for (const item of dto.actionItems) {
-        const actionItem = this.actionItemsRepository.create({
-          summaryId: savedSummary.id,
-          title: item.title,
-          assignedTo: item.assignedTo ?? transcript.createdBy ?? null,
-          dueAt: item.dueAt ? new Date(item.dueAt) : null,
-          status: (item.status as ActionItemStatus) || ActionItemStatus.PENDING,
-          approvalState:
-            (item.approvalState as ActionItemApprovalState) ||
-            ActionItemApprovalState.PROPOSED,
-        });
-        savedItems.push(await this.actionItemsRepository.save(actionItem));
-      }
-    }
-
-    // Create an in-app notification for the transcript creator
-    if (transcript.createdBy) {
-      try {
-        const notification = this.notificationsRepository.create({
-          userId: transcript.createdBy,
-          type: NotificationType.CONVERSATION_SUMMARY_READY,
-          title: 'Conversation Summary Ready',
-          content: `AI has generated summary and ${savedItems.length} proposed action item(s) for your ${transcript.sourceType.toLowerCase()}.`,
-          customerId: transcript.customerId,
-          leadId: transcript.leadId,
-        });
-        await this.notificationsRepository.save(notification);
-      } catch (err: unknown) {
-        this.logger.warn(
-          `Could not save notification: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-
-    return {
-      success: true,
-      transcriptId: transcript.id,
-      summaryId: savedSummary.id,
-      ownerId: transcript.createdBy,
-      createdBy: transcript.createdBy,
-      actionItemCount: savedItems.length,
-      processingStatus: transcript.processingStatus,
-    };
   }
 
   async updateInternalRedactedContent(
@@ -484,9 +588,22 @@ export class ConversationsService {
       throw new NotFoundException(`Summary ${summaryId} not found`);
     }
 
+    const existingItems = await this.actionItemsRepository.find({
+      where: { summaryId: summary.id },
+    });
+    const existingTitles = new Set(
+      existingItems.map((i) => (i.title || '').trim().toLowerCase()),
+    );
+
     const savedItems: ConversationActionItem[] = [];
     if (Array.isArray(dto.actionItems)) {
       for (const item of dto.actionItems) {
+        const normalizedTitle = (item.title || '').trim().toLowerCase();
+        if (!normalizedTitle || existingTitles.has(normalizedTitle)) {
+          continue;
+        }
+        existingTitles.add(normalizedTitle);
+
         const actionItem = this.actionItemsRepository.create({
           summaryId: summary.id,
           title: item.title,
