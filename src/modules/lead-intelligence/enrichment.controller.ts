@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -33,13 +34,14 @@ import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { EnrichmentMapper } from './mappers/index.js';
 
 @ApiTags('Lead Enrichment')
-@Controller('enrichment')
+@Controller(['leads', 'enrichment', 'internal/n8n/lead-enrichment'])
 export class EnrichmentController {
   constructor(
     private readonly leadIntelligenceService: LeadIntelligenceService,
   ) {}
 
   @Get('mock-enrichment')
+  @UseGuards(N8nAuthGuard)
   @ApiOperation({
     summary: 'Mock external enrichment service for testing & n8n',
     description:
@@ -78,6 +80,11 @@ export class EnrichmentController {
     @Query('provider') provider?: string,
     @Query('fail') fail?: string,
   ): MockEnrichmentResponseDto {
+    if (process.env.NODE_ENV === 'production') {
+      throw new ForbiddenException(
+        'Mock enrichment endpoint is disabled in production',
+      );
+    }
     return this.leadIntelligenceService.mockEnrichment({
       domain,
       email,
@@ -86,11 +93,12 @@ export class EnrichmentController {
     });
   }
 
-  @Post('trigger/:leadId')
+  @Post([':leadId/enrichments', 'trigger/:leadId'])
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
-    summary: 'Trigger AI Lead Enrichment (UC03)',
+    summary:
+      'Trigger AI Lead Enrichment (UC03 - Canonical route: POST /api/v1/leads/:leadId/enrichments)',
     description:
       'Initiates AI lead enrichment workflow, creates WorkflowRun and LeadEnrichment records in PENDING state, and publishes lead.enrichment.requested to RabbitMQ.',
   })
@@ -109,7 +117,7 @@ export class EnrichmentController {
     return this.leadIntelligenceService.triggerEnrichment(leadId, dto, actor);
   }
 
-  @Post('callback')
+  @Post(['callback', '/internal/n8n/lead-enrichment/callback'])
   @UseGuards(N8nAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -138,9 +146,12 @@ export class EnrichmentController {
     return EnrichmentMapper.toCallbackResponseDto(result);
   }
 
-  @Get('lead/:leadId')
+  @Get([':leadId/enrichments', 'lead/:leadId'])
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Get all enrichment history for a lead' })
+  @ApiOperation({
+    summary:
+      'Get all enrichment history for a lead (canonical: GET /api/v1/leads/:leadId/enrichments)',
+  })
   @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
   @ApiResponse({
     status: 200,
@@ -158,9 +169,12 @@ export class EnrichmentController {
     return EnrichmentMapper.toResponseDtoList(records);
   }
 
-  @Get('lead/:leadId/latest')
+  @Get([':leadId/enrichments/latest', 'lead/:leadId/latest'])
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Get latest enrichment result for a lead' })
+  @ApiOperation({
+    summary:
+      'Get latest enrichment result for a lead (canonical: GET /api/v1/leads/:leadId/enrichments/latest)',
+  })
   @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
   @ApiResponse({
     status: 200,
@@ -182,7 +196,7 @@ export class EnrichmentController {
     return record ? EnrichmentMapper.toResponseDto(record) : null;
   }
 
-  @Get('lead/:leadId/internal')
+  @Get([':leadId/enrichments/internal', 'lead/:leadId/internal'])
   @UseGuards(N8nAuthGuard)
   @ApiOperation({
     summary: 'Internal service: Get all enrichment history for a lead',
@@ -196,7 +210,7 @@ export class EnrichmentController {
     return EnrichmentMapper.toResponseDtoList(records);
   }
 
-  @Get('lead/:leadId/latest/internal')
+  @Get([':leadId/enrichments/latest/internal', 'lead/:leadId/latest/internal'])
   @UseGuards(N8nAuthGuard)
   @ApiOperation({
     summary: 'Internal service: Get latest enrichment result for a lead',

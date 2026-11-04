@@ -3,6 +3,8 @@ import type { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { ScoreLabel } from './enums/lead-intelligence.enum.js';
 import type { LeadScore } from './entities/lead-score.entity.js';
 import type { ScoringCallbackDto } from './dto/scoring-callback.dto.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('ScoringController', () => {
   let controller: ScoringController;
@@ -22,6 +24,17 @@ describe('ScoringController', () => {
     inputSnapshot: {},
     outputSnapshot: {},
     createdAt: new Date(),
+  };
+
+  const mockActor: AuthenticatedUser = {
+    id: 'user-123',
+    name: 'Test Sales Rep',
+    email: 'rep@example.com',
+    role: UserRole.SALES_REP,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
   };
 
   beforeEach(() => {
@@ -52,8 +65,23 @@ describe('ScoringController', () => {
   it('should trigger scoring via service', async () => {
     const result = await controller.triggerScoring('lead-123');
 
-    expect(service.triggerScoring).toHaveBeenCalledWith('lead-123', undefined);
+    expect(service.triggerScoring).toHaveBeenCalledWith(
+      'lead-123',
+      undefined,
+      undefined,
+    );
     expect(result.workflowRunId).toBe('wf-run-123');
+  });
+
+  it('should pass authenticated actor when triggering scoring', async () => {
+    const dto = { userId: 'client-user' };
+    await controller.triggerScoring('lead-123', dto, mockActor);
+
+    expect(service.triggerScoring).toHaveBeenCalledWith(
+      'lead-123',
+      dto,
+      mockActor,
+    );
   });
 
   it('should handle scoring callback via service', async () => {
@@ -76,14 +104,17 @@ describe('ScoringController', () => {
   it('should return scoring context', async () => {
     const result = await controller.getScoringContext('lead-123');
 
-    expect(service.getScoringContext).toHaveBeenCalledWith('lead-123');
+    expect(service.getScoringContext).toHaveBeenCalledWith(
+      'lead-123',
+      undefined,
+    );
     expect(result.lead.id).toBe('lead-123');
   });
 
   it('should return score history', async () => {
     const result = await controller.getScores('lead-123');
 
-    expect(service.getScoresByLead).toHaveBeenCalledWith('lead-123');
+    expect(service.getScoresByLead).toHaveBeenCalledWith('lead-123', undefined);
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('score-123');
   });
@@ -91,7 +122,7 @@ describe('ScoringController', () => {
   it('should return latest score', async () => {
     const result = await controller.getLatestScore('lead-123');
 
-    expect(service.getLatestScore).toHaveBeenCalledWith('lead-123');
+    expect(service.getLatestScore).toHaveBeenCalledWith('lead-123', undefined);
     expect(result?.label).toBe(ScoreLabel.HOT);
   });
 });

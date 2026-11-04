@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
@@ -969,6 +970,36 @@ describe('LeadIntelligenceService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
+    it('should throw NotFoundException if workflowRun does not exist', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.handleEnrichmentCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'unknown-wf-run',
+          status: EnrichmentStatus.SUCCESS,
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw BadRequestException if workflowRun does not match expected lead or workflowName', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'different-workflow',
+        leadId: 'lead-123',
+      });
+
+      await expect(
+        service.handleEnrichmentCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: EnrichmentStatus.SUCCESS,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it('should update LeadEnrichment to SUCCESS, update WorkflowRun to SUCCESS, and update lead profile fields', async () => {
       const currentLead = { ...mockLead, companyWebsite: null };
       (leadsRepo.findOne as jest.Mock).mockResolvedValue(currentLead);
@@ -1103,6 +1134,7 @@ describe('LeadIntelligenceService', () => {
       (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
       (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
         ...mockWorkflowRun,
+        workflowName: 'lead-enrichment',
         status: WorkflowStatus.SUCCESS,
       });
       (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue({
@@ -1136,6 +1168,7 @@ describe('LeadIntelligenceService', () => {
       );
       (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
         ...mockWorkflowRun,
+        workflowName: 'lead-enrichment',
         status: WorkflowStatus.PENDING,
       });
       (workflowRunsRepo.save as jest.Mock).mockImplementation((w) =>
@@ -1183,6 +1216,7 @@ describe('LeadIntelligenceService', () => {
       const mockWfRepo = {
         findOne: jest.fn().mockResolvedValue({
           ...mockWorkflowRun,
+          workflowName: 'lead-enrichment',
           status: WorkflowStatus.PENDING,
         }),
         save: jest.fn().mockImplementation((w) => Promise.resolve(w)),

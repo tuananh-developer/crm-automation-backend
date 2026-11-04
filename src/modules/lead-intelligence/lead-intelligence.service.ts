@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -97,7 +99,7 @@ export class LeadIntelligenceService {
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 'lead-qualification',
       leadId: lead.id,
-      triggeredByUserId: dto?.userId ?? null,
+      triggeredByUserId: actor?.id ?? dto?.userId ?? null,
       status: WorkflowStatus.PENDING,
       startedAt: new Date(),
       inputPayload: {
@@ -368,7 +370,7 @@ export class LeadIntelligenceService {
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 'lead-enrichment',
       leadId: lead.id,
-      triggeredByUserId: dto?.userId ?? null,
+      triggeredByUserId: actor?.id ?? dto?.userId ?? null,
       status: WorkflowStatus.PENDING,
       startedAt: new Date(),
       inputPayload: {
@@ -447,11 +449,25 @@ export class LeadIntelligenceService {
       dto.linkedInUrl ?? dto.contactLinkedinUrl ?? null;
     const companySize = dto.companySize ?? null;
 
-    // ── Idempotency Check ───────────────────────────────────────────────────
+    // ── WorkflowRun Verification & Idempotency Check ────────────────────────
     if (dto.workflowRunId) {
       const existingRun = await this.workflowRunsRepository.findOne({
         where: { id: dto.workflowRunId },
       });
+      if (!existingRun) {
+        throw new NotFoundException(
+          `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+        );
+      }
+      if (
+        existingRun.workflowName !== 'lead-enrichment' ||
+        existingRun.leadId !== dto.leadId
+      ) {
+        throw new BadRequestException(
+          `WorkflowRun '${dto.workflowRunId}' does not belong to lead '${dto.leadId}' or is not a lead-enrichment workflow`,
+        );
+      }
+
       const existingEnrichment = await this.enrichmentsRepository.findOne({
         where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
       });
@@ -459,7 +475,6 @@ export class LeadIntelligenceService {
       if (
         existingEnrichment &&
         existingEnrichment.status !== EnrichmentStatus.PENDING &&
-        existingRun &&
         (existingRun.status === WorkflowStatus.SUCCESS ||
           existingRun.status === WorkflowStatus.FAILED)
       ) {
@@ -635,6 +650,12 @@ export class LeadIntelligenceService {
     provider?: string;
     fail?: string;
   }) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new ForbiddenException(
+        'Mock enrichment endpoint is not available in production',
+      );
+    }
+
     if (query.fail === 'true' || query.domain === 'fail-retry.test') {
       throw new InternalServerErrorException(
         'Simulated external enrichment service failure (for retry testing)',
@@ -1077,7 +1098,7 @@ export class LeadIntelligenceService {
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 'lead-scoring',
       leadId: lead.id,
-      triggeredByUserId: dto?.userId ?? null,
+      triggeredByUserId: actor?.id ?? dto?.userId ?? null,
       status: WorkflowStatus.PENDING,
       startedAt: new Date(),
       inputPayload: {

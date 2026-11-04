@@ -1,8 +1,9 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { NotificationsService } from './notifications.service.js';
 import { NotificationType } from './enums/notification.enum.js';
 import type { Repository } from 'typeorm';
 import type { Notification } from './entities/notification.entity.js';
+import type { Lead } from '../leads/entities/lead.entity.js';
 
 describe('NotificationsService', () => {
   let service: NotificationsService;
@@ -153,5 +154,51 @@ describe('NotificationsService', () => {
     expect(result.isRead).toBe(false);
     expect(result.readAt).toBeNull();
     expect(result.type).toBe(NotificationType.FOLLOW_UP_FAILED);
+  });
+
+  it('resolves recipient userId from lead owner when userId is omitted', async () => {
+    const leadsRepo = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'lead-1', ownerId: 'owner-user-1' }),
+    };
+    const serviceWithLeads = new NotificationsService(
+      notificationRepository as Repository<Notification>,
+      undefined,
+      leadsRepo as unknown as Repository<Lead>,
+    );
+    (notificationRepository.create as jest.Mock).mockImplementation(
+      (input: Partial<Notification>) => input as Notification,
+    );
+    (notificationRepository.save as jest.Mock).mockImplementation(
+      (notification: Notification) => Promise.resolve(notification),
+    );
+
+    const result = await serviceWithLeads.create({
+      type: NotificationType.WORKFLOW_COMPLETED,
+      title: 'Lead Enrichment Incomplete',
+      leadId: 'lead-1',
+    });
+
+    expect(result.userId).toBe('owner-user-1');
+  });
+
+  it('throws BadRequestException when userId is omitted and lead has no owner', async () => {
+    const leadsRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: 'lead-1', ownerId: null }),
+    };
+    const serviceWithLeads = new NotificationsService(
+      notificationRepository as Repository<Notification>,
+      undefined,
+      leadsRepo as unknown as Repository<Lead>,
+    );
+
+    await expect(
+      serviceWithLeads.create({
+        type: NotificationType.WORKFLOW_COMPLETED,
+        title: 'Lead Enrichment Incomplete',
+        leadId: 'lead-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

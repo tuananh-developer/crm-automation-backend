@@ -88,18 +88,9 @@ export class NotificationsService {
       }
     }
 
-    if (!targetUserId && this.usersRepository) {
-      const fallbackUser = await this.usersRepository.findOne({
-        order: { createdAt: 'ASC' },
-      });
-      if (fallbackUser) {
-        targetUserId = fallbackUser.id;
-      }
-    }
-
     if (!targetUserId) {
       throw new BadRequestException(
-        'Notification recipient userId is required',
+        'Notification recipient userId is required and could not be resolved from lead owner',
       );
     }
 

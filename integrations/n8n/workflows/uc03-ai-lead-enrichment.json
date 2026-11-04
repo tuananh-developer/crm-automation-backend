@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "queue": "lead.enrichment.queue",
+        "queue": "n8n.lead-enrichment.q",
         "options": {
           "arguments": {}
         }
@@ -43,7 +43,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -72,6 +72,19 @@
       "parameters": {
         "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/enrichment/mock-enrichment?domain=' + encodeURIComponent($json.domain) + '&email=' + encodeURIComponent($json.email) + '&provider=' + encodeURIComponent($json.provider) }}",
         "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
         "options": {
           "timeout": 15000,
           "retry": {
@@ -109,7 +122,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/enrichment/callback' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/internal/n8n/lead-enrichment/callback' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
@@ -120,7 +133,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -128,10 +141,13 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json) }}",
         "options": {
-          "timeout": 15000
+          "timeout": 15000,
+          "retry": {
+            "maxTries": 3,
+            "waitBetweenTries": 2000
+          }
         }
       },
-      "onError": "continueRegularOutput",
       "id": "node-8-enrichment-callback",
       "name": "HTTP Request: Enrichment Callback",
       "type": "n8n-nodes-base.httpRequest",
@@ -179,13 +195,13 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"userId\": \"{{ $('HTTP Request: Get Lead').item.json.ownerId || $('HTTP Request: Get Lead').item.json.createdBy || '00000000-0000-0000-0000-000000000001' }}\",\n  \"type\": \"WORKFLOW_COMPLETED\",\n  \"title\": \"Lead Enrichment Incomplete\",\n  \"message\": \"Lead enrichment ended with status: {{ $('Code: Validate Completeness').item.json.status }}. {{ $('Code: Validate Completeness').item.json.errorMessage || '' }}\",\n  \"severity\": \"{{ $('Code: Validate Completeness').item.json.status === 'FAILED' ? 'HIGH' : 'MEDIUM' }}\",\n  \"leadId\": \"{{ $('Code: Validate Completeness').item.json.leadId }}\"\n}",
+        "jsonBody": "={\n  \"type\": \"WORKFLOW_COMPLETED\",\n  \"title\": \"Lead Enrichment Incomplete\",\n  \"message\": \"Lead enrichment ended with status: {{ $('Code: Validate Completeness').item.json.status }}. {{ $('Code: Validate Completeness').item.json.errorMessage || '' }}\",\n  \"severity\": \"{{ $('Code: Validate Completeness').item.json.status === 'FAILED' ? 'HIGH' : 'MEDIUM' }}\",\n  \"leadId\": \"{{ $('Code: Validate Completeness').item.json.leadId }}\"{{ ($('HTTP Request: Get Lead').item.json.ownerId || $('HTTP Request: Get Lead').item.json.createdBy) ? ',\n  \"userId\": \"' + ($('HTTP Request: Get Lead').item.json.ownerId || $('HTTP Request: Get Lead').item.json.createdBy) + '\"' : '' }}\n}",
         "options": {
           "timeout": 10000
         }

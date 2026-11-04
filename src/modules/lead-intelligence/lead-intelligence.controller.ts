@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -167,6 +168,7 @@ export class LeadIntelligenceController {
   }
 
   @Get('mock-enrichment')
+  @UseGuards(N8nAuthGuard)
   @ApiOperation({
     summary: 'Mock external enrichment service for testing & n8n',
     description:
@@ -205,6 +207,11 @@ export class LeadIntelligenceController {
     @Query('provider') provider?: string,
     @Query('fail') fail?: string,
   ): MockEnrichmentResponseDto {
+    if (process.env.NODE_ENV === 'production') {
+      throw new ForbiddenException(
+        'Mock enrichment endpoint is disabled in production',
+      );
+    }
     return this.leadIntelligenceService.mockEnrichment({
       domain,
       email,

@@ -2,6 +2,8 @@ import { EnrichmentController } from './enrichment.controller.js';
 import type { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { EnrichmentStatus } from './enums/lead-intelligence.enum.js';
 import type { LeadEnrichment } from './entities/lead-enrichment.entity.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('EnrichmentController', () => {
   let controller: EnrichmentController;
@@ -24,6 +26,17 @@ describe('EnrichmentController', () => {
     errorMessage: null,
     enrichedAt: new Date(),
     createdAt: new Date(),
+  };
+
+  const mockActor: AuthenticatedUser = {
+    id: 'user-123',
+    name: 'Test Sales Rep',
+    email: 'rep@example.com',
+    role: UserRole.SALES_REP,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
   };
 
   beforeEach(() => {
@@ -70,10 +83,25 @@ describe('EnrichmentController', () => {
       provider: 'clearbit',
     });
 
-    expect(service.triggerEnrichment).toHaveBeenCalledWith('lead-123', {
-      provider: 'clearbit',
-    });
+    expect(service.triggerEnrichment).toHaveBeenCalledWith(
+      'lead-123',
+      {
+        provider: 'clearbit',
+      },
+      undefined,
+    );
     expect(result.workflowRunId).toBe('wf-run-123');
+  });
+
+  it('should pass authenticated actor when triggering enrichment', async () => {
+    const dto = { provider: 'clearbit' };
+    await controller.triggerEnrichment('lead-123', dto, mockActor);
+
+    expect(service.triggerEnrichment).toHaveBeenCalledWith(
+      'lead-123',
+      dto,
+      mockActor,
+    );
   });
 
   it('should handle enrichment callback via service', async () => {
@@ -112,14 +140,43 @@ describe('EnrichmentController', () => {
   it('should get all enrichments for a lead via service', async () => {
     const result = await controller.getEnrichmentsByLead('lead-123');
 
-    expect(service.getEnrichmentsByLead).toHaveBeenCalledWith('lead-123');
+    expect(service.getEnrichmentsByLead).toHaveBeenCalledWith(
+      'lead-123',
+      undefined,
+    );
     expect(result).toHaveLength(1);
   });
 
   it('should get latest enrichment for a lead via service', async () => {
     const result = await controller.getLatestEnrichment('lead-123');
 
-    expect(service.getLatestEnrichment).toHaveBeenCalledWith('lead-123');
+    expect(service.getLatestEnrichment).toHaveBeenCalledWith(
+      'lead-123',
+      undefined,
+    );
     expect(result?.id).toBe('enrich-123');
+  });
+
+  describe('Authorization and Route Metadata', () => {
+    /* eslint-disable @typescript-eslint/unbound-method */
+    it('should configure dual route paths for handleCallback endpoint', () => {
+      const path = Reflect.getMetadata(
+        'path',
+        EnrichmentController.prototype.handleCallback,
+      );
+      expect(path).toEqual([
+        'callback',
+        '/internal/n8n/lead-enrichment/callback',
+      ]);
+    });
+
+    it('should configure dual route paths for triggerEnrichment endpoint', () => {
+      const path = Reflect.getMetadata(
+        'path',
+        EnrichmentController.prototype.triggerEnrichment,
+      );
+      expect(path).toEqual([':leadId/enrichments', 'trigger/:leadId']);
+    });
+    /* eslint-enable @typescript-eslint/unbound-method */
   });
 });
