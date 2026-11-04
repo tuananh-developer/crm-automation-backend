@@ -30,7 +30,7 @@ describe('ScoringController', () => {
     id: 'user-123',
     name: 'Test Sales Rep',
     email: 'rep@example.com',
-    role: UserRole.SALES_REP,
+    role: UserRole.SALES,
     status: UserStatus.ACTIVE,
     lastLoginAt: null,
     createdAt: new Date(),

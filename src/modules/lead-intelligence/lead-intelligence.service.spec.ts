@@ -1251,7 +1251,12 @@ describe('LeadIntelligenceService', () => {
       );
 
       (leadsRepo.findOne as jest.Mock).mockResolvedValue(currentLead);
-      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(null);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'lead-enrichment',
+        leadId: 'lead-123',
+        status: WorkflowStatus.PENDING,
+      });
       (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue(null);
 
       const result = await transactionalService.handleEnrichmentCallback({
