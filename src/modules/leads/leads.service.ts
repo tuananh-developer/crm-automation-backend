@@ -219,6 +219,11 @@ export class LeadsService {
     return LeadMapper.toResponseDto(lead);
   }
 
+  async findOneInternal(id: string): Promise<LeadResponseDto> {
+    const lead = await this.findLeadEntity(id);
+    return LeadMapper.toResponseDto(lead);
+  }
+
   async findLeadEntity(id: string): Promise<Lead> {
     const lead = await this.leadsRepository.findOne({
       where: { id },

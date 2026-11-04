@@ -18,6 +18,8 @@ import {
 } from '@nestjs/swagger';
 import { LeadIntelligenceService } from './lead-intelligence.service.js';
 import {
+  EvaluateScoringPolicyDto,
+  EvaluateScoringPolicyResponseDto,
   ScoringCallbackDto,
   ScoringCallbackResponseDto,
   ScoringContextResponseDto,
@@ -26,10 +28,12 @@ import {
   TriggerScoringResponseDto,
 } from './dto/index.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { ScoringMapper } from './mappers/index.js';
 
 @ApiTags('Lead Intelligence')
-@Controller(['lead-intelligence', 'scoring'])
+@Controller(['lead-intelligence', 'scoring', 'internal/n8n/lead-scoring'])
 export class ScoringController {
   constructor(
     private readonly leadIntelligenceService: LeadIntelligenceService,
@@ -53,11 +57,33 @@ export class ScoringController {
   async triggerScoring(
     @Param('leadId', ParseUUIDPipe) leadId: string,
     @Body() dto?: TriggerScoringDto,
+    @CurrentUser() actor?: AuthenticatedUser,
   ): Promise<TriggerScoringResponseDto> {
-    return this.leadIntelligenceService.triggerScoring(leadId, dto);
+    return this.leadIntelligenceService.triggerScoring(leadId, dto, actor);
   }
 
-  @Post(['scoring/callback', 'callback'])
+  @Post(['evaluate-policy', 'scoring/evaluate-policy'])
+  @UseGuards(N8nAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Evaluate Canonical Lead Scoring Policy (UC04)',
+    description:
+      'Authoritative backend policy evaluating scoring features, returning canonical 0-100 score, label (HOT/WARM/COLD), and policy version.',
+  })
+  @ApiBody({ type: EvaluateScoringPolicyDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Scoring policy evaluated successfully.',
+    type: EvaluateScoringPolicyResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized n8n request.' })
+  async evaluatePolicy(
+    @Body() dto: EvaluateScoringPolicyDto,
+  ): Promise<EvaluateScoringPolicyResponseDto> {
+    return this.leadIntelligenceService.evaluateScoringPolicy(dto);
+  }
+
+  @Post(['scoring/callback', 'callback', '/internal/n8n/lead-scoring/callback'])
   @UseGuards(N8nAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -82,6 +108,27 @@ export class ScoringController {
     const result =
       await this.leadIntelligenceService.handleScoringCallback(dto);
     return ScoringMapper.toCallbackResponseDto(result);
+  }
+
+  @Get(['scoring/context/:leadId/internal', 'context/:leadId/internal'])
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal endpoint to get scoring context for n8n workflows',
+  })
+  @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
+  @ApiResponse({
+    status: 200,
+    description: 'Aggregated scoring context details.',
+    type: ScoringContextResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized n8n request.' })
+  @ApiResponse({ status: 404, description: 'Lead not found.' })
+  async getScoringContextInternal(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<ScoringContextResponseDto> {
+    const context =
+      await this.leadIntelligenceService.getScoringContext(leadId);
+    return ScoringMapper.toContextResponseDto(context);
   }
 
   @Get(['scoring/context/:leadId', 'context/:leadId'])

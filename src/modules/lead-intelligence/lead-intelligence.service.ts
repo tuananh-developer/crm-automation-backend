@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -24,9 +25,12 @@ import {
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { ReviewStatus } from '../review/enums/review.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   computeScoreLabel,
   EnrichmentCallbackDto,
+  EvaluateScoringPolicyDto,
+  EvaluateScoringPolicyResponseDto,
   QualificationCallbackDto,
   ScoringCallbackDto,
   TriggerEnrichmentDto,
@@ -804,6 +808,169 @@ export class LeadIntelligenceService {
   }
 
   /**
+   * Evaluates the canonical lead scoring policy (UC04).
+   * Backend owns the authoritative 0-100 score, label thresholds, and policy version 1.0.
+   */
+  async evaluateScoringPolicy(
+    dto: EvaluateScoringPolicyDto,
+  ): Promise<EvaluateScoringPolicyResponseDto> {
+    const feat = dto.scoringFeatures || dto.features || {};
+
+    const baseScore =
+      typeof feat['baseScore'] === 'number' ? feat['baseScore'] : 20;
+    let profileFitPoints =
+      typeof feat['profileFitPoints'] === 'number'
+        ? feat['profileFitPoints']
+        : undefined;
+    let decisionMakerPoints =
+      typeof feat['decisionMakerPoints'] === 'number'
+        ? feat['decisionMakerPoints']
+        : undefined;
+    let qualificationPoints =
+      typeof feat['qualificationPoints'] === 'number'
+        ? feat['qualificationPoints']
+        : undefined;
+    let engagementPoints =
+      typeof feat['engagementPoints'] === 'number'
+        ? feat['engagementPoints']
+        : undefined;
+    let enrichmentBonus =
+      typeof feat['enrichmentBonus'] === 'number'
+        ? feat['enrichmentBonus']
+        : undefined;
+
+    const enrichObj =
+      typeof dto.enrich === 'object' && dto.enrich !== null
+        ? dto.enrich
+        : undefined;
+    const leadObj =
+      typeof dto.lead === 'object' && dto.lead !== null ? dto.lead : undefined;
+    const qualObj =
+      typeof dto.qual === 'object' && dto.qual !== null ? dto.qual : undefined;
+
+    // Deterministic calculation from raw context if feature points not pre-calculated
+    if (typeof profileFitPoints !== 'number') {
+      const companySize =
+        enrichObj?.['companySize'] ?? leadObj?.['companySize'];
+      if (typeof companySize === 'number') {
+        if (companySize >= 100) profileFitPoints = 20;
+        else if (companySize >= 20) profileFitPoints = 15;
+        else if (companySize >= 5) profileFitPoints = 10;
+        else profileFitPoints = 5;
+      } else if (leadObj?.['companyName'] || enrichObj?.['companyName']) {
+        profileFitPoints = 10;
+      } else {
+        profileFitPoints = 0;
+      }
+    }
+
+    if (typeof decisionMakerPoints !== 'number') {
+      const rawJobTitle =
+        enrichObj?.['contactJobTitle'] ?? leadObj?.['jobTitle'];
+      const jobTitle =
+        typeof rawJobTitle === 'string' ? rawJobTitle.toLowerCase() : '';
+      const decisionKeywords = [
+        'ceo',
+        'cto',
+        'cfo',
+        'coo',
+        'cmo',
+        'cio',
+        'vp',
+        'director',
+        'founder',
+        'owner',
+        'head of',
+        'lead',
+      ];
+      if (decisionKeywords.some((kw) => jobTitle.includes(kw))) {
+        decisionMakerPoints = 20;
+      } else if (jobTitle.length > 0) {
+        decisionMakerPoints = 10;
+      } else {
+        decisionMakerPoints = 0;
+      }
+    }
+
+    if (typeof qualificationPoints !== 'number') {
+      if (qualObj && qualObj['status'] === 'QUALIFIED') {
+        const conf =
+          typeof qualObj['confidence'] === 'number'
+            ? qualObj['confidence']
+            : 0.85;
+        qualificationPoints = Math.round(conf * 25);
+      } else if (qualObj && qualObj['status'] === 'DISQUALIFIED') {
+        qualificationPoints = -20;
+      } else if (qualObj && qualObj['status'] === 'NEEDS_REVIEW') {
+        qualificationPoints = 10;
+      } else {
+        qualificationPoints = 0;
+      }
+    }
+
+    if (typeof engagementPoints !== 'number') {
+      const count = Array.isArray(dto.interactions)
+        ? dto.interactions.length
+        : 0;
+      engagementPoints = Math.min(25, count * 8);
+    }
+
+    if (typeof enrichmentBonus !== 'number') {
+      enrichmentBonus = enrichObj && enrichObj['status'] === 'SUCCESS' ? 10 : 0;
+    }
+
+    const calculatedTotal =
+      baseScore +
+      profileFitPoints +
+      decisionMakerPoints +
+      qualificationPoints +
+      engagementPoints +
+      enrichmentBonus;
+
+    const canonicalScore = Math.max(
+      0,
+      Math.min(100, Math.round(calculatedTotal)),
+    );
+    const label = computeScoreLabel(canonicalScore);
+    const policyVersion = '1.0';
+
+    let reason: string;
+    if (label === ScoreLabel.HOT) {
+      reason = `[Canonical Policy - HOT ${canonicalScore}/100] High intent, executive decision authority, strong qualification, and verified profile fit.`;
+    } else if (label === ScoreLabel.WARM) {
+      reason = `[Canonical Policy - WARM ${canonicalScore}/100] Moderate engagement, reasonable profile fit, and active qualification signals.`;
+    } else {
+      reason = `[Canonical Policy - COLD ${canonicalScore}/100] Low engagement or incomplete business profile.`;
+    }
+
+    const breakdown: Record<string, number> = {
+      baseScore,
+      profileFitPoints,
+      decisionMakerPoints,
+      qualificationPoints,
+      engagementPoints,
+      enrichmentBonus,
+    };
+
+    return Promise.resolve({
+      score: canonicalScore,
+      label,
+      policyVersion,
+      reason,
+      breakdown,
+      scoringFeatures: {
+        ...feat,
+        ...breakdown,
+      },
+      modelInfo: {
+        provider: 'crm-scoring-policy',
+        model: 'deterministic-scoring-v1',
+        modelVersion: policyVersion,
+      },
+    });
+  }
+
+  /**
    * Trigger the AI lead scoring workflow:
    *  1. Aggregate comprehensive scoring context (Lead, latest Qualification, latest Enrichment, Interactions).
    *  2. Create a WorkflowRun record with status PENDING.
@@ -812,6 +979,7 @@ export class LeadIntelligenceService {
   async triggerScoring(
     leadId: string,
     dto?: TriggerScoringDto,
+    actor?: AuthenticatedUser,
   ): Promise<TriggerScoringResponseDto> {
     const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
     if (!lead) {
@@ -874,7 +1042,7 @@ export class LeadIntelligenceService {
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 'lead-scoring',
       leadId: lead.id,
-      triggeredByUserId: dto?.userId ?? null,
+      triggeredByUserId: actor?.id ?? dto?.userId ?? null,
       status: WorkflowStatus.PENDING,
       startedAt: new Date(),
       inputPayload: {
@@ -933,18 +1101,31 @@ export class LeadIntelligenceService {
       throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
     }
 
-    // ── Idempotency Check ───────────────────────────────────────────────────
+    // ── WorkflowRun Verification & Idempotency Check ────────────────────────
     if (dto.workflowRunId) {
       const existingRun = await this.workflowRunsRepository.findOne({
         where: { id: dto.workflowRunId },
       });
+      if (!existingRun) {
+        throw new NotFoundException(
+          `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+        );
+      }
+      if (
+        existingRun.workflowName !== 'lead-scoring' ||
+        existingRun.leadId !== dto.leadId
+      ) {
+        throw new BadRequestException(
+          `WorkflowRun '${dto.workflowRunId}' does not belong to lead '${dto.leadId}' or is not a lead-scoring workflow`,
+        );
+      }
+
       const existingScore = await this.scoresRepository.findOne({
         where: { workflowRunId: dto.workflowRunId },
       });
 
       if (
         existingScore &&
-        existingRun &&
         (existingRun.status === WorkflowStatus.SUCCESS ||
           existingRun.status === WorkflowStatus.FAILED)
       ) {
@@ -996,7 +1177,7 @@ export class LeadIntelligenceService {
         0,
         Math.min(100, Math.round(Number(rawScore) * 100) / 100),
       );
-      const label = dto.label || computeScoreLabel(normalizedScore);
+      const label = computeScoreLabel(normalizedScore);
 
       const modelInfoObj =
         typeof dto.modelInfo === 'object' && dto.modelInfo !== null

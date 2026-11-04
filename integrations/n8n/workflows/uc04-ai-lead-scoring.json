@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "queue": "lead.scoring.queue",
+        "queue": "n8n.lead-scoring.q",
         "options": {
           "arguments": {}
         }
@@ -12,7 +12,10 @@
       "name": "RabbitMQ Trigger",
       "type": "n8n-nodes-base.rabbitmqTrigger",
       "typeVersion": 1,
-      "position": [100, 300],
+      "position": [
+        100,
+        300
+      ],
       "credentials": {
         "rabbitmq": {
           "id": "EJyxO5a1fpGmbLj0",
@@ -22,17 +25,20 @@
     },
     {
       "parameters": {
-        "jsCode": "// 2. Code: Validate Event — validate lead ID and idempotency/correlation fields\nconst item = $input.first().json;\nlet payload = {};\n\nif (item.content) {\n  try {\n    payload = typeof item.content === 'string' ? JSON.parse(item.content) : item.content;\n  } catch (err) {\n    payload = {};\n  }\n} else {\n  payload = item;\n}\n\nif (payload && payload.type === 'Buffer' && Array.isArray(payload.data)) {\n  try {\n    payload = JSON.parse(Buffer.from(payload.data).toString('utf8'));\n  } catch (e) {}\n}\n\nconst eventData = payload.data || payload;\nconst leadId = eventData.leadId || payload.leadId || null;\nconst workflowRunId = eventData.workflowRunId || payload.workflowRunId || null;\n\nif (!leadId) {\n  throw new Error('Validation error: Missing leadId in RabbitMQ payload');\n}\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    eventData,\n    rawEvent: payload\n  }\n}];"
+        "jsCode": "// 2. Code: Validate Event — validate lead ID and idempotency/correlation fields\nconst item = $input.first().json;\nlet payload = {};\n\nif (item.content) {\n  try {\n    payload = typeof item.content === \"string\" ? JSON.parse(item.content) : item.content;\n  } catch (err) {\n    payload = {};\n  }\n} else {\n  payload = item;\n}\n\nif (payload && payload.type === \"Buffer\" && Array.isArray(payload.data)) {\n  try {\n    payload = JSON.parse(Buffer.from(payload.data).toString(\"utf8\"));\n  } catch (e) {}\n}\n\nconst eventData = payload.data || payload;\nconst leadId = eventData.leadId || payload.leadId || null;\nconst workflowRunId = eventData.workflowRunId || payload.workflowRunId || null;\n\nif (!leadId) {\n  throw new Error(\"Validation error: Missing leadId in RabbitMQ payload\");\n}\n\nif (!workflowRunId) {\n  throw new Error(\"Validation error: Missing workflowRunId in RabbitMQ payload\");\n}\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    eventData,\n    rawEvent: payload\n  }\n}];"
       },
       "id": "node-2-validate-event",
       "name": "Code: Validate Event",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [320, 300]
+      "position": [
+        320,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/leads/' + $json.leadId }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/leads/' + $json.leadId + '/internal' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -40,6 +46,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -52,11 +62,14 @@
       "name": "HTTP Request: Get Lead",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [540, 300]
+      "position": [
+        540,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/lead-intelligence/qualifications/' + $('Code: Validate Event').item.json.leadId + '/latest' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/lead-intelligence/qualifications/' + $('Code: Validate Event').item.json.leadId + '/latest/internal' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -64,6 +77,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -76,11 +93,14 @@
       "name": "HTTP Request: Get Latest Qualification",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [760, 300]
+      "position": [
+        760,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/enrichment/lead/' + $('Code: Validate Event').item.json.leadId + '/latest' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/enrichment/lead/' + $('Code: Validate Event').item.json.leadId + '/latest/internal' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -88,6 +108,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -100,11 +124,14 @@
       "name": "HTTP Request: Get Latest Enrichment",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [980, 300]
+      "position": [
+        980,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/scoring/context/' + $('Code: Validate Event').item.json.leadId }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/scoring/context/' + $('Code: Validate Event').item.json.leadId + '/internal' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -112,6 +139,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -124,58 +155,27 @@
       "name": "HTTP Request: Get Interactions",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1200, 300]
+      "position": [
+        1200,
+        300
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// 7. Code: Aggregate Features — build deterministic scoring features with documented weights and AI prompt\nconst eventMeta = $('Code: Validate Event').first().json;\nconst leadRes = $('HTTP Request: Get Lead').first().json;\nconst qualRes = $('HTTP Request: Get Latest Qualification').first().json;\nconst enrichRes = $('HTTP Request: Get Latest Enrichment').first().json;\nconst contextRes = $('HTTP Request: Get Interactions').first().json;\n\nconst lead = leadRes?.id ? leadRes : (eventMeta.eventData?.leadData || eventMeta.eventData?.lead || {});\nconst qual = qualRes?.status ? qualRes : (eventMeta.eventData?.qualificationData || eventMeta.eventData?.qualification || null);\nconst enrich = enrichRes?.id ? enrichRes : (eventMeta.eventData?.enrichmentData || eventMeta.eventData?.enrichment || null);\nconst interactions = Array.isArray(contextRes?.interactions) ? contextRes.interactions : (eventMeta.eventData?.interactions || []);\n\nconst leadId = eventMeta.leadId;\nconst workflowRunId = eventMeta.workflowRunId;\n\n// Calculate deterministic scoring feature points\nlet profileFitPoints = 0;\nconst companySize = enrich?.companySize ?? lead.companySize;\nif (typeof companySize === 'number') {\n  if (companySize >= 100) profileFitPoints = 20;\n  else if (companySize >= 20) profileFitPoints = 15;\n  else if (companySize >= 5) profileFitPoints = 10;\n  else profileFitPoints = 5;\n} else if (lead.companyName || enrich?.companyName) {\n  profileFitPoints = 10;\n}\n\nlet decisionMakerPoints = 0;\nconst jobTitle = (enrich?.contactJobTitle || lead.jobTitle || '').toLowerCase();\nconst decisionKeywords = ['ceo', 'cto', 'cfo', 'coo', 'cmo', 'cio', 'vp', 'director', 'founder', 'owner', 'head of', 'lead'];\nif (decisionKeywords.some((kw) => jobTitle.includes(kw))) {\n  decisionMakerPoints = 20;\n} else if (jobTitle.length > 0) {\n  decisionMakerPoints = 10;\n}\n\nlet qualificationPoints = 0;\nif (qual && qual.status === 'QUALIFIED') {\n  const conf = typeof qual.confidence === 'number' ? qual.confidence : 0.85;\n  qualificationPoints = Math.round(conf * 25);\n} else if (qual && qual.status === 'DISQUALIFIED') {\n  qualificationPoints = -20;\n} else if (qual && qual.status === 'NEEDS_REVIEW') {\n  qualificationPoints = 10;\n}\n\nconst engagementPoints = Math.min(25, interactions.length * 8);\nconst enrichmentBonus = (enrich && enrich.status === 'SUCCESS') ? 10 : 0;\n\nconst scoringFeatures = {\n  baseScore: 20,\n  profileFitPoints,\n  decisionMakerPoints,\n  qualificationPoints,\n  engagementPoints,\n  enrichmentBonus\n};\n\nconst fullName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Unknown';\nconst prompt = `\nYou are an enterprise AI Lead Scoring model. Evaluate and score the following prospective lead for sales readiness.\n\n=== LEAD PROFILE ===\n- Full Name: ${fullName}\n- Email: ${lead.email || 'N/A'}\n- Job Title: ${jobTitle || 'Unknown'}\n- Company: ${enrich?.companyName || lead.companyName || 'Unknown'}\n- Website: ${enrich?.companyWebsite || lead.companyWebsite || 'None'}\n- Industry: ${enrich?.companyIndustry || lead.industry || 'Unknown'}\n- Company Size: ${companySize ?? 'Unknown'}\n- CRM Status: ${lead.status || 'NEW'}\n\n=== AI QUALIFICATION ===\n- Status: ${qual?.status || 'NOT_QUALIFIED'}\n- Confidence: ${qual?.confidence != null ? Math.round(qual.confidence * 100) + '%' : 'N/A'}\n\n=== ENRICHMENT ===\n- Status: ${enrich?.status || 'NOT_ENRICHED'}\n\n=== INTERACTIONS ===\n- Total: ${interactions.length}\n\nRespond ONLY in this exact JSON schema:\n{\n  \"score\": 85,\n  \"label\": \"HOT\" | \"WARM\" | \"COLD\",\n  \"reason\": \"Detailed explanation for this score based on profile fit and decision maker title.\",\n  \"scoringFeatures\": ${JSON.stringify(scoringFeatures)}\n}\n`;\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    lead,\n    qual,\n    enrich,\n    interactions,\n    scoringFeatures,\n    prompt\n  }\n}];"
+        "jsCode": "// 7. Code: Aggregate Features — build deterministic scoring features with documented weights\nconst eventMeta = $('Code: Validate Event').first().json;\nconst leadRes = $('HTTP Request: Get Lead').first().json;\nconst qualRes = $('HTTP Request: Get Latest Qualification').first().json;\nconst enrichRes = $('HTTP Request: Get Latest Enrichment').first().json;\nconst contextRes = $('HTTP Request: Get Interactions').first().json;\n\nconst lead = leadRes?.id ? leadRes : (eventMeta.eventData?.leadData || eventMeta.eventData?.lead || {});\nconst qual = qualRes?.status ? qualRes : (eventMeta.eventData?.qualificationData || eventMeta.eventData?.qualification || null);\nconst enrich = enrichRes?.id ? enrichRes : (eventMeta.eventData?.enrichmentData || eventMeta.eventData?.enrichment || null);\nconst interactions = Array.isArray(contextRes?.interactions) ? contextRes.interactions : (eventMeta.eventData?.interactions || []);\n\nconst leadId = eventMeta.leadId;\nconst workflowRunId = eventMeta.workflowRunId;\n\n// Calculate deterministic scoring feature points\nlet profileFitPoints = 0;\nconst companySize = enrich?.companySize ?? lead.companySize;\nif (typeof companySize === \"number\") {\n  if (companySize >= 100) profileFitPoints = 20;\n  else if (companySize >= 20) profileFitPoints = 15;\n  else if (companySize >= 5) profileFitPoints = 10;\n  else profileFitPoints = 5;\n} else if (lead.companyName || enrich?.companyName) {\n  profileFitPoints = 10;\n}\n\nlet decisionMakerPoints = 0;\nconst jobTitle = (enrich?.contactJobTitle || lead.jobTitle || \"\").toLowerCase();\nconst decisionKeywords = [\"ceo\", \"cto\", \"cfo\", \"coo\", \"cmo\", \"cio\", \"vp\", \"director\", \"founder\", \"owner\", \"head of\", \"lead\"];\nif (decisionKeywords.some((kw) => jobTitle.includes(kw))) {\n  decisionMakerPoints = 20;\n} else if (jobTitle.length > 0) {\n  decisionMakerPoints = 10;\n}\n\nlet qualificationPoints = 0;\nif (qual && qual.status === \"QUALIFIED\") {\n  const conf = typeof qual.confidence === \"number\" ? qual.confidence : 0.85;\n  qualificationPoints = Math.round(conf * 25);\n} else if (qual && qual.status === \"DISQUALIFIED\") {\n  qualificationPoints = -20;\n} else if (qual && qual.status === \"NEEDS_REVIEW\") {\n  qualificationPoints = 10;\n}\n\nconst engagementPoints = Math.min(25, interactions.length * 8);\nconst enrichmentBonus = (enrich && enrich.status === \"SUCCESS\") ? 10 : 0;\n\nconst scoringFeatures = {\n  baseScore: 20,\n  profileFitPoints,\n  decisionMakerPoints,\n  qualificationPoints,\n  engagementPoints,\n  enrichmentBonus\n};\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    lead,\n    qual,\n    enrich,\n    interactions,\n    scoringFeatures\n  }\n}];"
       },
       "id": "node-7-aggregate-features",
       "name": "Code: Aggregate Features",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1420, 300]
+      "position": [
+        1420,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-3.5-flash-lite') + ':generateContent?key=' + $env.GEMINI_API_KEY }}",
-        "method": "POST",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": {{ JSON.stringify($json.prompt) }}\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.2,\n    \"responseMimeType\": \"application/json\"\n  }\n}",
-        "options": {
-          "timeout": 15000
-        }
-      },
-      "onError": "continueRegularOutput",
-      "id": "node-8-evaluate-scoring-policy",
-      "name": "HTTP Request: Evaluate Backend Scoring Policy",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [1640, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "// 9. Code: Validate Canonical Score — validate response shape, score boundaries, label and policy version\nconst response = $input.first().json;\nconst prep = $('Code: Aggregate Features').first().json;\n\nconst leadId = prep.leadId;\nconst workflowRunId = prep.workflowRunId;\nconst scoringFeatures = prep.scoringFeatures;\n\nlet geminiOutput = null;\ntry {\n  const rawText = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    geminiOutput = JSON.parse(rawText);\n  }\n} catch (e) {\n  geminiOutput = null;\n}\n\nlet finalScore = 0;\nlet label = 'COLD';\nlet reason = '';\nlet modelInfo = {};\n\nif (geminiOutput && typeof geminiOutput.score === 'number' && !isNaN(geminiOutput.score)) {\n  finalScore = Math.max(0, Math.min(100, Math.round(geminiOutput.score)));\n  label = finalScore >= 75 ? 'HOT' : finalScore >= 40 ? 'WARM' : 'COLD';\n  reason = `[Gemini AI - ${label} ${finalScore}/100] ${geminiOutput.reason || 'AI evaluated lead profile.'}`;\n  modelInfo = {\n    provider: 'google',\n    model: $env.GEMINI_MODEL || 'gemini-3.5-flash-lite',\n    modelVersion: 'v1beta'\n  };\n} else {\n  // Deterministic Fallback Policy\n  const calculated = 20 +\n    scoringFeatures.profileFitPoints +\n    scoringFeatures.decisionMakerPoints +\n    scoringFeatures.qualificationPoints +\n    scoringFeatures.engagementPoints +\n    scoringFeatures.enrichmentBonus;\n\n  finalScore = Math.max(0, Math.min(100, Math.round(calculated)));\n  label = finalScore >= 75 ? 'HOT' : finalScore >= 40 ? 'WARM' : 'COLD';\n  reason = `[Canonical Policy - ${label} ${finalScore}/100] Evaluated from profile fit, decision authority, qualification, and activity.`;\n  modelInfo = {\n    provider: 'crm-scoring-policy',\n    model: 'deterministic-scoring-v1',\n    modelVersion: '1.0'\n  };\n}\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    status: 'SUCCESS',\n    score: finalScore,\n    label,\n    reason,\n    scoringFeatures,\n    modelInfo,\n    evaluatedAt: new Date().toISOString()\n  }\n}];"
-      },
-      "id": "node-9-validate-canonical-score",
-      "name": "Code: Validate Canonical Score",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1860, 300]
-    },
-    {
-      "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/scoring/callback' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/scoring/evaluate-policy' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
@@ -186,7 +186,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -197,12 +197,64 @@
           "timeout": 15000
         }
       },
-      "onError": "continueRegularOutput",
+      "id": "node-8-evaluate-scoring-policy",
+      "name": "HTTP Request: Evaluate Backend Scoring Policy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 9. Code: Validate Canonical Score — validate response shape, score boundaries, label and policy version\nconst response = $input.first().json;\nconst prep = $('Code: Aggregate Features').first().json;\n\nconst leadId = prep.leadId;\nconst workflowRunId = prep.workflowRunId;\n\nif (typeof response.score !== \"number\" || isNaN(response.score) || response.score < 0 || response.score > 100) {\n  throw new Error(\"Invalid score received from scoring policy: \" + response.score);\n}\n\nif (![\"HOT\", \"WARM\", \"COLD\"].includes(response.label)) {\n  throw new Error(\"Invalid score label received from scoring policy: \" + response.label);\n}\n\nif (!response.policyVersion) {\n  throw new Error(\"Missing policyVersion in scoring policy response\");\n}\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    status: \"SUCCESS\",\n    score: response.score,\n    label: response.label,\n    policyVersion: response.policyVersion,\n    reason: response.reason || (\"[Canonical Policy - \" + response.label + \" \" + response.score + \"/100]\"),\n    scoringFeatures: response.scoringFeatures || prep.scoringFeatures,\n    modelInfo: response.modelInfo || {\n      provider: \"crm-scoring-policy\",\n      model: \"deterministic-scoring-v1\",\n      modelVersion: response.policyVersion\n    },\n    evaluatedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-9-validate-canonical-score",
+      "name": "Code: Validate Canonical Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/internal/n8n/lead-scoring/callback' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000,
+          "retry": {
+            "maxTries": 3,
+            "waitBetweenTries": 2000
+          }
+        }
+      },
       "id": "node-10-scoring-callback",
       "name": "HTTP Request: Scoring Callback",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [2080, 300]
+      "position": [
+        2080,
+        300
+      ]
     },
     {
       "parameters": {
@@ -230,11 +282,14 @@
       "name": "IF: Hot Lead",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [2300, 300]
+      "position": [
+        2300,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/notifications' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/notifications/internal/create' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
@@ -245,23 +300,25 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  type: 'HOT_LEAD_ALERT',\n  leadId: $('Code: Validate Canonical Score').item.json.leadId,\n  title: '🔥 Hot Lead Opportunity',\n  message: 'Lead scored ' + $('Code: Validate Canonical Score').item.json.score + ' (HOT). Immediate sales outreach recommended.'\n}) }}",
+        "jsonBody": "={{ JSON.stringify({\n  type: 'WORKFLOW_COMPLETED',\n  title: '🔥 Hot Lead Opportunity',\n  message: 'Lead scored ' + $('Code: Validate Canonical Score').item.json.score + ' (HOT). Immediate sales outreach recommended.',\n  severity: 'HIGH',\n  leadId: $('Code: Validate Canonical Score').item.json.leadId,\n  userId: $('HTTP Request: Get Lead').item.json.ownerId || undefined\n}) }}",
         "options": {
           "timeout": 10000
         }
       },
-      "onError": "continueRegularOutput",
       "id": "node-12-backend-next-action",
       "name": "HTTP Request: Backend Next-Action/Notification",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [2520, 180]
+      "position": [
+        2520,
+        180
+      ]
     }
   ],
   "connections": {

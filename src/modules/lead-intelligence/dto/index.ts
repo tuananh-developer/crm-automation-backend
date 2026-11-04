@@ -7,3 +7,4 @@ export * from './scoring-callback.dto.js';
 export * from './qualification-response.dto.js';
 export * from './scoring-response.dto.js';
 export * from './enrichment-response.dto.js';
+export * from './evaluate-scoring-policy.dto.js';
