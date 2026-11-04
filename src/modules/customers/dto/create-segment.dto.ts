@@ -6,7 +6,6 @@ import {
   IsObject,
   IsOptional,
   IsString,
-  IsUUID,
   MaxLength,
   Min,
   ValidateNested,
@@ -61,10 +60,6 @@ class SegmentCriteriaDto {
 }
 
 export class CreateSegmentDto {
-  @IsUUID()
-  @IsNotEmpty()
-  createdBy!: string;
-
   @IsString()
   @IsNotEmpty()
   @MaxLength(150)

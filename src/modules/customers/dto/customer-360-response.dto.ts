@@ -121,5 +121,6 @@ export class Customer360ResponseDto {
     status: string;
     startedAt?: Date | null;
     completedAt?: Date | null;
+    errorMessage?: string | null;
   } | null;
 }

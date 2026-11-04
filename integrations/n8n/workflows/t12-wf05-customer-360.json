@@ -38,7 +38,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -66,7 +66,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -94,7 +94,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -122,7 +122,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -150,7 +150,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -178,7 +178,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -195,7 +195,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 9. Code: Merge Customer Timeline — normalize and combine source records with source provenance\nconst customerId = $('Code: Validate Customer Request').first().json.customerId;\nconst workflowRunId = $('Code: Validate Customer Request').first().json.workflowRunId;\n\nconst profileRes = $('HTTP Request: CRM Profile').first().json || {};\nconst interactionsRes = $('HTTP Request: Get Interactions').first().json;\nconst intelligenceRes = $('HTTP Request: Get Lead Intelligence History').first().json || {};\nconst followUpsRes = $('HTTP Request: Get Follow-up History').first().json || {};\nconst segmentsRes = $('HTTP Request: Get Segment Memberships').first().json;\nconst feedbackRes = $('HTTP Request: Get Issue/Feedback History').first().json;\n\nconst customer = profileRes.id ? profileRes : {};\nconst convertedLeads = Array.isArray(profileRes.convertedLeads) ? profileRes.convertedLeads : [];\nconst interactions = Array.isArray(interactionsRes) ? interactionsRes : [];\nconst qualifications = Array.isArray(intelligenceRes.qualifications) ? intelligenceRes.qualifications : [];\nconst enrichments = Array.isArray(intelligenceRes.enrichments) ? intelligenceRes.enrichments : [];\nconst scores = Array.isArray(intelligenceRes.scores) ? intelligenceRes.scores : [];\nconst enrollments = Array.isArray(followUpsRes.enrollments) ? followUpsRes.enrollments : [];\nconst executions = Array.isArray(followUpsRes.executions) ? followUpsRes.executions : [];\nconst segments = Array.isArray(segmentsRes) ? segmentsRes : [];\nconst feedbackList = Array.isArray(feedbackRes) ? feedbackRes : (Array.isArray(feedbackRes?.data) ? feedbackRes.data : []);\n\n// Compute data-dependent sourceCoverage (no hardcoded AVAILABLE)\nconst sourceCoverage = {\n  crmProfile: customer.id ? 'AVAILABLE' : 'EMPTY',\n  interactions: interactions.length > 0 ? 'AVAILABLE' : 'EMPTY',\n  leadIntelligence: (qualifications.length > 0 || enrichments.length > 0 || scores.length > 0) ? 'AVAILABLE' : 'EMPTY',\n  followUps: (enrollments.length > 0 || executions.length > 0) ? 'AVAILABLE' : 'EMPTY',\n  segments: segments.length > 0 ? 'AVAILABLE' : 'EMPTY',\n  customerIssues: 'NOT_CONNECTED',\n  customerFeedback: feedbackList.length > 0 ? 'AVAILABLE' : 'NOT_CONNECTED'\n};\n\nconst prompt = `\nYou are an enterprise CRM Customer 360 Intelligence Agent.\nSynthesize a comprehensive 360 executive profile for this B2B customer based on all verified CRM touchpoints.\n\n=== CUSTOMER PROFILE ===\n- Account Name: ${customer.name || 'N/A'}\n- Company: ${customer.companyName || 'N/A'}\n- Domain/Website: ${customer.companyWebsite || 'N/A'}\n- Industry: ${customer.industry || 'General Business'}\n- Company Size: ${customer.companySize || 'Unknown'} employees\n- Current Status: ${customer.status || 'ACTIVE'}\n- Contact Email: ${customer.email || 'N/A'}\n- Segment Memberships: ${segments.map(s => s.segmentName || s.segmentId).join(', ') || 'Standard Account'}\n\n=== INTERACTION TIMELINE & SIGNALS ===\n- Converted Leads Count: ${convertedLeads.length}\n- Recorded Touchpoints Count: ${interactions.length}\n- Recent Interactions:\n${interactions.slice(0, 5).map(i => `  • [${i.occurredAt || 'Recent'}] ${i.type}: ${i.subject || i.content || 'Discussion'}`).join('\\n') || '  • No direct calls/emails recorded.'}\n\n=== HISTORICAL INTELLIGENCE & FOLLOW-UP ===\n- Lead Qualification: ${qualifications[0]?.status || 'N/A'} (Confidence: ${qualifications[0]?.confidence || 'N/A'})\n- Lead Score: ${scores[0]?.label || 'WARM'} (${scores[0]?.score || 'N/A'}/100)\n- Follow-up Cadence: ${enrollments.length} campaigns active/completed\n\n=== DATA SOURCE COVERAGE ===\n- Issues & Support Tickets: ${sourceCoverage.customerIssues} (External helpdesk not connected)\n- Customer Feedback & CSAT: ${sourceCoverage.customerFeedback}\n\nRespond ONLY with valid JSON conforming to this exact schema:\n{\n  \"summary\": \"Concise 2-3 sentence executive synthesis summarizing customer maturity and relationship health.\",\n  \"keyStrengths\": [\"Strength 1\", \"Strength 2\"],\n  \"potentialRisks\": [\"Risk or churn signal 1\", \"Risk 2\"],\n  \"growthOpportunities\": [\"Expansion or upsell opportunity 1\", \"Opportunity 2\"],\n  \"recommendedNextAction\": \"High-impact tactical next action for the Account Executive or CSM.\"\n}\n`;\n\nreturn [{\n  json: {\n    customerId,\n    workflowRunId,\n    customer,\n    convertedLeads,\n    interactions,\n    intelligence: { qualifications, enrichments, scores },\n    followUps: { enrollments, executions },\n    segments,\n    sourceCoverage,\n    prompt\n  }\n}];"
+        "jsCode": "// 9. Code: Merge Customer Timeline — normalize and combine source records with source provenance\nconst customerId = $('Code: Validate Customer Request').first().json.customerId;\nconst workflowRunId = $('Code: Validate Customer Request').first().json.workflowRunId;\n\nconst profileRes = $('HTTP Request: CRM Profile').first()?.json || {};\nconst interactionsRes = $('HTTP Request: Get Interactions').first()?.json;\nconst intelligenceRes = $('HTTP Request: Get Lead Intelligence History').first()?.json || {};\nconst followUpsRes = $('HTTP Request: Get Follow-up History').first()?.json || {};\nconst segmentsRes = $('HTTP Request: Get Segment Memberships').first()?.json;\nconst feedbackRes = $('HTTP Request: Get Issue/Feedback History').first()?.json;\n\nconst isError = (res) => {\n  if (!res) return false;\n  if (res.error) return true;\n  if (typeof res.statusCode === 'number' && res.statusCode >= 400) return true;\n  if (typeof res.status === 'number' && res.status >= 400) return true;\n  return false;\n};\n\n// CRM Profile\nconst profileError = isError(profileRes);\nconst customer = (!profileError && profileRes.id) ? profileRes : {};\nconst convertedLeads = (!profileError && Array.isArray(profileRes.convertedLeads)) ? profileRes.convertedLeads : [];\n\n// Interactions\nconst interactionsError = isError(interactionsRes);\nconst interactions = (!interactionsError && Array.isArray(interactionsRes)) ? interactionsRes : [];\n\n// Intelligence\nconst intelligenceError = isError(intelligenceRes);\nconst qualifications = (!intelligenceError && Array.isArray(intelligenceRes.qualifications)) ? intelligenceRes.qualifications : [];\nconst enrichments = (!intelligenceError && Array.isArray(intelligenceRes.enrichments)) ? intelligenceRes.enrichments : [];\nconst scores = (!intelligenceError && Array.isArray(intelligenceRes.scores)) ? intelligenceRes.scores : [];\n\n// Follow-ups\nconst followUpsError = isError(followUpsRes);\nconst enrollments = (!followUpsError && Array.isArray(followUpsRes.enrollments)) ? followUpsRes.enrollments : [];\nconst executions = (!followUpsError && Array.isArray(followUpsRes.executions)) ? followUpsRes.executions : [];\n\n// Segments\nconst segmentsError = isError(segmentsRes);\nconst segments = (!segmentsError && Array.isArray(segmentsRes)) ? segmentsRes : [];\n\n// Feedback\nconst feedbackError = isError(feedbackRes);\nconst feedbackList = (!feedbackError && Array.isArray(feedbackRes)) ? feedbackRes : (!feedbackError && Array.isArray(feedbackRes?.data) ? feedbackRes.data : []);\n\n// Compute data-dependent sourceCoverage (preserving source-fetch failures as UNAVAILABLE instead of EMPTY)\nconst sourceCoverage = {\n  crmProfile: profileError ? 'UNAVAILABLE' : (customer.id ? 'AVAILABLE' : 'EMPTY'),\n  interactions: interactionsError ? 'UNAVAILABLE' : (interactions.length > 0 ? 'AVAILABLE' : 'EMPTY'),\n  leadIntelligence: intelligenceError ? 'UNAVAILABLE' : ((qualifications.length > 0 || enrichments.length > 0 || scores.length > 0) ? 'AVAILABLE' : 'EMPTY'),\n  followUps: followUpsError ? 'UNAVAILABLE' : ((enrollments.length > 0 || executions.length > 0) ? 'AVAILABLE' : 'EMPTY'),\n  segments: segmentsError ? 'UNAVAILABLE' : (segments.length > 0 ? 'AVAILABLE' : 'EMPTY'),\n  customerIssues: 'NOT_CONNECTED',\n  customerFeedback: feedbackError ? 'UNAVAILABLE' : (feedbackList.length > 0 ? 'AVAILABLE' : 'EMPTY')\n};\n\nconst prompt = `\nYou are an enterprise CRM Customer 360 Intelligence Agent.\nSynthesize a comprehensive 360 executive profile for this B2B customer based on all verified CRM touchpoints.\n\n=== CUSTOMER PROFILE ===\n- Account Name: ${customer.name || 'N/A'}\n- Company: ${customer.companyName || 'N/A'}\n- Domain/Website: ${customer.companyWebsite || 'N/A'}\n- Industry: ${customer.industry || 'General Business'}\n- Company Size: ${customer.companySize || 'Unknown'} employees\n- Current Status: ${customer.status || 'ACTIVE'}\n- Contact Email: ${customer.email || 'N/A'}\n- Segment Memberships: ${segments.map(s => s.segmentName || s.segmentId).join(', ') || 'Standard Account'}\n\n=== INTERACTION TIMELINE & SIGNALS ===\n- Converted Leads Count: ${convertedLeads.length}\n- Recorded Touchpoints: ${sourceCoverage.interactions === 'UNAVAILABLE' ? 'Service unavailable during scan' : interactions.length + ' recorded'}\n- Recent Interactions:\n${interactions.slice(0, 5).map(i => `  • [${i.occurredAt || 'Recent'}] ${i.type}: ${i.subject || i.content || 'Discussion'}`).join('\\n') || (sourceCoverage.interactions === 'UNAVAILABLE' ? '  • Interaction service unavailable.' : '  • No direct calls/emails recorded.')}\n\n=== HISTORICAL INTELLIGENCE & FOLLOW-UP ===\n- Lead Qualification: ${qualifications[0]?.status || (sourceCoverage.leadIntelligence === 'UNAVAILABLE' ? 'Service unavailable' : 'N/A')} (Confidence: ${qualifications[0]?.confidence || 'N/A'})\n- Lead Score: ${scores[0]?.label || 'WARM'} (${scores[0]?.score || 'N/A'}/100)\n- Follow-up Cadence: ${enrollments.length} campaigns active/completed\n\n=== DATA SOURCE COVERAGE ===\n- CRM Profile: ${sourceCoverage.crmProfile}\n- Interactions: ${sourceCoverage.interactions}\n- Intelligence: ${sourceCoverage.leadIntelligence}\n- Follow-ups: ${sourceCoverage.followUps}\n- Segments: ${sourceCoverage.segments}\n- Issues & Support Tickets: ${sourceCoverage.customerIssues} (External helpdesk not connected)\n- Customer Feedback: ${sourceCoverage.customerFeedback}\n\nRespond ONLY with valid JSON conforming to this exact schema:\n{\n  \"summary\": \"Concise 2-3 sentence executive synthesis summarizing customer maturity and relationship health.\",\n  \"keyStrengths\": [\"Strength 1\", \"Strength 2\"],\n  \"potentialRisks\": [\"Risk or churn signal 1\", \"Risk 2\"],\n  \"growthOpportunities\": [\"Expansion or upsell opportunity 1\", \"Opportunity 2\"],\n  \"recommendedNextAction\": \"High-impact tactical next action for the Account Executive or CSM.\"\n}\n`;\n\nreturn [{\n  json: {\n    customerId,\n    workflowRunId,\n    customer,\n    convertedLeads,\n    interactions,\n    intelligence: { qualifications, enrichments, scores },\n    followUps: { enrollments, executions },\n    segments,\n    sourceCoverage,\n    prompt\n  }\n}];"
       },
       "id": "node-9-merge-customer-timeline",
       "name": "Code: Merge Customer Timeline",
@@ -257,7 +257,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },

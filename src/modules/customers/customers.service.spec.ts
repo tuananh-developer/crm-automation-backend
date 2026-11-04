@@ -1,6 +1,8 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ForbiddenException,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -94,6 +96,9 @@ describe('CustomersService', () => {
     updatedAt: new Date('2026-10-03T00:00:00.000Z'),
   };
 
+  const adminActor: AuthenticatedUser = mockAdminUser;
+  const salesActor: AuthenticatedUser = mockSalesUser;
+
   const createQueryBuilder = () => ({
     leftJoinAndSelect: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
@@ -107,6 +112,7 @@ describe('CustomersService', () => {
     customersRepository = {
       createQueryBuilder: jest.fn(),
       findOne: jest.fn(),
+      query: jest.fn(),
     };
     customerSegmentsRepository = {};
     segmentsRepository = {};
@@ -135,7 +141,13 @@ describe('CustomersService', () => {
       find: jest.fn().mockResolvedValue([]),
     };
     configService = {
-      get: jest.fn().mockReturnValue('test-value'),
+      get: jest.fn().mockImplementation((key: string) => {
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        if (key === 'N8N_WEBHOOK_BASE_URL')
+          return 'http://test-n8n:5678/webhook';
+        if (key === 'GEMINI_MODEL') return 'gemini-3.5-flash-lite';
+        return undefined;
+      }),
     };
 
     service = new CustomersService(
@@ -160,7 +172,7 @@ describe('CustomersService', () => {
       qb.getManyAndCount.mockResolvedValue([[mockCustomer], 1]);
       (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
 
-      const result = await service.findAll({ page: 1, limit: 20 });
+      const result = await service.findAll({ page: 1, limit: 20 }, adminActor);
 
       expect(result.data).toHaveLength(1);
       expect(result.meta).toEqual({
@@ -178,7 +190,7 @@ describe('CustomersService', () => {
       qb.getManyAndCount.mockResolvedValue([[], 0]);
       (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
 
-      await service.findAll({ search: 'acme' });
+      await service.findAll({ search: 'acme' }, adminActor);
 
       expect(qb.andWhere).toHaveBeenCalledWith(
         expect.stringContaining('search'),
@@ -191,11 +203,26 @@ describe('CustomersService', () => {
       qb.getManyAndCount.mockResolvedValue([[], 0]);
       (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
 
-      await service.findAll({ status: 'CONVERTED' });
+      await service.findAll({ status: 'CONVERTED' }, adminActor);
 
       expect(qb.andWhere).toHaveBeenCalledWith('customer.status = :status', {
         status: 'CONVERTED',
       });
+    });
+
+    it('scopes Sales customer lists to customers they created', async () => {
+      const qb = createQueryBuilder();
+      qb.getManyAndCount.mockResolvedValue([[], 0]);
+      (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+      await service.findAll({}, salesActor);
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'customer.createdBy = :actorId',
+        {
+          actorId: salesActor.id,
+        },
+      );
     });
   });
 
@@ -210,7 +237,7 @@ describe('CustomersService', () => {
         ],
       });
 
-      const result = await service.findOne('customer-1');
+      const result = await service.findOne('customer-1', adminActor);
 
       expect(result.convertedLeads).toHaveLength(1);
       expect(result.customerSegments).toHaveLength(2);
@@ -220,9 +247,20 @@ describe('CustomersService', () => {
     it('rejects an unknown customer id', async () => {
       (customersRepository.findOne as jest.Mock).mockResolvedValue(null);
 
-      await expect(service.findOne('missing')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      await expect(
+        service.findOne('missing', adminActor),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('hides customers created by other users from Sales users', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        createdBy: 'other-user',
+      });
+
+      await expect(
+        service.findOne('customer-1', salesActor),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 
@@ -300,6 +338,117 @@ describe('CustomersService', () => {
       expect(result.sourceCoverage.followUps).toBe('EMPTY');
       expect(result.sourceCoverage.customerIssues).toBe('NOT_CONNECTED');
     });
+
+    it('gates aiSummary strictly on successful WorkflowRun and leaves it null when run failed', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        createdBy: 'sales-1',
+        convertedLeads: [],
+        customerSegments: [],
+      });
+
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue({
+        id: 'run-failed-1',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Gemini rate limit exceeded',
+        outputPayload: {
+          summary: 'Should not be exposed',
+        },
+        startedAt: new Date('2026-10-28T10:00:00Z'),
+        finishedAt: new Date('2026-10-28T10:00:05Z'),
+      });
+
+      const result = await service.getCustomer360('customer-1', mockSalesUser);
+
+      expect(result.aiSummary).toBeNull();
+      expect(result.latestWorkflowRun).toEqual({
+        id: 'run-failed-1',
+        status: WorkflowStatus.FAILED,
+        startedAt: expect.any(Date),
+        completedAt: expect.any(Date),
+        errorMessage: 'Gemini rate limit exceeded',
+      });
+    });
+
+    it('synthesizes aiSummary when latest WorkflowRun has SUCCESS status with valid summary', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        createdBy: 'sales-1',
+        convertedLeads: [],
+        customerSegments: [],
+      });
+
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue({
+        id: 'run-success-1',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.SUCCESS,
+        outputPayload: {
+          summary:
+            'Solid enterprise relationship with high retention probability.',
+          keyStrengths: ['High NPS', 'Active champion'],
+          potentialRisks: ['No support tickets integrated'],
+          growthOpportunities: ['Enterprise tier upgrade'],
+          recommendedNextAction: 'Schedule annual executive business review.',
+          modelInfo: { model: 'gemini-3.5-flash-lite' },
+          evaluatedAt: '2026-10-28T10:00:05.000Z',
+        },
+        startedAt: new Date('2026-10-28T10:00:00Z'),
+        finishedAt: new Date('2026-10-28T10:00:05Z'),
+      });
+
+      const result = await service.getCustomer360('customer-1', mockSalesUser);
+
+      expect(result.aiSummary).not.toBeNull();
+      expect(result.aiSummary?.summary).toBe(
+        'Solid enterprise relationship with high retention probability.',
+      );
+      expect(result.aiSummary?.keyStrengths).toEqual([
+        'High NPS',
+        'Active champion',
+      ]);
+      expect(result.latestWorkflowRun?.status).toBe(WorkflowStatus.SUCCESS);
+      expect(result.latestWorkflowRun?.errorMessage).toBeNull();
+    });
+  });
+
+  describe('getCustomerInteractions and getCustomerFeedback', () => {
+    it('retrieves customer feedback safely or returns empty array when query succeeds', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        convertedLeads: [],
+      });
+      (customersRepository.query as jest.Mock).mockResolvedValue([
+        { id: 'fb-1', rating: 5, comments: 'Great experience' },
+      ]);
+
+      const result = await service.getCustomerFeedback(
+        'customer-1',
+        mockSalesUser,
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('fb-1');
+    });
+
+    it('returns empty array when feedback query encounters database error', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        convertedLeads: [],
+      });
+      (customersRepository.query as jest.Mock).mockRejectedValue(
+        new Error('relation "customer_feedback" does not exist'),
+      );
+
+      const result = await service.getCustomerFeedback(
+        'customer-1',
+        mockSalesUser,
+      );
+
+      expect(result).toEqual([]);
+    });
   });
 
   describe('triggerCustomer360', () => {
@@ -311,12 +460,9 @@ describe('CustomersService', () => {
       (workflowRunsRepository.create as jest.Mock).mockReturnValue(mockRun);
       (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
 
-      // Mock global fetch
       const fetchSpy = jest
         .spyOn(global, 'fetch')
-        .mockImplementation(() =>
-          Promise.resolve({ ok: true, status: 200 } as Response),
-        );
+        .mockResolvedValue({ ok: true, status: 200 } as Response);
 
       const result = await service.triggerCustomer360(
         'customer-1',
@@ -332,6 +478,81 @@ describe('CustomersService', () => {
           status: WorkflowStatus.PENDING,
         }),
       );
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'http://test-n8n:5678/webhook/t12-wf05-customer-360',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'X-N8N-API-KEY': 'test-n8n-secret',
+          }),
+        }),
+      );
+
+      fetchSpy.mockRestore();
+    });
+
+    it('throws InternalServerErrorException when N8N_API_KEY is missing (Fail-Closed)', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      (configService.get as jest.Mock).mockReturnValue(undefined);
+
+      await expect(
+        service.triggerCustomer360('customer-1', mockSalesUser),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
+    });
+
+    it('marks WorkflowRun as FAILED and throws BadGatewayException when n8n returns non-2xx', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockRun: any = {
+        id: 'run-err-1',
+        customerId: 'customer-1',
+        status: WorkflowStatus.PENDING,
+      };
+      (workflowRunsRepository.create as jest.Mock).mockReturnValue(mockRun);
+      (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
+
+      const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: false,
+        status: 503,
+        statusText: 'Service Unavailable',
+      } as Response);
+
+      await expect(
+        service.triggerCustomer360('customer-1', mockSalesUser),
+      ).rejects.toBeInstanceOf(BadGatewayException);
+
+      expect(mockRun.status).toBe(WorkflowStatus.FAILED);
+      expect(mockRun.errorMessage).toContain('503 Service Unavailable');
+      expect(workflowRunsRepository.save).toHaveBeenCalledTimes(2);
+
+      fetchSpy.mockRestore();
+    });
+
+    it('marks WorkflowRun as FAILED and throws BadGatewayException on dispatch network error', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockRun: any = {
+        id: 'run-net-1',
+        customerId: 'customer-1',
+        status: WorkflowStatus.PENDING,
+      };
+      (workflowRunsRepository.create as jest.Mock).mockReturnValue(mockRun);
+      (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
+
+      const fetchSpy = jest
+        .spyOn(global, 'fetch')
+        .mockRejectedValue(new Error('Connection refused'));
+
+      await expect(
+        service.triggerCustomer360('customer-1', mockSalesUser),
+      ).rejects.toBeInstanceOf(BadGatewayException);
+
+      expect(mockRun.status).toBe(WorkflowStatus.FAILED);
+      expect(mockRun.errorMessage).toContain('Connection refused');
 
       fetchSpy.mockRestore();
     });

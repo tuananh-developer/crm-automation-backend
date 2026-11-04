@@ -17,6 +17,11 @@ export class JwtOrN8nAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
+    const requestWithUser = request as Request & { user?: unknown };
+    if (requestWithUser.user) {
+      return true;
+    }
+
     const hasN8nHeader = Boolean(
       request.headers['x-n8n-api-key'] ||
       request.headers['x-api-key'] ||

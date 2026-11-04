@@ -37,6 +37,7 @@ import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Customers')
 @Controller('customers')
+@UseGuards(JwtAuthGuard)
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
@@ -49,8 +50,9 @@ export class CustomersController {
   @ApiPaginatedResponse(CustomerResponseDto)
   findAll(
     @Query() query: QueryCustomerDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
-    return this.customersService.findAll(query);
+    return this.customersService.findAll(query, actor);
   }
 
   @Get(':id')
@@ -60,8 +62,9 @@ export class CustomersController {
   @ApiResponse({ status: 404, description: 'Customer not found.' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<CustomerResponseDto> {
-    return this.customersService.findOne(id);
+    return this.customersService.findOne(id, actor);
   }
 
   @Get(':id/360')
@@ -139,8 +142,18 @@ export class CustomersController {
     return this.customersService.getCustomerSegments(id, user);
   }
 
+  @Get(':id/feedback')
+  @UseGuards(JwtOrN8nAuthGuard)
+  @ApiOperation({ summary: 'Get customer feedback history for Customer 360' })
+  @ApiParam({ name: 'id', description: 'UUID of the customer' })
+  getCustomerFeedback(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user?: AuthenticatedUser,
+  ) {
+    return this.customersService.getCustomerFeedback(id, user);
+  }
+
   @Post(':id/360/trigger')
-  @UseGuards(JwtAuthGuard)
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({

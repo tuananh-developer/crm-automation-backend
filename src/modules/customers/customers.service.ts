@@ -1,7 +1,9 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -78,6 +80,7 @@ export class CustomersService {
 
   async findAll(
     query: QueryCustomerDto,
+    actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -98,6 +101,9 @@ export class CustomersService {
     if (query.status) {
       qb.andWhere('customer.status = :status', { status: query.status });
     }
+    if (actor.role === UserRole.SALES) {
+      qb.andWhere('customer.createdBy = :actorId', { actorId: actor.id });
+    }
 
     qb.orderBy('customer.createdAt', 'DESC')
       .skip((page - 1) * limit)
@@ -116,7 +122,10 @@ export class CustomersService {
     };
   }
 
-  async findOne(id: string): Promise<CustomerResponseDto> {
+  async findOne(
+    id: string,
+    actor: AuthenticatedUser,
+  ): Promise<CustomerResponseDto> {
     const customer = await this.customersRepository.findOne({
       where: { id },
       relations: {
@@ -129,7 +138,10 @@ export class CustomersService {
       },
     });
 
-    if (!customer) {
+    if (
+      !customer ||
+      (actor.role === UserRole.SALES && customer.createdBy !== actor.id)
+    ) {
       throw new NotFoundException(`Customer with ID '${id}' not found`);
     }
 
@@ -255,36 +267,40 @@ export class CustomersService {
     });
 
     let aiSummary: Customer360AiSummaryDto | null = null;
-    if (latestRun?.outputPayload) {
+    if (
+      latestRun &&
+      latestRun.status === WorkflowStatus.SUCCESS &&
+      latestRun.outputPayload
+    ) {
       const p = latestRun.outputPayload as Record<string, unknown>;
-      const modelInfo = p.modelInfo as Record<string, unknown> | undefined;
-      aiSummary = {
-        summary:
-          typeof p.summary === 'string'
-            ? p.summary
-            : 'Customer 360 profile synthesized.',
-        keyStrengths: Array.isArray(p.keyStrengths)
-          ? (p.keyStrengths as string[])
-          : [],
-        potentialRisks: Array.isArray(p.potentialRisks)
-          ? (p.potentialRisks as string[])
-          : [],
-        growthOpportunities: Array.isArray(p.growthOpportunities)
-          ? (p.growthOpportunities as string[])
-          : [],
-        recommendedNextAction:
-          typeof p.recommendedNextAction === 'string'
-            ? p.recommendedNextAction
-            : 'Maintain proactive quarterly engagement.',
-        aiModel:
-          typeof modelInfo?.model === 'string'
-            ? modelInfo.model
-            : 'gemini-3.5-flash-lite',
-        evaluatedAt:
-          typeof p.evaluatedAt === 'string'
-            ? p.evaluatedAt
-            : latestRun.finishedAt?.toISOString(),
-      };
+      const rawSummary = typeof p.summary === 'string' ? p.summary.trim() : '';
+      if (rawSummary.length > 0) {
+        const modelInfo = p.modelInfo as Record<string, unknown> | undefined;
+        aiSummary = {
+          summary: rawSummary,
+          keyStrengths: Array.isArray(p.keyStrengths)
+            ? (p.keyStrengths as string[])
+            : [],
+          potentialRisks: Array.isArray(p.potentialRisks)
+            ? (p.potentialRisks as string[])
+            : [],
+          growthOpportunities: Array.isArray(p.growthOpportunities)
+            ? (p.growthOpportunities as string[])
+            : [],
+          recommendedNextAction:
+            typeof p.recommendedNextAction === 'string'
+              ? p.recommendedNextAction
+              : 'Maintain proactive quarterly engagement.',
+          aiModel:
+            typeof modelInfo?.model === 'string'
+              ? modelInfo.model
+              : 'gemini-3.5-flash-lite',
+          evaluatedAt:
+            typeof p.evaluatedAt === 'string'
+              ? p.evaluatedAt
+              : latestRun.finishedAt?.toISOString(),
+        };
+      }
     }
 
     const customerDto = CustomerMapper.toResponseDto(
@@ -394,6 +410,7 @@ export class CustomersService {
             status: latestRun.status,
             startedAt: latestRun.startedAt,
             completedAt: latestRun.finishedAt,
+            errorMessage: latestRun.errorMessage ?? null,
           }
         : null,
     };
@@ -534,6 +551,35 @@ export class CustomersService {
   }
 
   /**
+   * Retrieves feedback history for a customer (for n8n Node 8).
+   */
+  async getCustomerFeedback(
+    customerId: string,
+    user?: AuthenticatedUser,
+  ): Promise<any[]> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: { convertedLeads: true },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+    this.checkCustomerAccess(customer, user);
+
+    try {
+      const feedback: unknown = await this.customersRepository.query(
+        `SELECT * FROM customer_feedback WHERE customer_id = $1 ORDER BY created_at DESC`,
+        [customerId],
+      );
+      return Array.isArray(feedback)
+        ? (feedback as Record<string, unknown>[])
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Initiates AI Customer 360 analysis workflow (T12-WF05).
    * Creates a correlated WorkflowRun and dispatches an authenticated internal webhook to n8n.
    * Enforces object-level authorization and binds triggeredByUserId to authenticated caller.
@@ -552,6 +598,16 @@ export class CustomersService {
     }
 
     this.checkCustomerAccess(customer, user);
+
+    const n8nApiKey =
+      this.configService.get<string>('N8N_API_KEY') ||
+      this.configService.get<string>('N8N_WEBHOOK_SECRET');
+
+    if (!n8nApiKey) {
+      throw new InternalServerErrorException(
+        'Webhook authentication secret (N8N_API_KEY / N8N_WEBHOOK_SECRET) is not configured',
+      );
+    }
 
     // 1. Create correlated WorkflowRun in PENDING status with verified user id
     const workflowRun = this.workflowRunsRepository.create({
@@ -575,43 +631,51 @@ export class CustomersService {
       `Created WorkflowRun ${savedRun.id} for Customer 360 of customer ${customer.id} by user ${user.id}`,
     );
 
-    // 2. Dispatch internal webhook to n8n asynchronously
+    // 2. Dispatch internal webhook to n8n
     const n8nBaseUrl =
       this.configService.get<string>('N8N_WEBHOOK_BASE_URL') ||
       'http://crm_n8n:5678/webhook';
     const webhookUrl = `${n8nBaseUrl}/t12-wf05-customer-360`;
 
-    fetch(webhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-N8N-API-KEY':
-          this.configService.get<string>('N8N_API_KEY') ||
-          'crm-automation-n8n-secret-key',
-      },
-      body: JSON.stringify({
-        customerId: customer.id,
-        workflowRunId: savedRun.id,
-        triggeredByUserId: user.id,
-        timestamp: new Date().toISOString(),
-      }),
-    })
-      .then((res) => {
-        if (!res.ok) {
-          this.logger.warn(
-            `n8n webhook dispatch returned HTTP ${res.status} for run ${savedRun.id}`,
-          );
-        } else {
-          this.logger.log(
-            `n8n webhook successfully dispatched for run ${savedRun.id}`,
-          );
-        }
-      })
-      .catch((err: unknown) => {
-        this.logger.warn(
-          `n8n webhook dispatch error for run ${savedRun.id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
+    let dispatchRes: Response;
+    try {
+      dispatchRes = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-N8N-API-KEY': n8nApiKey,
+        },
+        body: JSON.stringify({
+          customerId: customer.id,
+          workflowRunId: savedRun.id,
+          triggeredByUserId: user.id,
+          timestamp: new Date().toISOString(),
+        }),
+        signal: AbortSignal.timeout(10000),
       });
+    } catch (err: unknown) {
+      const errMsg = `Failed to dispatch Customer 360 workflow to n8n: ${err instanceof Error ? err.message : String(err)}`;
+      this.logger.error(errMsg);
+      savedRun.status = WorkflowStatus.FAILED;
+      savedRun.finishedAt = new Date();
+      savedRun.errorMessage = errMsg;
+      await this.workflowRunsRepository.save(savedRun);
+      throw new BadGatewayException(errMsg);
+    }
+
+    if (!dispatchRes.ok) {
+      const errMsg = `n8n webhook dispatch returned HTTP ${dispatchRes.status} ${dispatchRes.statusText}`;
+      this.logger.error(errMsg);
+      savedRun.status = WorkflowStatus.FAILED;
+      savedRun.finishedAt = new Date();
+      savedRun.errorMessage = errMsg;
+      await this.workflowRunsRepository.save(savedRun);
+      throw new BadGatewayException(errMsg);
+    }
+
+    this.logger.log(
+      `n8n webhook successfully dispatched for run ${savedRun.id}`,
+    );
 
     return {
       message: 'Customer 360 analysis workflow triggered successfully',
