@@ -12,6 +12,7 @@ import type { User } from '../users/entities/user.entity.js';
 import { SegmentAssignmentType } from './enums/customer.enum.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import type { CreateSegmentDto } from './dto/create-segment.dto.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 describe('SegmentsService', () => {
   let service: SegmentsService;
@@ -32,6 +33,21 @@ describe('SegmentsService', () => {
     lastLoginAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+  };
+  const adminActor: AuthenticatedUser = {
+    id: 'user-1',
+    name: 'Admin',
+    email: 'admin@example.com',
+    role: UserRole.ADMIN,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const salesActor: AuthenticatedUser = {
+    ...adminActor,
+    id: 'sales-1',
+    role: UserRole.SALES,
   };
 
   const mockSegment: Segment = {
@@ -114,6 +130,8 @@ describe('SegmentsService', () => {
       select: jest.fn().mockReturnThis(),
       addSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
       groupBy: jest.fn().mockReturnThis(),
       getRawMany: jest
         .fn()
@@ -155,12 +173,17 @@ describe('SegmentsService', () => {
       (segmentsRepository.create as jest.Mock).mockReturnValue(mockSegment);
       (segmentsRepository.save as jest.Mock).mockResolvedValue(mockSegment);
 
-      const result = await service.create({
-        name: 'Enterprise Tech',
-        createdBy: 'user-1',
-        criteria: mockCriteria,
-      });
+      const result = await service.create(
+        {
+          name: 'Enterprise Tech',
+          criteria: mockCriteria,
+        },
+        adminActor,
+      );
 
+      expect(segmentsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ createdBy: adminActor.id }),
+      );
       expect(result.id).toBe('segment-1');
       expect(result.creator).not.toHaveProperty('passwordHash');
     });
@@ -170,11 +193,13 @@ describe('SegmentsService', () => {
       (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
 
       await expect(
-        service.create({
-          name: 'Enterprise Tech',
-          createdBy: 'user-1',
-          criteria: mockCriteria,
-        }),
+        service.create(
+          {
+            name: 'Enterprise Tech',
+            criteria: mockCriteria,
+          },
+          adminActor,
+        ),
       ).rejects.toBeInstanceOf(ConflictException);
     });
   });
@@ -185,12 +210,39 @@ describe('SegmentsService', () => {
       qb.getManyAndCount.mockResolvedValue([[mockSegment], 1]);
       (segmentsRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
 
-      const result = await service.findAll({ page: 1, limit: 10 });
+      const result = await service.findAll({ page: 1, limit: 10 }, adminActor);
 
       expect(customerSegmentsRepository.createQueryBuilder).toHaveBeenCalled();
       expect(result.data).toHaveLength(1);
       expect(result.data[0].customerCount).toBe(42);
       expect(result.data[0].creator).not.toHaveProperty('passwordHash');
+    });
+
+    it('limits Sales segment membership counts to their own Customers', async () => {
+      const segmentQb = createQueryBuilder();
+      segmentQb.getManyAndCount.mockResolvedValue([[mockSegment], 1]);
+      (segmentsRepository.createQueryBuilder as jest.Mock).mockReturnValue(
+        segmentQb,
+      );
+      const countQb = customerSegmentsRepository.createQueryBuilder?.(
+        'cs',
+      ) as unknown as {
+        leftJoin: jest.Mock;
+        andWhere: jest.Mock;
+        getRawMany: jest.Mock;
+      };
+      countQb.getRawMany = jest.fn().mockResolvedValue([]);
+
+      await service.findAll({ page: 1, limit: 10 }, salesActor);
+
+      expect(countQb.leftJoin).toHaveBeenCalledWith(
+        'cs.customer',
+        'countedCustomer',
+      );
+      expect(countQb.andWhere).toHaveBeenCalledWith(
+        'countedCustomer.createdBy = :actorId',
+        { actorId: salesActor.id },
+      );
     });
   });
 
@@ -199,18 +251,84 @@ describe('SegmentsService', () => {
       (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
       (customerSegmentsRepository.count as jest.Mock).mockResolvedValue(5);
 
-      const result = await service.findOne('segment-1');
+      const result = await service.findOne('segment-1', adminActor);
 
       expect(result.id).toBe('segment-1');
       expect(result.customerCount).toBe(5);
     });
 
+    it('returns a Customer count scoped to the Sales actor', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customerSegmentsRepository.count as jest.Mock).mockResolvedValue(2);
+
+      const result = await service.findOne('segment-1', salesActor);
+
+      expect(customerSegmentsRepository.count).toHaveBeenCalledWith({
+        where: {
+          segmentId: 'segment-1',
+          customer: { createdBy: salesActor.id },
+        },
+      });
+      expect(result.customerCount).toBe(2);
+    });
+
     it('throws NotFoundException when segment does not exist', async () => {
       (segmentsRepository.findOne as jest.Mock).mockResolvedValue(null);
 
-      await expect(service.findOne('missing-id')).rejects.toBeInstanceOf(
-        NotFoundException,
+      await expect(
+        service.findOne('missing-id', adminActor),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('update and deletion permissions', () => {
+    it('records segment updater from the authenticated actor', async () => {
+      const salesUser = {
+        ...mockUser,
+        id: salesActor.id,
+        role: UserRole.SALES,
+      };
+      const segment = { ...mockSegment };
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(segment);
+      (usersRepository.findOne as jest.Mock).mockResolvedValue(salesUser);
+      (segmentsRepository.save as jest.Mock).mockImplementation((value) =>
+        Promise.resolve(value),
       );
+
+      await service.update('segment-1', { isActive: false }, salesActor);
+
+      expect(usersRepository.findOne).toHaveBeenCalledWith({
+        where: { id: salesActor.id },
+      });
+      expect(segmentsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updatedBy: salesActor.id,
+          isActive: false,
+        }),
+      );
+    });
+
+    it('does not allow Sales to delete workspace-wide segment memberships', async () => {
+      await expect(
+        service.remove('segment-1', salesActor),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(segmentsRepository.findOne).not.toHaveBeenCalled();
+      expect(customerSegmentsRepository.remove).not.toHaveBeenCalled();
+    });
+  });
+
+  it('scopes segment membership rows returned to Sales', async () => {
+    const qb = createQueryBuilder();
+    qb.getManyAndCount.mockResolvedValue([[], 0]);
+    (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+    (
+      customerSegmentsRepository.createQueryBuilder as jest.Mock
+    ).mockReturnValue(qb);
+
+    await service.getCustomers('segment-1', {}, salesActor);
+
+    expect(qb.andWhere).toHaveBeenCalledWith('customer.createdBy = :actorId', {
+      actorId: salesActor.id,
     });
   });
 
@@ -222,14 +340,40 @@ describe('SegmentsService', () => {
       );
       (customerSegmentsRepository.findOne as jest.Mock).mockResolvedValue(null);
 
-      const result = await service.evaluateCustomer('segment-1', {
-        customerId: 'customer-1',
-        assignmentType: SegmentAssignmentType.RULE,
-      });
+      const result = await service.evaluateCustomer(
+        'segment-1',
+        {
+          customerId: 'customer-1',
+          assignmentType: SegmentAssignmentType.RULE,
+        },
+        adminActor,
+      );
 
       expect(result.matched).toBe(true);
       expect(result.status).toBe('COMPLETED');
       expect(customerSegmentsRepository.save).toHaveBeenCalled();
+    });
+
+    it('records the authenticated Sales actor on membership assignment', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        createdBy: salesActor.id,
+      });
+      (customerSegmentsRepository.findOne as jest.Mock).mockResolvedValue(null);
+
+      await service.evaluateCustomer(
+        'segment-1',
+        {
+          customerId: 'customer-1',
+          assignmentType: SegmentAssignmentType.RULE,
+        },
+        salesActor,
+      );
+
+      expect(customerSegmentsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ assignedBy: salesActor.id }),
+      );
     });
 
     it('removes assignment when customer does not match criteria', async () => {
@@ -247,13 +391,37 @@ describe('SegmentsService', () => {
         existing,
       );
 
-      const result = await service.evaluateCustomer('segment-1', {
-        customerId: 'customer-1',
-        assignmentType: SegmentAssignmentType.RULE,
-      });
+      const result = await service.evaluateCustomer(
+        'segment-1',
+        {
+          customerId: 'customer-1',
+          assignmentType: SegmentAssignmentType.RULE,
+        },
+        adminActor,
+      );
 
       expect(result.matched).toBe(false);
       expect(customerSegmentsRepository.remove).toHaveBeenCalledWith(existing);
+    });
+
+    it('denies Sales evaluation of customers created by another user', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        createdBy: 'another-user',
+      });
+
+      await expect(
+        service.evaluateCustomer(
+          'segment-1',
+          {
+            customerId: 'customer-1',
+            assignmentType: SegmentAssignmentType.RULE,
+          },
+          salesActor,
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(customerSegmentsRepository.save).not.toHaveBeenCalled();
     });
   });
 
@@ -266,9 +434,13 @@ describe('SegmentsService', () => {
       ]);
       (customerSegmentsRepository.find as jest.Mock).mockResolvedValue([]);
 
-      const result = await service.evaluateAll('segment-1', {
-        assignmentType: SegmentAssignmentType.RULE,
-      });
+      const result = await service.evaluateAll(
+        'segment-1',
+        {
+          assignmentType: SegmentAssignmentType.RULE,
+        },
+        adminActor,
+      );
 
       expect(result.status).toBe('COMPLETED');
       expect(result.total).toBe(2);
@@ -336,9 +508,13 @@ describe('SegmentsService', () => {
       ]);
       (customerSegmentsRepository.find as jest.Mock).mockResolvedValue([]);
 
-      const result = await service.evaluateAll('segment-1', {
-        assignmentType: SegmentAssignmentType.RULE,
-      });
+      const result = await service.evaluateAll(
+        'segment-1',
+        {
+          assignmentType: SegmentAssignmentType.RULE,
+        },
+        adminActor,
+      );
 
       expect(result.matched).toBe(0);
       expect(customerSegmentsRepository.find).toHaveBeenCalledTimes(1);
@@ -348,10 +524,14 @@ describe('SegmentsService', () => {
     it('treats an explicitly empty customer ID list as an empty batch', async () => {
       (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
 
-      const result = await service.evaluateAll('segment-1', {
-        assignmentType: SegmentAssignmentType.RULE,
-        customerIds: [],
-      });
+      const result = await service.evaluateAll(
+        'segment-1',
+        {
+          assignmentType: SegmentAssignmentType.RULE,
+          customerIds: [],
+        },
+        adminActor,
+      );
 
       expect(result.total).toBe(0);
       expect(result.processed).toBe(0);
@@ -365,15 +545,64 @@ describe('SegmentsService', () => {
       (customersRepository.find as jest.Mock).mockResolvedValue([mockCustomer]);
       (customerSegmentsRepository.find as jest.Mock).mockResolvedValue([]);
 
-      const result = await service.evaluateAll('segment-1', {
-        assignmentType: SegmentAssignmentType.RULE,
-        customerIds: ['customer-1', 'customer-1'],
-      });
+      const result = await service.evaluateAll(
+        'segment-1',
+        {
+          assignmentType: SegmentAssignmentType.RULE,
+          customerIds: ['customer-1', 'customer-1'],
+        },
+        adminActor,
+      );
 
       expect(result.total).toBe(1);
       expect(customersRepository.find).toHaveBeenCalledWith(
         expect.objectContaining({ where: [{ id: 'customer-1' }] }),
       );
+    });
+
+    it('restricts Sales bulk evaluation to owned Customers', async () => {
+      const ownCustomer = { ...mockCustomer, createdBy: salesActor.id };
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customersRepository.find as jest.Mock).mockResolvedValue([ownCustomer]);
+      (customerSegmentsRepository.find as jest.Mock).mockResolvedValue([]);
+
+      const result = await service.evaluateAll(
+        'segment-1',
+        { assignmentType: SegmentAssignmentType.RULE },
+        salesActor,
+      );
+
+      expect(customersRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { createdBy: salesActor.id } }),
+      );
+      expect(result.total).toBe(1);
+      expect(customerSegmentsRepository.save).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ assignedBy: salesActor.id }),
+        ]),
+      );
+    });
+
+    it('rejects explicit Customer IDs outside the Sales actor scope', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customersRepository.find as jest.Mock).mockResolvedValue([]);
+
+      await expect(
+        service.evaluateAll(
+          'segment-1',
+          {
+            assignmentType: SegmentAssignmentType.RULE,
+            customerIds: ['customer-other'],
+          },
+          salesActor,
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(customersRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: [{ id: 'customer-other', createdBy: salesActor.id }],
+        }),
+      );
+      expect(customerSegmentsRepository.save).not.toHaveBeenCalled();
     });
 
     it('processes 51 customers in batches of 50 and 1', async () => {
@@ -385,9 +614,13 @@ describe('SegmentsService', () => {
       (customersRepository.find as jest.Mock).mockResolvedValue(customers);
       (customerSegmentsRepository.find as jest.Mock).mockResolvedValue([]);
 
-      const result = await service.evaluateAll('segment-1', {
-        assignmentType: SegmentAssignmentType.RULE,
-      });
+      const result = await service.evaluateAll(
+        'segment-1',
+        {
+          assignmentType: SegmentAssignmentType.RULE,
+        },
+        adminActor,
+      );
 
       expect(result.processed).toBe(51);
       expect(result.matched).toBe(51);

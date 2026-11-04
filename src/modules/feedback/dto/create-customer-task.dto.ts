@@ -69,6 +69,14 @@ export class CreateCustomerTaskDto {
   idempotencyKey!: string;
 
   @ApiPropertyOptional({
+    description: 'Associated CustomerFeedback UUID',
+    format: 'uuid',
+  })
+  @IsOptional()
+  @IsUUID('4')
+  customerFeedbackId?: string;
+
+  @ApiPropertyOptional({
     description: 'Source entity type (e.g. CUSTOMER_FEEDBACK)',
   })
   @IsOptional()

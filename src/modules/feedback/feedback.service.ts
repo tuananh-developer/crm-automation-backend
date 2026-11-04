@@ -1,7 +1,9 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -183,14 +185,24 @@ export class FeedbackService {
       timestamp: new Date().toISOString(),
     };
 
+    const apiKey =
+      this.configService.get<string>('N8N_API_KEY') ||
+      this.configService.get<string>('N8N_WEBHOOK_SECRET');
+
+    if (!apiKey) {
+      const errorMsg =
+        'N8N_API_KEY is not configured; cannot securely dispatch to n8n (Fail-Closed)';
+      this.logger.error(errorMsg);
+      await this.handleDispatchFailure(feedbackId, workflowRunId, errorMsg);
+      throw new InternalServerErrorException(errorMsg);
+    }
+
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-N8N-API-KEY':
-            this.configService.get<string>('N8N_API_KEY') ||
-            'crm-automation-n8n-secret-key',
+          'X-N8N-API-KEY': apiKey,
         },
         body: JSON.stringify(payload),
       });
@@ -337,6 +349,9 @@ export class FeedbackService {
       feedback.status = FeedbackStatus.FAILED;
       feedback.errorMessage =
         dto.errorMessage ?? 'Workflow execution reported failure';
+      if (dto.rawAIOutput) {
+        feedback.rawAIOutput = dto.rawAIOutput;
+      }
     }
     await this.feedbackRepository.save(feedback);
 
@@ -344,13 +359,31 @@ export class FeedbackService {
       ? WorkflowStatus.SUCCESS
       : WorkflowStatus.FAILED;
     workflowRun.finishedAt = new Date();
-    workflowRun.errorMessage = dto.errorMessage ?? null;
+    workflowRun.errorMessage = isSuccess
+      ? null
+      : (dto.errorMessage ?? 'Workflow execution reported failure');
+    const fallbackMode =
+      typeof dto.rawAIOutput?.classificationMode === 'string'
+        ? dto.rawAIOutput.classificationMode
+        : isSuccess
+          ? 'GEMINI_AI'
+          : 'HEURISTIC_FALLBACK';
+    const fallbackProvider =
+      typeof dto.rawAIOutput?.provider === 'string'
+        ? dto.rawAIOutput.provider
+        : isSuccess
+          ? 'GEMINI'
+          : 'FALLBACK_HEURISTIC';
+
     workflowRun.outputPayload = {
       sentiment: dto.sentiment,
       category: dto.category,
       urgency: dto.urgency,
       escalationRequired: dto.escalationRequired,
+      classificationMode: dto.classificationMode ?? fallbackMode,
+      provider: dto.provider ?? fallbackProvider,
       rawAIOutput: dto.rawAIOutput,
+      errorMessage: isSuccess ? null : dto.errorMessage,
     };
     await this.workflowRunsRepository.save(workflowRun);
 
@@ -363,16 +396,78 @@ export class FeedbackService {
   }
 
   /**
-   * Concurrency-safe idempotent creation of operational CustomerTask.
-   * Catches unique constraint collisions on idempotencyKey and returns existing record.
+   * Concurrency-safe payload-aware idempotent creation of operational CustomerTask.
+   * Validates CustomerFeedback relation and customer ownership.
+   * Catches unique constraint collisions on idempotencyKey and returns existing record
+   * only if payload matches; otherwise returns ConflictException.
    */
   async ensureCustomerTask(dto: CreateCustomerTaskDto) {
+    // 1. Validate Customer ownership & existence
+    const customer = await this.customersRepository.findOne({
+      where: { id: dto.customerId },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer ${dto.customerId} not found`);
+    }
+
+    // 2. Link and validate CustomerFeedback relation
+    const feedbackId =
+      dto.customerFeedbackId ??
+      (dto.sourceEntityType === 'CUSTOMER_FEEDBACK'
+        ? dto.sourceEntityId
+        : null);
+
+    let feedback: CustomerFeedback | null = null;
+    if (feedbackId) {
+      feedback = await this.feedbackRepository.findOne({
+        where: { id: feedbackId },
+      });
+      if (!feedback) {
+        throw new NotFoundException(
+          `Referenced CustomerFeedback ${feedbackId} not found`,
+        );
+      }
+      if (feedback.customerId !== dto.customerId) {
+        throw new BadRequestException(
+          `CustomerFeedback ${feedbackId} belongs to customer ${feedback.customerId}, not ${dto.customerId}`,
+        );
+      }
+    }
+
+    const resolvedFeedbackId = feedback ? feedback.id : null;
+
+    // Helper to verify payload equivalence for idempotency
+    const verifyPayloadMatch = (existingTask: CustomerTask) => {
+      const customerMatches = existingTask.customerId === dto.customerId;
+      const taskTypeMatches = existingTask.taskType === dto.taskType;
+      const titleMatches = existingTask.title === dto.title;
+      const feedbackMatches =
+        (existingTask.customerFeedbackId ?? null) === resolvedFeedbackId;
+      const sourceEntityMatches =
+        (existingTask.sourceEntityId ?? null) ===
+        (dto.sourceEntityId ?? resolvedFeedbackId ?? null);
+
+      if (
+        !customerMatches ||
+        !taskTypeMatches ||
+        !titleMatches ||
+        !feedbackMatches ||
+        !sourceEntityMatches
+      ) {
+        throw new ConflictException(
+          `Idempotency key '${dto.idempotencyKey}' was already used with different request parameters`,
+        );
+      }
+    };
+
+    // 3. Pre-check existing idempotency key
     const existing = await this.customerTasksRepository.findOne({
       where: { idempotencyKey: dto.idempotencyKey },
     });
     if (existing) {
+      verifyPayloadMatch(existing);
       this.logger.log(
-        `CustomerTask with idempotencyKey '${dto.idempotencyKey}' already exists: returning existing task ${existing.id}`,
+        `CustomerTask with idempotencyKey '${dto.idempotencyKey}' already exists with matching payload: returning existing task ${existing.id}`,
       );
       return { task: existing, created: false };
     }
@@ -380,6 +475,7 @@ export class FeedbackService {
     try {
       const task = this.customerTasksRepository.create({
         customerId: dto.customerId,
+        customerFeedbackId: resolvedFeedbackId,
         taskType: dto.taskType,
         title: dto.title,
         description: dto.description ?? null,
@@ -388,8 +484,10 @@ export class FeedbackService {
         assignedTo: dto.assignedTo ?? null,
         dueAt: dto.dueAt ? new Date(dto.dueAt) : null,
         idempotencyKey: dto.idempotencyKey,
-        sourceEntityType: dto.sourceEntityType ?? 'CUSTOMER_FEEDBACK',
-        sourceEntityId: dto.sourceEntityId ?? null,
+        sourceEntityType:
+          dto.sourceEntityType ??
+          (resolvedFeedbackId ? 'CUSTOMER_FEEDBACK' : null),
+        sourceEntityId: dto.sourceEntityId ?? resolvedFeedbackId ?? null,
       });
 
       const saved = await this.customerTasksRepository.save(task);
@@ -405,12 +503,13 @@ export class FeedbackService {
         error?.message?.includes('UQ_customer_tasks_idempotency_key')
       ) {
         this.logger.log(
-          `Concurrent insert collision for idempotencyKey '${dto.idempotencyKey}': fetching existing task`,
+          `Concurrent insert collision for idempotencyKey '${dto.idempotencyKey}': fetching existing task and verifying payload`,
         );
         const collisionTask = await this.customerTasksRepository.findOne({
           where: { idempotencyKey: dto.idempotencyKey },
         });
         if (collisionTask) {
+          verifyPayloadMatch(collisionTask);
           return { task: collisionTask, created: false };
         }
       }

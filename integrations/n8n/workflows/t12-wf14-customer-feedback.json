@@ -46,7 +46,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $json.customerId }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/customers/' + $json.customerId + '/internal' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -54,6 +54,10 @@
             {
               "name": "Accept",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -107,7 +111,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 6. Code: Validate Classification \u2014 enforce schema and confidence constraints\nconst response = $input.first().json;\nconst prep = $('Code: Validate Redaction/Normalize Feedback').first().json;\n\nlet aiParsed = null;\ntry {\n  const rawText = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    aiParsed = JSON.parse(rawText);\n  }\n} catch (e) {\n  aiParsed = null;\n}\n\nlet sentiment = 'NEUTRAL';\nlet category = 'General';\nlet urgency = 'LOW';\nlet escalationRequired = false;\nlet escalationReason = null;\n\nif (aiParsed && aiParsed.sentiment) {\n  sentiment = ['POSITIVE', 'NEUTRAL', 'NEGATIVE'].includes(aiParsed.sentiment) ? aiParsed.sentiment : 'NEUTRAL';\n  category = aiParsed.category || 'General';\n  urgency = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(aiParsed.urgency) ? aiParsed.urgency : 'LOW';\n  escalationRequired = Boolean(aiParsed.escalationRequired || urgency === 'CRITICAL' || urgency === 'HIGH');\n  escalationReason = aiParsed.escalationReason || (escalationRequired ? 'High urgency customer feedback requires immediate operational follow-up' : null);\n} else {\n  // Deterministic Fallback if Gemini rate-limits or interrupts\n  const text = (prep.normalizedSafeContent || '').toLowerCase();\n  if (text.includes('urgent') || text.includes('broken') || text.includes('timeout') || text.includes('fail') || text.includes('cancel')) {\n    sentiment = 'NEGATIVE';\n    category = 'Product Quality';\n    urgency = 'HIGH';\n    escalationRequired = true;\n    escalationReason = 'Critical operational keywords detected in feedback';\n  } else if (text.includes('great') || text.includes('excellent') || text.includes('love') || text.includes('thanks')) {\n    sentiment = 'POSITIVE';\n    category = 'Customer Support';\n    urgency = 'LOW';\n    escalationRequired = false;\n  }\n}\n\nreturn [{\n  json: {\n    feedbackId: prep.feedbackId,\n    customerId: prep.customerId,\n    workflowRunId: prep.workflowRunId,\n    sentiment,\n    category,\n    urgency,\n    escalationRequired,\n    escalationReason,\n    rawAIOutput: aiParsed || response\n  }\n}];"
+        "jsCode": "// 6. Code: Validate Classification — honest AI evaluation & provenance\nconst response = $input.first().json;\nconst prep = $('Code: Validate Redaction/Normalize Feedback').first().json;\n\nlet aiParsed = null;\nlet parseError = null;\ntry {\n  const rawText = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    aiParsed = JSON.parse(rawText);\n  } else if (response.error) {\n    parseError = response.error.message || JSON.stringify(response.error);\n  }\n} catch (e) {\n  parseError = e.message || 'Failed to parse Gemini response';\n  aiParsed = null;\n}\n\nif (aiParsed && aiParsed.sentiment) {\n  const sentiment = ['POSITIVE', 'NEUTRAL', 'NEGATIVE'].includes(aiParsed.sentiment) ? aiParsed.sentiment : 'NEUTRAL';\n  const category = aiParsed.category || 'General';\n  const urgency = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(aiParsed.urgency) ? aiParsed.urgency : 'LOW';\n  const escalationRequired = Boolean(aiParsed.escalationRequired || urgency === 'CRITICAL' || urgency === 'HIGH');\n  const escalationReason = aiParsed.escalationReason || (escalationRequired ? 'High urgency customer feedback requires immediate operational follow-up' : null);\n\n  return [{\n    json: {\n      feedbackId: prep.feedbackId,\n      customerId: prep.customerId,\n      workflowRunId: prep.workflowRunId,\n      status: 'SUCCESS',\n      sentiment,\n      category,\n      urgency,\n      escalationRequired,\n      escalationReason,\n      classificationMode: 'GEMINI_AI',\n      provider: 'GEMINI',\n      rawAIOutput: {\n        isFallback: false,\n        classificationMode: 'GEMINI_AI',\n        provider: 'GEMINI',\n        parsed: aiParsed,\n        raw: response\n      }\n    }\n  }];\n}\n\n// Deterministic Fallback if Gemini rate-limits, errors or returns unparseable text\nconst errorMsg = parseError || response.error?.message || (response.promptFeedback?.blockReason ? `Blocked: ${response.promptFeedback.blockReason}` : 'Gemini failed to classify feedback');\nconst text = (prep.normalizedSafeContent || '').toLowerCase();\nlet sentiment = 'NEUTRAL';\nlet category = 'General';\nlet urgency = 'LOW';\nlet escalationRequired = false;\nlet escalationReason = null;\n\nif (text.includes('urgent') || text.includes('broken') || text.includes('timeout') || text.includes('fail') || text.includes('cancel')) {\n  sentiment = 'NEGATIVE';\n  category = 'Product Quality';\n  urgency = 'HIGH';\n  escalationRequired = true;\n  escalationReason = 'Critical operational keywords detected in feedback (Heuristic Fallback)';\n} else if (text.includes('great') || text.includes('excellent') || text.includes('love') || text.includes('thanks')) {\n  sentiment = 'POSITIVE';\n  category = 'Customer Support';\n  urgency = 'LOW';\n  escalationRequired = false;\n}\n\nreturn [{\n  json: {\n    feedbackId: prep.feedbackId,\n    customerId: prep.customerId,\n    workflowRunId: prep.workflowRunId,\n    status: 'FAILED',\n    errorMessage: errorMsg,\n    sentiment,\n    category,\n    urgency,\n    escalationRequired,\n    escalationReason,\n    classificationMode: 'HEURISTIC_FALLBACK',\n    provider: 'FALLBACK_HEURISTIC',\n    rawAIOutput: {\n      isFallback: true,\n      classificationMode: 'HEURISTIC_FALLBACK',\n      provider: 'FALLBACK_HEURISTIC',\n      error: errorMsg,\n      raw: response\n    }\n  }\n}];"
       },
       "id": "node-6-validate-classification",
       "name": "Code: Validate Classification",
@@ -144,13 +148,13 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"feedbackId\": \"{{ $json.feedbackId }}\",\n  \"workflowRunId\": \"{{ $json.workflowRunId }}\",\n  \"status\": \"SUCCESS\",\n  \"sentiment\": \"{{ $json.sentiment }}\",\n  \"category\": \"{{ $json.category }}\",\n  \"urgency\": \"{{ $json.urgency }}\",\n  \"escalationRequired\": {{ $json.escalationRequired }}\n}",
+        "jsonBody": "={\n  \"feedbackId\": \"{{ $json.feedbackId }}\",\n  \"workflowRunId\": \"{{ $json.workflowRunId }}\",\n  \"status\": \"{{ $json.status }}\",\n  \"sentiment\": \"{{ $json.sentiment }}\",\n  \"category\": \"{{ $json.category }}\",\n  \"urgency\": \"{{ $json.urgency }}\",\n  \"escalationRequired\": {{ $json.escalationRequired }},\n  \"classificationMode\": \"{{ $json.classificationMode }}\",\n  \"provider\": \"{{ $json.provider }}\",\n  \"rawAIOutput\": {{ JSON.stringify($json.rawAIOutput) }},\n  \"errorMessage\": {{ JSON.stringify($json.errorMessage || undefined) }}\n}",
         "options": {
           "timeout": 10000
         }
@@ -198,13 +202,13 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"customerId\": \"{{ $('Code: Determine Priority/SLA').item.json.customerId }}\",\n  \"taskType\": \"FEEDBACK_ESCALATION\",\n  \"title\": \"Urgent Customer Feedback: {{ $('Code: Determine Priority/SLA').item.json.category }}\",\n  \"description\": \"{{ $('Code: Determine Priority/SLA').item.json.escalationReason || 'Customer feedback escalated' }}\",\n  \"priority\": \"{{ $('Code: Determine Priority/SLA').item.json.taskPriority }}\",\n  \"idempotencyKey\": \"{{ $('Code: Determine Priority/SLA').item.json.idempotencyKey }}\",\n  \"sourceEntityType\": \"CUSTOMER_FEEDBACK\",\n  \"sourceEntityId\": \"{{ $('Code: Determine Priority/SLA').item.json.feedbackId }}\",\n  \"dueAt\": \"{{ $('Code: Determine Priority/SLA').item.json.dueAt }}\"\n}",
+        "jsonBody": "={\n  \"customerId\": \"{{ $('Code: Determine Priority/SLA').item.json.customerId }}\",\n  \"taskType\": \"FEEDBACK_ESCALATION\",\n  \"title\": \"Urgent Customer Feedback: {{ $('Code: Determine Priority/SLA').item.json.category }}\",\n  \"description\": \"{{ $('Code: Determine Priority/SLA').item.json.escalationReason || 'Customer feedback escalated' }}\",\n  \"priority\": \"{{ $('Code: Determine Priority/SLA').item.json.taskPriority }}\",\n  \"idempotencyKey\": \"{{ $('Code: Determine Priority/SLA').item.json.idempotencyKey }}\",\n  \"sourceEntityType\": \"CUSTOMER_FEEDBACK\",\n  \"sourceEntityId\": \"{{ $('Code: Determine Priority/SLA').item.json.feedbackId }}\",\n  \"customerFeedbackId\": \"{{ $('Code: Determine Priority/SLA').item.json.feedbackId }}\",\n  \"dueAt\": \"{{ $('Code: Determine Priority/SLA').item.json.dueAt }}\"\n}",
         "options": {
           "timeout": 10000
         }
@@ -232,13 +236,13 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"userId\": \"{{ $('HTTP Request: Get Customer Context').item.json.createdBy || $('Code: Validate Feedback Input').item.json.createdBy || '00000000-0000-0000-0000-000000000001' }}\",\n  \"type\": \"CUSTOMER_FEEDBACK_PROCESSED\",\n  \"title\": \"Customer Feedback Classified\",\n  \"message\": \"Feedback has been classified as {{ $('Code: Determine Priority/SLA').item.json.sentiment }} ({{ $('Code: Determine Priority/SLA').item.json.category }}).\",\n  \"severity\": \"{{ $('Code: Determine Priority/SLA').item.json.escalationRequired ? 'HIGH' : 'INFO' }}\",\n  \"customerId\": \"{{ $('Code: Determine Priority/SLA').item.json.customerId }}\"\n}",
+        "jsonBody": "={\n  \"userId\": {{ JSON.stringify($('HTTP Request: Get Customer Context').item.json.createdBy || $('Code: Validate Feedback Input').item.json.createdBy) }},\n  \"type\": \"CUSTOMER_FEEDBACK_PROCESSED\",\n  \"title\": \"Customer Feedback Classified\",\n  \"message\": \"Feedback has been classified as {{ $('Code: Determine Priority/SLA').item.json.sentiment }} ({{ $('Code: Determine Priority/SLA').item.json.category }}).\",\n  \"severity\": \"{{ $('Code: Determine Priority/SLA').item.json.escalationRequired ? 'HIGH' : 'INFO' }}\",\n  \"customerId\": \"{{ $('Code: Determine Priority/SLA').item.json.customerId }}\"\n}",
         "options": {
           "timeout": 10000
         }
@@ -266,7 +270,7 @@
             },
             {
               "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY || 'crm-automation-n8n-secret-key' }}"
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },

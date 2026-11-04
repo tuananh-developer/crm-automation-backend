@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -359,9 +360,15 @@ describe('FeedbackService', () => {
   });
 
   describe('ensureCustomerTask idempotent & collision safe', () => {
-    it('should return existing task if idempotencyKey already exists', async () => {
+    it('should return existing task if idempotencyKey and payload match', async () => {
+      customersRepository.findOne.mockResolvedValue({ id: 'customer-1' });
       const existingTask = {
         id: 'existing-task-id',
+        customerId: 'customer-1',
+        taskType: 'FEEDBACK_ESCALATION',
+        title: 'Escalated feedback',
+        customerFeedbackId: null,
+        sourceEntityId: null,
         idempotencyKey: 'feedback-task-123',
       };
       customerTasksRepository.findOne.mockResolvedValue(existingTask);
@@ -378,7 +385,86 @@ describe('FeedbackService', () => {
       expect(customerTasksRepository.save).not.toHaveBeenCalled();
     });
 
+    it('should throw ConflictException if idempotencyKey exists with different customer or taskType', async () => {
+      customersRepository.findOne.mockResolvedValue({ id: 'customer-1' });
+      const existingTask = {
+        id: 'existing-task-id',
+        customerId: 'customer-2', // Different customer!
+        taskType: 'FEEDBACK_ESCALATION',
+        title: 'Escalated feedback',
+        idempotencyKey: 'reused-key',
+      };
+      customerTasksRepository.findOne.mockResolvedValue(existingTask);
+
+      await expect(
+        service.ensureCustomerTask({
+          customerId: 'customer-1',
+          taskType: 'FEEDBACK_ESCALATION',
+          title: 'Escalated feedback',
+          idempotencyKey: 'reused-key',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw NotFoundException if customer is not found', async () => {
+      customersRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.ensureCustomerTask({
+          customerId: 'non-existent',
+          taskType: 'FEEDBACK_ESCALATION',
+          title: 'Escalated feedback',
+          idempotencyKey: 'key-1',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should validate and link CustomerFeedback relation', async () => {
+      customersRepository.findOne.mockResolvedValue({ id: 'customer-1' });
+      feedbackRepository.findOne.mockResolvedValue({
+        id: 'feedback-1',
+        customerId: 'customer-1',
+      });
+      customerTasksRepository.findOne.mockResolvedValue(null);
+
+      const res = await service.ensureCustomerTask({
+        customerId: 'customer-1',
+        customerFeedbackId: 'feedback-1',
+        taskType: 'FEEDBACK_ESCALATION',
+        title: 'Feedback task',
+        idempotencyKey: 'key-with-feedback',
+      });
+
+      expect(res.created).toBe(true);
+      expect(customerTasksRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customerFeedbackId: 'feedback-1',
+          sourceEntityType: 'CUSTOMER_FEEDBACK',
+          sourceEntityId: 'feedback-1',
+        }),
+      );
+    });
+
+    it('should throw BadRequestException if referenced feedback belongs to a different customer', async () => {
+      customersRepository.findOne.mockResolvedValue({ id: 'customer-1' });
+      feedbackRepository.findOne.mockResolvedValue({
+        id: 'feedback-1',
+        customerId: 'other-customer', // Mismatch!
+      });
+
+      await expect(
+        service.ensureCustomerTask({
+          customerId: 'customer-1',
+          customerFeedbackId: 'feedback-1',
+          taskType: 'FEEDBACK_ESCALATION',
+          title: 'Feedback task',
+          idempotencyKey: 'key-mismatch',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it('should create new task if not existing', async () => {
+      customersRepository.findOne.mockResolvedValue({ id: 'customer-1' });
       customerTasksRepository.findOne.mockResolvedValue(null);
 
       const res = await service.ensureCustomerTask({
@@ -398,11 +484,17 @@ describe('FeedbackService', () => {
       );
     });
 
-    it('should catch 23505 collision error and return existing task', async () => {
+    it('should catch 23505 collision error and return existing task if payload matches', async () => {
+      customersRepository.findOne.mockResolvedValue({ id: 'customer-1' });
       customerTasksRepository.findOne
         .mockResolvedValueOnce(null) // first find returns null
         .mockResolvedValueOnce({
           id: 'collision-task-id',
+          customerId: 'customer-1',
+          taskType: 'FEEDBACK_ESCALATION',
+          title: 'Race condition task',
+          customerFeedbackId: null,
+          sourceEntityId: null,
           idempotencyKey: 'race-key',
         }); // second find after collision returns record
 

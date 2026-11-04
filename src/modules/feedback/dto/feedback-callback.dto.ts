@@ -62,6 +62,20 @@ export class FeedbackCallbackDto {
   @IsOptional()
   rawAIOutput?: Record<string, any>;
 
+  @ApiPropertyOptional({
+    description: 'Classification mode (e.g. GEMINI_AI, HEURISTIC_FALLBACK)',
+  })
+  @IsOptional()
+  @IsString()
+  classificationMode?: string;
+
+  @ApiPropertyOptional({
+    description: 'Provider name (e.g. GEMINI, FALLBACK_HEURISTIC)',
+  })
+  @IsOptional()
+  @IsString()
+  provider?: string;
+
   @ApiPropertyOptional({ description: 'Error message if status is FAILED' })
   @IsOptional()
   @IsString()
