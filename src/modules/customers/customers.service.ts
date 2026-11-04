@@ -8,6 +8,8 @@ import { QueryCustomerDto } from './dto/index.js';
 import { CustomerResponseDto } from './dto/customer-response.dto.js';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
 import { CustomerMapper } from './mappers/customer.mapper.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole } from '../users/enums/user.enum.js';
 
 @Injectable()
 export class CustomersService {
@@ -24,6 +26,7 @@ export class CustomersService {
 
   async findAll(
     query: QueryCustomerDto,
+    actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -44,6 +47,9 @@ export class CustomersService {
     if (query.status) {
       qb.andWhere('customer.status = :status', { status: query.status });
     }
+    if (actor.role === UserRole.SALES) {
+      qb.andWhere('customer.createdBy = :actorId', { actorId: actor.id });
+    }
 
     qb.orderBy('customer.createdAt', 'DESC')
       .skip((page - 1) * limit)
@@ -62,7 +68,10 @@ export class CustomersService {
     };
   }
 
-  async findOne(id: string): Promise<CustomerResponseDto> {
+  async findOne(
+    id: string,
+    actor: AuthenticatedUser,
+  ): Promise<CustomerResponseDto> {
     const customer = await this.customersRepository.findOne({
       where: { id },
       relations: {
@@ -75,7 +84,10 @@ export class CustomersService {
       },
     });
 
-    if (!customer) {
+    if (
+      !customer ||
+      (actor.role === UserRole.SALES && customer.createdBy !== actor.id)
+    ) {
       throw new NotFoundException(`Customer with ID '${id}' not found`);
     }
 

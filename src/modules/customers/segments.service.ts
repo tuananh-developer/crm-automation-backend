@@ -27,6 +27,8 @@ import { CustomerMapper } from './mappers/customer.mapper.js';
 import { SegmentMapper } from './mappers/segment.mapper.js';
 import { PaginatedResponseDto } from '../../common/index.js';
 import { SegmentAssignmentType } from './enums/customer.enum.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole } from '../users/enums/user.enum.js';
 
 @Injectable()
 export class SegmentsService {
@@ -44,13 +46,16 @@ export class SegmentsService {
     private readonly usersRepository: Repository<User>,
   ) {}
 
-  async create(dto: CreateSegmentDto): Promise<SegmentResponseDto> {
+  async create(
+    dto: CreateSegmentDto,
+    actor: AuthenticatedUser,
+  ): Promise<SegmentResponseDto> {
     const user = await this.usersRepository.findOne({
-      where: { id: dto.createdBy },
+      where: { id: actor.id },
     });
 
     if (!user) {
-      throw new NotFoundException(`User with ID '${dto.createdBy}' not found`);
+      throw new NotFoundException(`User with ID '${actor.id}' not found`);
     }
 
     const existing = await this.segmentsRepository.findOne({
@@ -68,7 +73,7 @@ export class SegmentsService {
       description: dto.description ?? null,
       criteria: dto.criteria,
       isActive: dto.isActive ?? true,
-      createdBy: dto.createdBy,
+      createdBy: actor.id,
       updatedBy: null,
     });
 
@@ -81,6 +86,7 @@ export class SegmentsService {
 
   async findAll(
     query: QuerySegmentDto,
+    actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -113,11 +119,19 @@ export class SegmentsService {
 
     if (data.length > 0) {
       const segmentIds = data.map((s) => s.id);
-      const counts = await this.customerSegmentsRepository
+      const countQuery = this.customerSegmentsRepository
         .createQueryBuilder('cs')
         .select('cs.segmentId', 'segmentId')
         .addSelect('COUNT(*)', 'count')
-        .where('cs.segmentId IN (:...segmentIds)', { segmentIds })
+        .where('cs.segmentId IN (:...segmentIds)', { segmentIds });
+      if (actor.role === UserRole.SALES) {
+        countQuery
+          .leftJoin('cs.customer', 'countedCustomer')
+          .andWhere('countedCustomer.createdBy = :actorId', {
+            actorId: actor.id,
+          });
+      }
+      const counts = await countQuery
         .groupBy('cs.segmentId')
         .getRawMany<{ segmentId: string; count: string }>();
 
@@ -141,7 +155,10 @@ export class SegmentsService {
     };
   }
 
-  async findOne(id: string): Promise<SegmentResponseDto> {
+  async findOne(
+    id: string,
+    actor: AuthenticatedUser,
+  ): Promise<SegmentResponseDto> {
     const segment = await this.segmentsRepository.findOne({
       where: { id },
       relations: {
@@ -155,7 +172,10 @@ export class SegmentsService {
     }
 
     const customerCount = await this.customerSegmentsRepository.count({
-      where: { segmentId: id },
+      where:
+        actor.role === UserRole.SALES
+          ? { segmentId: id, customer: { createdBy: actor.id } }
+          : { segmentId: id },
     });
 
     return SegmentMapper.toResponseDto(
@@ -163,7 +183,11 @@ export class SegmentsService {
     );
   }
 
-  async update(id: string, dto: UpdateSegmentDto): Promise<SegmentResponseDto> {
+  async update(
+    id: string,
+    dto: UpdateSegmentDto,
+    actor: AuthenticatedUser,
+  ): Promise<SegmentResponseDto> {
     const segment = await this.segmentsRepository.findOne({
       where: { id },
       relations: {
@@ -188,22 +212,13 @@ export class SegmentsService {
       }
     }
 
-    let updater: User | null = segment.updater ?? null;
-
-    if (dto.createdBy) {
-      const user = await this.usersRepository.findOne({
-        where: { id: dto.createdBy },
-      });
-
-      if (!user) {
-        throw new NotFoundException(
-          `User with ID '${dto.createdBy}' not found`,
-        );
-      }
-
-      segment.updatedBy = dto.createdBy;
-      updater = user;
+    const updater = await this.usersRepository.findOne({
+      where: { id: actor.id },
+    });
+    if (!updater) {
+      throw new NotFoundException(`User with ID '${actor.id}' not found`);
     }
+    segment.updatedBy = actor.id;
 
     if (dto.name !== undefined) {
       segment.name = dto.name;
@@ -228,7 +243,10 @@ export class SegmentsService {
     return SegmentMapper.toResponseDto(saved);
   }
 
-  async remove(id: string) {
+  async remove(id: string, actor: AuthenticatedUser) {
+    if (actor.role !== UserRole.ADMIN) {
+      throw new NotFoundException(`Segment with ID '${id}' not found`);
+    }
     const segment = await this.segmentsRepository.findOne({
       where: { id },
     });
@@ -249,6 +267,7 @@ export class SegmentsService {
   async getCustomers(
     segmentId: string,
     query: QuerySegmentDto,
+    actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     await this.ensureSegmentExists(segmentId);
 
@@ -268,6 +287,9 @@ export class SegmentsService {
         '(LOWER(customer.name) LIKE LOWER(:search) OR LOWER(customer.email) LIKE LOWER(:search) OR LOWER(customer.companyName) LIKE LOWER(:search))',
         { search: `%${query.search}%` },
       );
+    }
+    if (actor.role === UserRole.SALES) {
+      qb.andWhere('customer.createdBy = :actorId', { actorId: actor.id });
     }
 
     qb.orderBy('customer.createdAt', 'DESC')
@@ -293,6 +315,7 @@ export class SegmentsService {
   async evaluateCustomer(
     segmentId: string,
     dto: EvaluateSegmentDto,
+    actor: AuthenticatedUser,
   ): Promise<EvaluateSegmentResponseDto> {
     await this.ensureSegmentExists(segmentId);
     const segment = await this.getSegmentForEvaluation(segmentId);
@@ -310,6 +333,7 @@ export class SegmentsService {
         `Customer with ID '${dto.customerId}' not found`,
       );
     }
+    this.assertCustomerAccess(customer, actor);
 
     if (dto.assignmentType === SegmentAssignmentType.AI) {
       throw new BadRequestException(
@@ -335,7 +359,7 @@ export class SegmentsService {
       assignment.confidence = evaluation.confidence;
       assignment.assignedReason = evaluation.reason;
       assignment.assignedAt = new Date();
-      assignment.assignedBy = segment.createdBy;
+      assignment.assignedBy = actor.id;
 
       const saved = await this.customerSegmentsRepository.save(assignment);
 
@@ -367,7 +391,7 @@ export class SegmentsService {
       confidence: evaluation.confidence,
       assignmentReason: evaluation.reason,
       assignedAt: new Date(),
-      assignedBy: segment.createdBy,
+      assignedBy: actor.id,
       status: 'COMPLETED',
       matched: false,
     };
@@ -375,6 +399,7 @@ export class SegmentsService {
   async evaluateAll(
     segmentId: string,
     dto: EvaluateSegmentBulkDto,
+    actor: AuthenticatedUser,
   ): Promise<EvaluateSegmentBulkResponseDto> {
     const segment = await this.getSegmentForEvaluation(segmentId);
 
@@ -393,13 +418,26 @@ export class SegmentsService {
       dto.customerIds === undefined ? undefined : [...new Set(dto.customerIds)];
     const customers =
       customerIds === undefined
-        ? await this.customersRepository.find({ relations })
+        ? await this.customersRepository.find({
+            ...(actor.role === UserRole.SALES
+              ? { where: { createdBy: actor.id } }
+              : {}),
+            relations,
+          })
         : customerIds.length === 0
           ? []
           : await this.customersRepository.find({
-              where: customerIds.map((id) => ({ id })),
+              where: customerIds.map((id) =>
+                actor.role === UserRole.SALES
+                  ? { id, createdBy: actor.id }
+                  : { id },
+              ),
               relations,
             });
+
+    if (customerIds && customers.length !== customerIds.length) {
+      throw new NotFoundException('One or more customers were not found');
+    }
 
     const BATCH_SIZE = 50;
     let matched = 0;
@@ -440,7 +478,7 @@ export class SegmentsService {
           assignment.confidence = evaluation.confidence;
           assignment.assignedReason = evaluation.reason;
           assignment.assignedAt = new Date();
-          assignment.assignedBy = segment.createdBy;
+          assignment.assignedBy = actor.id;
 
           toSave.push(assignment);
         } else if (existing) {
@@ -474,6 +512,17 @@ export class SegmentsService {
     }
 
     return segment;
+  }
+
+  private assertCustomerAccess(
+    customer: Customer,
+    actor: AuthenticatedUser,
+  ): void {
+    if (actor.role === UserRole.SALES && customer.createdBy !== actor.id) {
+      throw new NotFoundException(
+        `Customer with ID '${customer.id}' not found`,
+      );
+    }
   }
 
   private async getSegmentForEvaluation(id: string) {

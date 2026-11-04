@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBody,
@@ -36,9 +37,16 @@ import {
   SegmentResponseDto,
 } from './dto/segment-response.dto.js';
 import { CustomerResponseDto } from './dto/customer-response.dto.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { RolesGuard } from '../../common/guards/roles.guard.js';
+import { Roles } from '../../common/decorators/roles.decorator.js';
+import { UserRole } from '../users/enums/user.enum.js';
 
 @ApiTags('Segments')
 @Controller('segments')
+@UseGuards(JwtAuthGuard)
 export class SegmentsController {
   constructor(private readonly segmentsService: SegmentsService) {}
 
@@ -61,8 +69,11 @@ export class SegmentsController {
     status: 409,
     description: 'A segment with this name already exists.',
   })
-  create(@Body() dto: CreateSegmentDto): Promise<SegmentResponseDto> {
-    return this.segmentsService.create(dto);
+  create(
+    @Body() dto: CreateSegmentDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<SegmentResponseDto> {
+    return this.segmentsService.create(dto, actor);
   }
 
   @Get()
@@ -87,8 +98,9 @@ export class SegmentsController {
   @ApiPaginatedResponse(SegmentResponseDto, 'Paginated list of segments.')
   findAll(
     @Query() query: QuerySegmentDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
-    return this.segmentsService.findAll(query);
+    return this.segmentsService.findAll(query, actor);
   }
 
   @Get(':id')
@@ -100,8 +112,11 @@ export class SegmentsController {
     type: SegmentResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Segment not found.' })
-  findOne(@Param('id', ParseUUIDPipe) id: string): Promise<SegmentResponseDto> {
-    return this.segmentsService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<SegmentResponseDto> {
+    return this.segmentsService.findOne(id, actor);
   }
 
   @Patch(':id')
@@ -117,11 +132,14 @@ export class SegmentsController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSegmentDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<SegmentResponseDto> {
-    return this.segmentsService.update(id, dto);
+    return this.segmentsService.update(id, dto, actor);
   }
 
   @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Delete a segment' })
   @ApiParam({ name: 'id', description: 'UUID of the segment to delete' })
   @ApiResponse({
@@ -132,8 +150,9 @@ export class SegmentsController {
   @ApiResponse({ status: 404, description: 'Segment not found.' })
   remove(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<DeleteSegmentResponseDto> {
-    return this.segmentsService.remove(id);
+    return this.segmentsService.remove(id, actor);
   }
 
   @Get(':id/customers')
@@ -157,8 +176,9 @@ export class SegmentsController {
   getCustomers(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: QuerySegmentDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
-    return this.segmentsService.getCustomers(id, query);
+    return this.segmentsService.getCustomers(id, query, actor);
   }
 
   @Post(':id/evaluate')
@@ -185,8 +205,9 @@ export class SegmentsController {
   evaluateCustomer(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: EvaluateSegmentDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<EvaluateSegmentResponseDto> {
-    return this.segmentsService.evaluateCustomer(id, dto);
+    return this.segmentsService.evaluateCustomer(id, dto, actor);
   }
 
   @Post(':id/evaluate-all')
@@ -210,7 +231,8 @@ export class SegmentsController {
   evaluateAll(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: EvaluateSegmentBulkDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<EvaluateSegmentBulkResponseDto> {
-    return this.segmentsService.evaluateAll(id, dto);
+    return this.segmentsService.evaluateAll(id, dto, actor);
   }
 }
