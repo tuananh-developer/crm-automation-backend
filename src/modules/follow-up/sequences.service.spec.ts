@@ -19,6 +19,7 @@ import type { Lead } from '../leads/entities/lead.entity.js';
 import type { User } from '../users/entities/user.entity.js';
 import type { Interaction } from '../leads/entities/interaction.entity.js';
 import type { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import { CRM_EVENTS } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
@@ -180,6 +181,7 @@ describe('SequencesService', () => {
     };
 
     rabbitmqService = {
+      enqueueEvent: jest.fn().mockResolvedValue({ id: 'outbox-followup-1' }),
       publishEvent: jest.fn().mockResolvedValue({
         eventId: 'evt-followup-1',
         eventType: 'lead.follow_up.triggered',
@@ -436,6 +438,24 @@ describe('SequencesService', () => {
         save: jest.fn().mockResolvedValue({ id: 'inter-1' }),
       };
 
+      const transactionManager = {
+        getRepository: jest.fn().mockImplementation((entity) => {
+          if (
+            entity &&
+            (entity as { name?: string }).name ===
+              'LeadFollowUpEnrollment'
+          ) {
+            return mockEnrollRepo;
+          }
+          if (
+            entity &&
+            (entity as { name?: string }).name === 'FollowUpExecution'
+          ) {
+            return mockExecRepo;
+          }
+          return mockInterRepo;
+        }),
+      };
       const mockDataSource = {
         transaction: jest
           .fn()
@@ -444,26 +464,7 @@ describe('SequencesService', () => {
               cb: (manager: {
                 getRepository: (entity: unknown) => unknown;
               }) => Promise<unknown>,
-            ) => {
-              return cb({
-                getRepository: jest.fn().mockImplementation((entity) => {
-                  if (
-                    entity &&
-                    (entity as { name?: string }).name ===
-                      'LeadFollowUpEnrollment'
-                  ) {
-                    return mockEnrollRepo;
-                  }
-                  if (
-                    entity &&
-                    (entity as { name?: string }).name === 'FollowUpExecution'
-                  ) {
-                    return mockExecRepo;
-                  }
-                  return mockInterRepo;
-                }),
-              });
-            },
+            ) => cb(transactionManager),
           ),
       };
 
@@ -493,6 +494,18 @@ describe('SequencesService', () => {
 
       expect(mockDataSource.transaction).toHaveBeenCalled();
       expect(mockInterRepo.save).toHaveBeenCalled();
+      expect(rabbitmqService.enqueueEvent).toHaveBeenCalledWith(
+        transactionManager,
+        CRM_EVENTS.FOLLOW_UP_TRIGGERED,
+        expect.objectContaining({
+          enrollmentId: 'enroll-123',
+          executionId: 'exec-tx-1',
+          leadId: 'lead-123',
+          sequenceId: 'seq-123',
+          stepId: 'step-1',
+        }),
+      );
+      expect(rabbitmqService.publishEvent).not.toHaveBeenCalled();
       expect(result.enrollment.status).toBe(EnrollmentStatus.ACTIVE);
       expect(result.firstStep.id).toBe('step-1');
     });
