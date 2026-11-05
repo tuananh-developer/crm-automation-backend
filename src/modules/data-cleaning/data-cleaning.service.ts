@@ -83,24 +83,38 @@ export class DataCleaningService {
    * Initiates a new Lead Data Cleaning Scan (UC10 - Step 4 & 5).
    * Creates a WorkflowRun and dispatches data.cleaning.requested event to RabbitMQ.
    */
-  async createScan(dto: CreateScanDto, userId: string): Promise<{
+  async createScan(dto: CreateScanDto, actor: AuthenticatedUser | string): Promise<{
     workflowRunId: string;
     status: WorkflowStatus;
     message: string;
   }> {
+    const userId = typeof actor === 'string' ? actor : actor.id;
+    const ownerId =
+      typeof actor === 'string' || actor.role === UserRole.ADMIN
+        ? null
+        : actor.id;
     const workflowRun = this.workflowRunRepository.create({
       workflowName: 'UC10_DATA_CLEANING',
       status: WorkflowStatus.PENDING,
       triggeredByUserId: userId,
-      inputPayload: { scope: dto.scope, filter: dto.filter || null, requestedAt: new Date().toISOString() },
+      inputPayload: {
+        scope: dto.scope,
+        filter: dto.filter || null,
+        ownerId,
+        requestedAt: new Date().toISOString(),
+      },
       outputPayload: null,
       startedAt: new Date(),
     });
     const savedRun = await this.dataSource.transaction(async (manager) => {
       const persisted = await manager.save(WorkflowRun, workflowRun);
       await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.DATA_CLEANING_REQUESTED, {
-        workflowRunId: persisted.id, triggeredByUserId: userId, scope: dto.scope,
-        filter: dto.filter || null, timestamp: new Date().toISOString(),
+        workflowRunId: persisted.id,
+        triggeredByUserId: userId,
+        ownerId,
+        scope: dto.scope,
+        filter: dto.filter || null,
+        timestamp: new Date().toISOString(),
       });
       return persisted;
     });
@@ -127,6 +141,11 @@ export class DataCleaningService {
     const inputPayload = (workflowRun.inputPayload as unknown as ScanInputPayload) || { scope: 'ALL' };
     const scope = inputPayload.scope || 'ALL'; const filter = inputPayload.filter || {}; const limit = Math.min(filter.limit || 500, 2000);
     const qb = this.leadsRepository.createQueryBuilder('lead');
+    if (inputPayload.ownerId) {
+      qb.andWhere('lead.ownerId = :ownerId', {
+        ownerId: inputPayload.ownerId,
+      });
+    }
     if (scope === 'FILTER') {
       if (filter.status) qb.andWhere('lead.status = :status', { status: filter.status });
       if (filter.sourceId) qb.andWhere('lead.sourceId = :sourceId', { sourceId: filter.sourceId });
@@ -485,13 +504,22 @@ export class DataCleaningService {
     const output = (workflowRun.outputPayload as unknown as ScanOutputPayload) || {};
     const findings: DataCleaningFinding[] = output.findings || [];
     if (!findings.length) throw new BadRequestException('Scan report contains no findings to apply');
-    const findingMap = new Map(findings.map((finding) => [finding.id, finding]));
     const result = await this.dataSource.transaction(async (manager) => {
-      const lockedRun = manager.queryRunner ? await manager.findOne(WorkflowRun, { where: { id: workflowRunId, workflowName: 'UC10_DATA_CLEANING' }, lock: { mode: 'pessimistic_write' } }) : workflowRun;
-      const targetRun = lockedRun || workflowRun;
+      const targetRun = await manager.findOne(WorkflowRun, {
+        where: { id: workflowRunId, workflowName: 'UC10_DATA_CLEANING' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!targetRun) {
+        throw new NotFoundException('Data cleaning scan not found');
+      }
       if (!isAdmin && targetRun.triggeredByUserId !== actorId) throw new ForbiddenException('You do not have permission to apply cleaning proposals for this scan');
       if (targetRun.status !== WorkflowStatus.SUCCESS) throw new BadRequestException('Data cleaning scan is no longer eligible for changes');
       const currentOutput = (targetRun.outputPayload as unknown as ScanOutputPayload) || {};
+      const currentFindings = currentOutput.findings || [];
+      if (!currentFindings.length) {
+        throw new BadRequestException('Scan report contains no findings to apply');
+      }
+      const findingMap = new Map(currentFindings.map((finding) => [finding.id, finding]));
       const previouslyAppliedIds: string[] = currentOutput.appliedFindingIds || [];
       const newlyAppliedIds: string[] = [];
       const results: AppliedFindingResult[] = [];
@@ -504,6 +532,11 @@ export class DataCleaningService {
       for (const [leadId, group] of grouped) {
         const lead = await manager.findOne(Lead, { where: { id: leadId }, lock: { mode: 'pessimistic_write' } });
         if (!lead) { for (const finding of group) results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: finding.currentValue, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Lead not found in database' }); continue; }
+        if (!isAdmin && lead.ownerId !== actorId) {
+          throw new ForbiddenException(
+            'You do not have permission to modify a Lead outside your ownership',
+          );
+        }
         const oldValues: Record<string, unknown> = {}; const newValues: Record<string, unknown> = {}; const appliedForLead: string[] = [];
         for (const finding of group) {
           const current = isAllowedCleaningField(finding.fieldName) ? getLeadFieldValue(lead, finding.fieldName) : (lead as unknown as Record<string, unknown>)[finding.fieldName];
