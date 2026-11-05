@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, Repository, type EntityManager } from 'typeorm';
 import { Lead } from '../leads/entities/lead.entity.js';
 import { Customer } from '../customers/entities/customer.entity.js';
 import { User } from '../users/entities/user.entity.js';
@@ -115,6 +115,33 @@ export class SalesMeetingsService {
     }
   }
 
+  private async getMeetingRunForUpdate(
+    manager: EntityManager,
+    meetingId: string,
+    workflowRunId: string,
+  ): Promise<{ meeting: SalesMeeting; run: WorkflowRun }> {
+    const meeting = await manager.getRepository(SalesMeeting).findOne({
+      where: { id: meetingId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!meeting || meeting.workflowRunId !== workflowRunId) {
+      throw new NotFoundException('Sales meeting not found');
+    }
+
+    const run = await manager.getRepository(WorkflowRun).findOne({
+      where: { id: workflowRunId, workflowName: WF11_NAME },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!run) {
+      throw new NotFoundException('Sales meeting WorkflowRun not found');
+    }
+
+    if (![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status)) {
+      throw new ConflictException('WorkflowRun is not active');
+    }
+    return { meeting, run };
+  }
+
   private async getMeetingRun(meetingId: string, workflowRunId?: string) {
     const meeting = await this.meetings.findOne({ where: { id: meetingId } });
     if (!meeting || (workflowRunId && meeting.workflowRunId !== workflowRunId))
@@ -176,140 +203,267 @@ export class SalesMeetingsService {
   }
 
   async saveTranscript(dto: SaveConversationTranscriptDto) {
-    const { meeting, run } = await this.getMeetingRun(
-      dto.meetingId,
-      dto.workflowRunId,
-    );
-    if (![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status))
-      throw new ConflictException('WorkflowRun is not active');
-    if (dto.idempotencyKey !== dto.workflowRunId)
+    if (dto.idempotencyKey !== dto.workflowRunId) {
       throw new BadRequestException('idempotencyKey must equal workflowRunId');
+    }
+
     const redactedText = redactMeetingTranscript(dto.transcript);
     const hash = createHash('sha256').update(redactedText).digest('hex');
-    const existing = await this.transcripts.findOne({
-      where: { idempotencyKey: `wf11:${dto.workflowRunId}:transcript` },
-    });
-    if (existing)
+    const idempotencyKey = `wf11:${dto.workflowRunId}:transcript`;
+
+    return this.dataSource.transaction(async (manager) => {
+      const { meeting, run } = await this.getMeetingRunForUpdate(
+        manager,
+        dto.meetingId,
+        dto.workflowRunId,
+      );
+      const transcriptRepository = manager.getRepository(ConversationTranscript);
+      const existing = await transcriptRepository.findOne({
+        where: { idempotencyKey },
+      });
+
+      if (existing) {
+        if (
+          existing.workflowRunId !== run.id ||
+          existing.meetingId !== meeting.id ||
+          existing.contentHash !== hash ||
+          existing.sourceType !== dto.sourceType
+        ) {
+          throw new ConflictException(
+            'Transcript idempotency key was already used with different content',
+          );
+        }
+        if (meeting.transcriptId && meeting.transcriptId !== existing.id) {
+          throw new ConflictException(
+            'Meeting already references a different transcript',
+          );
+        }
+        if (!meeting.transcriptId) {
+          meeting.transcriptId = existing.id;
+          await manager.getRepository(SalesMeeting).save(meeting);
+        }
+        return {
+          id: existing.id,
+          workflowRunId: run.id,
+          redacted: true,
+          contentHash: hash,
+          reused: true,
+        };
+      }
+
+      const transcript = await transcriptRepository.save(
+        transcriptRepository.create({
+          meetingId: meeting.id,
+          workflowRunId: run.id,
+          sourceType: dto.sourceType,
+          redactedText,
+          redactionMode: `${dto.redactionMode}+backend`,
+          contentHash: hash,
+          idempotencyKey,
+        }),
+      );
+      meeting.transcriptId = transcript.id;
+      await manager.getRepository(SalesMeeting).save(meeting);
+
       return {
-        id: existing.id,
+        id: transcript.id,
         workflowRunId: run.id,
         redacted: true,
-        reused: true,
-      };
-    const transcript = await this.transcripts.save(
-      this.transcripts.create({
-        meetingId: meeting.id,
-        workflowRunId: run.id,
-        sourceType: dto.sourceType,
-        redactedText,
-        redactionMode: `${dto.redactionMode}+backend`,
         contentHash: hash,
-        idempotencyKey: `wf11:${dto.workflowRunId}:transcript`,
-      }),
-    );
-    meeting.transcriptId = transcript.id;
-    await this.meetings.save(meeting);
-    return {
-      id: transcript.id,
-      workflowRunId: run.id,
-      redacted: true,
-      contentHash: hash,
-      reused: false,
-    };
+        reused: false,
+      };
+    });
   }
 
   async saveSummary(meetingId: string, dto: SaveMeetingSummaryDto) {
-    const { meeting, run } = await this.getMeetingRun(
-      meetingId,
-      dto.workflowRunId,
-    );
-    if (![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status))
-      throw new ConflictException('WorkflowRun is not active');
-    if (dto.idempotencyKey !== dto.workflowRunId)
+    if (dto.idempotencyKey !== dto.workflowRunId) {
       throw new BadRequestException('idempotencyKey must equal workflowRunId');
-    if (!meeting.transcriptId || meeting.transcriptId !== dto.transcriptId)
-      throw new ConflictException('Transcript must be saved before summary');
-    const transcript = await this.transcripts.findOne({
-      where: { id: dto.transcriptId, workflowRunId: run.id },
-    });
-    if (!transcript)
-      throw new NotFoundException('Transcript not found for meeting');
-    const existing = await this.summaries.findOne({
-      where: { workflowRunId: run.id },
-    });
-    if (existing)
-      return {
-        id: existing.id,
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const { meeting, run } = await this.getMeetingRunForUpdate(
+        manager,
         meetingId,
-        workflowRunId: run.id,
-        reused: true,
-      };
-    const summary = await this.summaries.save(
-      this.summaries.create({
-        meetingId,
+        dto.workflowRunId,
+      );
+      if (!meeting.transcriptId || meeting.transcriptId !== dto.transcriptId) {
+        throw new ConflictException('Transcript must be saved before summary');
+      }
+
+      const transcript = await manager.getRepository(ConversationTranscript).findOne({
+        where: {
+          id: dto.transcriptId,
+          workflowRunId: run.id,
+          meetingId: meeting.id,
+        },
+      });
+      if (!transcript) {
+        throw new NotFoundException('Transcript not found for meeting');
+      }
+
+      const summaryRepository = manager.getRepository(ConversationSummary);
+      const existing = await summaryRepository.findOne({
+        where: { workflowRunId: run.id },
+      });
+      const payload = {
         transcriptId: transcript.id,
-        workflowRunId: run.id,
         summary: dto.summary,
         decisions: dto.decisions ?? [],
         risks: dto.risks ?? [],
-      }),
-    );
-    meeting.summaryId = summary.id;
-    await this.meetings.save(meeting);
-    return { id: summary.id, meetingId, workflowRunId: run.id, reused: false };
+      };
+
+      if (existing) {
+        const existingPayload = {
+          transcriptId: existing.transcriptId,
+          summary: existing.summary,
+          decisions: existing.decisions ?? [],
+          risks: existing.risks ?? [],
+        };
+        if (!hasSamePayload(existingPayload, payload)) {
+          throw new ConflictException(
+            'Summary idempotency key was already used with different content',
+          );
+        }
+        if (meeting.summaryId && meeting.summaryId !== existing.id) {
+          throw new ConflictException(
+            'Meeting already references a different summary',
+          );
+        }
+        if (!meeting.summaryId) {
+          meeting.summaryId = existing.id;
+          await manager.getRepository(SalesMeeting).save(meeting);
+        }
+        return {
+          id: existing.id,
+          meetingId,
+          workflowRunId: run.id,
+          reused: true,
+        };
+      }
+
+      const summary = await summaryRepository.save(
+        summaryRepository.create({
+          meetingId,
+          transcriptId: transcript.id,
+          workflowRunId: run.id,
+          summary: dto.summary,
+          decisions: dto.decisions ?? [],
+          risks: dto.risks ?? [],
+        }),
+      );
+      meeting.summaryId = summary.id;
+      await manager.getRepository(SalesMeeting).save(meeting);
+      return {
+        id: summary.id,
+        meetingId,
+        workflowRunId: run.id,
+        reused: false,
+      };
+    });
   }
 
   async saveActionItems(summaryId: string, dto: SaveMeetingActionItemsDto) {
-    if (dto.idempotencyKey !== dto.workflowRunId)
+    if (dto.idempotencyKey !== dto.workflowRunId) {
       throw new BadRequestException('idempotencyKey must equal workflowRunId');
-    const summary = await this.summaries.findOne({
-      where: { id: summaryId, workflowRunId: dto.workflowRunId },
-    });
-    if (!summary) throw new NotFoundException('Meeting summary not found');
-    const meeting = summary.meetingId
-      ? await this.meetings.findOne({ where: { id: summary.meetingId } })
-      : null;
-    if (!meeting) throw new NotFoundException('Meeting not found');
-    const attendeeSet = new Set(meeting.attendeeIds);
-    for (const item of dto.actionItems)
-      if (item.ownerAttendeeId && !attendeeSet.has(item.ownerAttendeeId))
-        throw new BadRequestException('Action item owner must be an attendee');
-    const result: Array<{
-      id: string;
-      title: string;
-      status: string;
-      requiresConfirmation: boolean;
-    }> = [];
-    for (let i = 0; i < dto.actionItems.length; i++) {
-      const input = dto.actionItems[i];
-      const key = `wf11:${dto.workflowRunId}:action:${i}`;
-      let item = await this.actionItems.findOne({
-        where: { idempotencyKey: key },
-      });
-      if (!item)
-        item = await this.actionItems.save(
-          this.actionItems.create({
-            summaryId,
-            workflowRunId: dto.workflowRunId,
-            title: input.title,
-            description: input.description ?? null,
-            ownerAttendeeId: input.ownerAttendeeId ?? null,
-            dueDate: input.dueDate ? new Date(input.dueDate) : null,
-            evidence: input.evidence ?? null,
-            confidence: input.confidence,
-            requiresConfirmation: true,
-            status: 'PENDING_CONFIRMATION',
-            idempotencyKey: key,
-          }),
-        );
-      result.push({
-        id: item.id,
-        title: item.title,
-        status: item.status,
-        requiresConfirmation: true,
-      });
     }
-    return { summaryId, workflowRunId: dto.workflowRunId, actionItems: result };
+
+    return this.dataSource.transaction(async (manager) => {
+      const summaryRepository = manager.getRepository(ConversationSummary);
+      const meetingRepository = manager.getRepository(SalesMeeting);
+      const itemRepository = manager.getRepository(ConversationActionItem);
+      const summary = await summaryRepository.findOne({
+        where: { id: summaryId, workflowRunId: dto.workflowRunId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!summary) {
+        throw new NotFoundException('Meeting summary not found');
+      }
+
+      const meeting = summary.meetingId
+        ? await meetingRepository.findOne({
+            where: { id: summary.meetingId },
+          })
+        : null;
+      if (!meeting) {
+        throw new NotFoundException('Meeting not found');
+      }
+
+      const attendeeSet = new Set(meeting.attendeeIds);
+      const result: Array<{
+        id: string;
+        title: string;
+        status: string;
+        requiresConfirmation: boolean;
+      }> = [];
+
+      for (let i = 0; i < dto.actionItems.length; i++) {
+        const input = dto.actionItems[i];
+        if (input.ownerAttendeeId && !attendeeSet.has(input.ownerAttendeeId)) {
+          throw new BadRequestException('Action item owner must be an attendee');
+        }
+
+        const idempotencyKey = `wf11:${dto.workflowRunId}:action:${i}`;
+        const payload = {
+          summaryId,
+          workflowRunId: dto.workflowRunId,
+          title: input.title,
+          description: input.description ?? null,
+          ownerAttendeeId: input.ownerAttendeeId ?? null,
+          dueDate: input.dueDate ? new Date(input.dueDate) : null,
+          evidence: input.evidence ?? null,
+          confidence: input.confidence,
+          requiresConfirmation: true,
+        };
+
+        let item = await itemRepository.findOne({
+          where: { idempotencyKey },
+        });
+        if (item) {
+          const existingPayload = {
+            summaryId: item.summaryId,
+            workflowRunId: item.workflowRunId,
+            title: item.title,
+            description: item.description,
+            ownerAttendeeId: item.ownerAttendeeId,
+            dueDate: item.dueDate,
+            evidence: item.evidence,
+            confidence: Number(item.confidence),
+            requiresConfirmation: item.requiresConfirmation,
+          };
+          if (
+            !hasSamePayload(existingPayload, {
+              ...payload,
+              confidence: Number(payload.confidence),
+            })
+          ) {
+            throw new ConflictException(
+              'Action item idempotency key was already used with different content',
+            );
+          }
+        } else {
+          item = await itemRepository.save(
+            itemRepository.create({
+              ...payload,
+              idempotencyKey,
+              status: 'PENDING_CONFIRMATION',
+            }),
+          );
+        }
+
+        result.push({
+          id: item.id,
+          title: item.title,
+          status: item.status,
+          requiresConfirmation: item.requiresConfirmation,
+        });
+      }
+
+      return {
+        summaryId,
+        workflowRunId: dto.workflowRunId,
+        actionItems: result,
+      };
+    });
   }
 
   async getForUser(meetingId: string, actor: AuthenticatedUser) {
