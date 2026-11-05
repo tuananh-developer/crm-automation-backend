@@ -155,16 +155,7 @@ export class ReviewService {
 
       // Serialize assignments for one task; notification and audit are committed
       // atomically with the assignment itself.
-      const reviewTask = await taskRepository.findOne({
-        where: { id },
-        relations: {
-          lead: true,
-          assignee: true,
-          workflowRun: true,
-          notifications: true,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
+      const reviewTask = await this.findLockedTask(taskRepository, id);
       if (!reviewTask) {
         throw new NotFoundException('Review task not found');
       }
@@ -258,16 +249,7 @@ export class ReviewService {
   ): Promise<ReviewTaskResponseDto> {
     return this.dataSource.transaction(async (manager) => {
       const taskRepository = manager.getRepository(ReviewTask);
-      const reviewTask = await taskRepository.findOne({
-        where: { id },
-        relations: {
-          lead: true,
-          assignee: true,
-          workflowRun: true,
-          notifications: true,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
+      const reviewTask = await this.findLockedTask(taskRepository, id);
       if (!reviewTask) {
         throw new NotFoundException('Review task not found');
       }
@@ -302,16 +284,7 @@ export class ReviewService {
       const leadRepo = manager.getRepository(Lead);
       const auditLogRepo = manager.getRepository(AuditLog);
 
-      const reviewTask = await reviewTaskRepo.findOne({
-        where: { id },
-        relations: {
-          lead: true,
-          assignee: true,
-          workflowRun: true,
-          notifications: true,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
+      const reviewTask = await this.findLockedTask(reviewTaskRepo, id);
 
       if (!reviewTask) {
         throw new NotFoundException('Review task not found');
@@ -391,6 +364,35 @@ export class ReviewService {
       savedTask.workflowRun = reviewTask.workflowRun;
 
       return ReviewTaskMapper.toResponseDto(savedTask);
+    });
+  }
+
+  /**
+   * Lock only the ReviewTask row. Loading nullable relations in the same
+   * SELECT as FOR UPDATE makes PostgreSQL reject the query because TypeORM
+   * uses LEFT JOINs for assignee, workflowRun, and notifications.
+   * The second read remains protected by the row lock held by this transaction.
+   */
+  private async findLockedTask(
+    repository: Repository<ReviewTask>,
+    id: string,
+  ): Promise<ReviewTask | null> {
+    const lockedTask = await repository.findOne({
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!lockedTask) {
+      return null;
+    }
+
+    return repository.findOne({
+      where: { id },
+      relations: {
+        lead: true,
+        assignee: true,
+        workflowRun: true,
+        notifications: true,
+      },
     });
   }
 
