@@ -10,6 +10,7 @@ export const CRM_EVENTS = {
 } as const;
 
 export const LEGACY_CRM_QUEUE = 'crm_events_queue';
+export const LEAD_CREATED_QUEUE = 'crm.audit.lead-created.q';
 export const QUALIFICATION_QUEUE = 'n8n.lead-qualification.q';
 export const ENRICHMENT_QUEUE = 'n8n.lead-enrichment.q';
 export const SCORING_QUEUE = 'n8n.lead-scoring.q';
