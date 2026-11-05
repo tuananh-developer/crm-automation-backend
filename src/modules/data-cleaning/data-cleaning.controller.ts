@@ -55,7 +55,7 @@ export class DataCleaningController {
     @Body() dto: CreateScanDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.dataCleaningService.createScan(dto, user.id);
+    return this.dataCleaningService.createScan(dto, user);
   }
 
   @Get('scans/:workflowRunId')
