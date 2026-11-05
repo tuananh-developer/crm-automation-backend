@@ -8,6 +8,8 @@ import {
   ParseUUIDPipe,
   Post,
   UseGuards,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import {
   ApiBody,
@@ -23,6 +25,9 @@ import {
   ApplyCleaningDto,
 } from './dto/index.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Data Cleaning')
 @Controller('data-cleaning')
@@ -104,6 +109,13 @@ export class DataCleaningController {
 
   @Post('callback')
   @UseGuards(N8nAuthGuard)
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+    }),
+  )
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Receive n8n Data Cleaning Callback (UC10 - Step 10)',
@@ -128,6 +140,7 @@ export class DataCleaningController {
   }
 
   @Post('scans/:workflowRunId/apply')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Apply Approved Remediation Proposals (UC10 - Step 12)',
@@ -155,7 +168,9 @@ export class DataCleaningController {
   applyCleaning(
     @Param('workflowRunId', ParseUUIDPipe) workflowRunId: string,
     @Body() dto: ApplyCleaningDto,
+    @CurrentUser() user?: AuthenticatedUser,
   ) {
-    return this.dataCleaningService.applyCleaning(workflowRunId, dto);
+    const userId = user?.id;
+    return this.dataCleaningService.applyCleaning(workflowRunId, dto, userId);
   }
 }

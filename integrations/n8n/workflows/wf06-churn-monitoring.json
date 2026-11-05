@@ -17,11 +17,14 @@
       "name": "1. Daily Schedule",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [250, 300]
+      "position": [
+        250,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "={{ $env.CRM_API_BASE_URL }}/customers?page=1&limit={{ $env.WF06_BATCH_SIZE || 25 }}",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/customers?page=1&limit={{ $env.WF06_BATCH_SIZE || 25 }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "httpHeaderAuth",
         "options": {
@@ -37,7 +40,10 @@
       "name": "2. Get Active Customer Cohort",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [470, 300]
+      "position": [
+        470,
+        300
+      ]
     },
     {
       "parameters": {
@@ -48,7 +54,10 @@
       "name": "3. Split Customer Batch",
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
-      "position": [690, 300]
+      "position": [
+        690,
+        300
+      ]
     },
     {
       "parameters": {
@@ -58,11 +67,14 @@
       "name": "4. Prepare Customer Context",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [910, 300]
+      "position": [
+        910,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "={{ $env.CRM_API_BASE_URL }}/customers/{{ $json.customerId }}",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/customers/{{ $json.customerId }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "httpHeaderAuth",
         "options": {
@@ -78,7 +90,10 @@
       "name": "5. Get Customer Profile",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1130, 300]
+      "position": [
+        1130,
+        300
+      ]
     },
     {
       "parameters": {
@@ -88,15 +103,18 @@
       "name": "6. Normalize Feature Snapshot",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1350, 300]
+      "position": [
+        1350,
+        300
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CRM_API_BASE_URL }}/customers/{{ $json.customerId }}/churn-assessments",
+        "url": "={{ ($env.CRM_BACKEND_URL || \"http://localhost:3000\") + \"/api/v1/customers/\" + $json.customerId + \"/churn-assessments\" }}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ customerId: $json.customerId, asOfDate: $json.asOfDate, profile: $json.profile, engagement: $json.engagement, followUpHistory: $json.followUpHistory, feedbackHistory: $json.feedbackHistory, coverage: $json.coverage, metadata: { normalizedSnapshot: true } }) }}",
+        "jsonBody": "={{ JSON.stringify({ asOfDate: $json.asOfDate, coverage: $json.coverage, metadata: { normalizedSnapshot: true, profile: $json.profile, engagement: $json.engagement, followUpHistory: $json.followUpHistory, feedbackHistory: $json.feedbackHistory } }) }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "httpHeaderAuth",
         "options": {
@@ -112,7 +130,10 @@
       "name": "7. Backend Churn Assessment",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1570, 300]
+      "position": [
+        1570,
+        300
+      ]
     },
     {
       "parameters": {
@@ -122,7 +143,10 @@
       "name": "8. Validate Assessment Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1790, 300]
+      "position": [
+        1790,
+        300
+      ]
     },
     {
       "parameters": {
@@ -150,7 +174,10 @@
       "name": "9. AI Explanation",
       "type": "@n8n/n8n-nodes-langchain.openAi",
       "typeVersion": 1.8,
-      "position": [2010, 300]
+      "position": [
+        2010,
+        300
+      ]
     },
     {
       "parameters": {
@@ -160,7 +187,10 @@
       "name": "10. Validate AI Explanation",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2230, 300]
+      "position": [
+        2230,
+        300
+      ]
     },
     {
       "parameters": {
@@ -189,12 +219,15 @@
       "name": "11. Gate Retention",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [2450, 300]
+      "position": [
+        2450,
+        300
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CRM_API_BASE_URL }}/customer-tasks",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/customer-tasks",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ customerId: $('4. Prepare Customer Context').first().json.customerId, assessmentId: $('8. Validate Assessment Result').first().json.assessmentId, taskType: 'RETENTION', priority: 'HIGH', idempotencyKey: 'wf06-' + $('4. Prepare Customer Context').first().json.customerId + '-' + $('8. Validate Assessment Result').first().json.assessmentId, metadata: { riskLevel: $('8. Validate Assessment Result').first().json.riskLevel, score: $('8. Validate Assessment Result').first().json.score } }) }}",
@@ -213,7 +246,10 @@
       "name": "12. Create Retention Task",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2670, 300]
+      "position": [
+        2670,
+        300
+      ]
     }
   ],
   "connections": {

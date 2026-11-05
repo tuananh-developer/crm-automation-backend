@@ -2,150 +2,275 @@
   "name": "WF13 - Renewal Management",
   "nodes": [
     {
-      "name": "1. Node 1",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "1. Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "w1"
+    },
+    {
+      "name": "2. Fetch Renewal Contracts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         200,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "GET",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/renewal/contracts?days=30",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
       },
-      "id": "w1"
+      "id": "w2"
     },
     {
-      "name": "2. Node 2",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "3. Split Contracts",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
       "position": [
         400,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "batchSize": 1,
+        "options": {}
       },
-      "id": "w2"
+      "id": "w3"
     },
     {
-      "name": "3. Node 3",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "4. Fetch Current Contract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         600,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "GET",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/renewal/contracts/{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
       },
-      "id": "w3"
+      "id": "w4"
     },
     {
-      "name": "4. Node 4",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "5. Calculate Urgency",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         800,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "POST",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/renewal/urgency",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ renewalDate: $json.renewalDate }) }}"
       },
-      "id": "w4"
+      "id": "w5"
     },
     {
-      "name": "5. Node 5",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "6. Generate AI Draft",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
       "position": [
         1000,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Generate renewal recommendation",
+              "role": "user"
+            }
+          ]
+        }
       },
-      "id": "w5"
+      "id": "w6"
     },
     {
-      "name": "6. Node 6",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "7. Validate Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         1200,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "POST",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/renewal/validate-draft",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contractId: $('4. Fetch Current Contract').item.json.id, customerId: $('4. Fetch Current Contract').item.json.customerId, renewalDate: $('4. Fetch Current Contract').item.json.renewalDate, sourceContractId: $('4. Fetch Current Contract').item.json.id, sourceCustomerId: $('4. Fetch Current Contract').item.json.customerId }) }}"
       },
-      "id": "w6"
+      "id": "w7"
     },
     {
-      "name": "7. Node 7",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "8. Save Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         1400,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "POST",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/renewal/drafts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contractId: $('4. Fetch Current Contract').item.json.id, customerId: $('4. Fetch Current Contract').item.json.customerId, idempotencyKey: $('4. Fetch Current Contract').item.json.id + ':renewal' }) }}"
       },
-      "id": "w7"
+      "id": "w8"
     },
     {
-      "name": "8. Node 8",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "9. Check Eligibility",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         1600,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "POST",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/renewal/check-eligibility",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ hasConsent: true, hasTemplate: true, policyAllows: true, needsApproval: false }) }}"
       },
-      "id": "w8"
+      "id": "w9"
     },
     {
-      "name": "9. Node 9",
-      "type": "n8n-nodes-base.code",
+      "name": "10. IF Auto-send",
+      "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
         1800,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.canAutoSend }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
       },
-      "id": "w9"
+      "id": "w10"
     },
     {
-      "name": "10. Node 10",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "11. Send Communication",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         2000,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w10"
-    },
-    {
-      "name": "11. Node 11",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2200,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "POST",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/internal/communication/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ to: 'test@example.com', subject: 'Renewal', text: 'Renewal notice' }) }}"
       },
       "id": "w11"
     },
     {
-      "name": "12. Node 12",
+      "name": "12. Handle Errors",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        200
+      ],
+      "parameters": {
+        "jsCode": "console.log('Error handled'); return [{ json: { handled: true } }];"
+      },
+      "id": "w12"
+    },
+    {
+      "name": "13. Create CustomerTask",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/customer-tasks",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ customerId: $('4. Fetch Current Contract').item.json.customerId, taskType: 'RENEWAL', priority: 'HIGH', idempotencyKey: $('4. Fetch Current Contract').item.json.id + ':renewal' }) }}"
+      },
+      "id": "w13"
+    },
+    {
+      "name": "14. Notify Owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/notifications/internal/create",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ type: 'FOLLOW_UP_FAILED', severity: 'MEDIUM', title: 'Renewal action required', message: 'Renewal pending approval' }) }}"
+      },
+      "id": "w14"
+    },
+    {
+      "name": "15. Update Status",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -153,12 +278,12 @@
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "jsCode": "return [{ json: { status: 'COMPLETED' } }];"
       },
-      "id": "w12"
+      "id": "w15"
     },
     {
-      "name": "13. Node 13",
+      "name": "16. Log Execution",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -166,258 +291,178 @@
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w13"
-    },
-    {
-      "name": "14. Node 14",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2800,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w14"
-    },
-    {
-      "name": "15. Node 15",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3000,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w15"
-    },
-    {
-      "name": "16. Node 16",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3200,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
+        "jsCode": "console.log('WF13 completed'); return [{ json: { logged: true } }];"
       },
       "id": "w16"
-    },
-    {
-      "name": "17. Node 17",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3400,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w17"
-    },
-    {
-      "name": "18. Node 18",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3600,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w18"
     }
   ],
   "connections": {
-    "1. Node 1": {
+    "1. Daily Schedule": {
       "main": [
         [
           {
-            "node": "2. Node 2",
+            "node": "2. Fetch Renewal Contracts",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "2. Node 2": {
+    "2. Fetch Renewal Contracts": {
       "main": [
         [
           {
-            "node": "3. Node 3",
+            "node": "3. Split Contracts",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "3. Node 3": {
+    "3. Split Contracts": {
       "main": [
         [
           {
-            "node": "4. Node 4",
+            "node": "4. Fetch Current Contract",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "4. Node 4": {
+    "4. Fetch Current Contract": {
       "main": [
         [
           {
-            "node": "5. Node 5",
+            "node": "5. Calculate Urgency",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "5. Node 5": {
+    "5. Calculate Urgency": {
       "main": [
         [
           {
-            "node": "6. Node 6",
+            "node": "6. Generate AI Draft",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "6. Node 6": {
+    "6. Generate AI Draft": {
       "main": [
         [
           {
-            "node": "7. Node 7",
+            "node": "7. Validate Draft",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "7. Node 7": {
+    "7. Validate Draft": {
       "main": [
         [
           {
-            "node": "8. Node 8",
+            "node": "8. Save Draft",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "8. Node 8": {
+    "8. Save Draft": {
       "main": [
         [
           {
-            "node": "9. Node 9",
+            "node": "9. Check Eligibility",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "9. Node 9": {
+    "9. Check Eligibility": {
       "main": [
         [
           {
-            "node": "10. Node 10",
+            "node": "10. IF Auto-send",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "10. Node 10": {
+    "10. IF Auto-send": {
       "main": [
         [
           {
-            "node": "11. Node 11",
+            "node": "11. Send Communication",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "13. Create CustomerTask",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "11. Node 11": {
+    "12. Handle Errors": {
       "main": [
         [
           {
-            "node": "12. Node 12",
+            "node": "13. Create CustomerTask",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "12. Node 12": {
+    "13. Create CustomerTask": {
       "main": [
         [
           {
-            "node": "13. Node 13",
+            "node": "14. Notify Owner",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "13. Node 13": {
+    "15. Update Status": {
       "main": [
         [
           {
-            "node": "14. Node 14",
+            "node": "16. Log Execution",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "14. Node 14": {
+    "11. Send Communication": {
       "main": [
         [
           {
-            "node": "15. Node 15",
+            "node": "15. Update Status",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "15. Node 15": {
+    "14. Notify Owner": {
       "main": [
         [
           {
-            "node": "16. Node 16",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "16. Node 16": {
-      "main": [
-        [
-          {
-            "node": "17. Node 17",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "17. Node 17": {
-      "main": [
-        [
-          {
-            "node": "18. Node 18",
+            "node": "15. Update Status",
             "type": "main",
             "index": 0
           }

@@ -1,5 +1,12 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class QueryCustomerDto {
   @IsInt()
@@ -23,4 +30,9 @@ export class QueryCustomerDto {
   @IsString()
   @IsOptional()
   status?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  @Type(() => Boolean)
+  isStrategic?: boolean;
 }

@@ -26,7 +26,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/enrichment/mock-enrichment?domain=' + encodeURIComponent($json.domain) + '&email=' + encodeURIComponent($json.email) + '&provider=' + encodeURIComponent($json.provider) }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/enrichment/mock-enrichment?domain=' + encodeURIComponent($json.domain) + '&email=' + encodeURIComponent($json.email) + '&provider=' + encodeURIComponent($json.provider) }}",
         "method": "GET",
         "options": {
           "timeout": 15000,
@@ -55,7 +55,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/enrichment/callback' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/enrichment/callback' }}",
         "method": "POST",
         "headerParameters": {
           "parameters": [
@@ -92,7 +92,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/enrichment/callback' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/enrichment/callback' }}",
         "method": "POST",
         "headerParameters": {
           "parameters": [

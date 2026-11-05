@@ -60,6 +60,12 @@ export class CustomersService {
       qb.andWhere('customer.status = :status', { status: query.status });
     }
 
+    if (query.isStrategic !== undefined) {
+      qb.andWhere('customer.isStrategic = :isStrategic', {
+        isStrategic: query.isStrategic,
+      });
+    }
+
     qb.orderBy('customer.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
@@ -130,7 +136,7 @@ export class CustomersService {
   async createChurnAssessment(
     customerId: string,
     input: {
-      score: number | null;
+      score?: number | null;
       riskLevel?: string;
       evidence?: Array<Record<string, unknown>>;
       coverage?: Record<string, unknown>;
@@ -149,7 +155,7 @@ export class CustomersService {
     }
 
     const score = input.score;
-    const derivedRisk = this.classifyChurnScore(score);
+    const derivedRisk = this.classifyChurnScore(score ?? null);
 
     if (input.riskLevel && input.riskLevel.toUpperCase() !== derivedRisk) {
       throw new BadRequestException(

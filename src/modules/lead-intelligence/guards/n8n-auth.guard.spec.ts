@@ -97,12 +97,45 @@ describe('N8nAuthGuard', () => {
     expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
   });
 
+  it('should allow request when x-n8n-webhook-secret matches configured key', () => {
+    configService.get.mockImplementation((key: string) =>
+      key === 'N8N_WEBHOOK_SECRET' ? 'secret-token-123' : undefined,
+    );
+
+    const context = createMockContext({
+      'x-n8n-webhook-secret': 'secret-token-123',
+    });
+    expect(guard.canActivate(context)).toBe(true);
+  });
+
   it('should throw UnauthorizedException when header is missing', () => {
     configService.get.mockImplementation((key: string) =>
       key === 'N8N_API_KEY' ? 'secret-token-123' : undefined,
     );
 
     const context = createMockContext({});
+    expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+  });
+
+  it('should throw UnauthorizedException when Bearer token does not match', () => {
+    configService.get.mockImplementation((key: string) =>
+      key === 'N8N_API_KEY' ? 'secret-token-123' : undefined,
+    );
+
+    const context = createMockContext({
+      authorization: 'Bearer wrong-bearer-token',
+    });
+    expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+  });
+
+  it('should throw UnauthorizedException when authorization header is not Bearer scheme', () => {
+    configService.get.mockImplementation((key: string) =>
+      key === 'N8N_API_KEY' ? 'secret-token-123' : undefined,
+    );
+
+    const context = createMockContext({
+      authorization: 'Basic dXNlcjpwYXNz',
+    });
     expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
   });
 });

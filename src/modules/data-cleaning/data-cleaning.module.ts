@@ -8,12 +8,14 @@ import { RabbitMQModule } from '../../infrastructure/rabbitmq/rabbitmq.module.js
 import { DataCleaningService } from './data-cleaning.service.js';
 import { DataCleaningController } from './data-cleaning.controller.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Lead, WorkflowRun, AuditLog]),
     RabbitMQModule,
     ConfigModule,
+    AuthModule,
   ],
   controllers: [DataCleaningController],
   providers: [DataCleaningService, N8nAuthGuard],

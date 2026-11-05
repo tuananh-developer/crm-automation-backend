@@ -91,6 +91,7 @@ export interface AppliedStatItem {
 export interface ScanOutputPayload {
   summary?: DataCleaningSummary | null;
   findings?: DataCleaningFinding[];
+  appliedFindingIds?: string[];
   appliedStats?: AppliedStatItem[];
   receivedAt?: string;
 }

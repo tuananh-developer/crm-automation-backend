@@ -78,7 +78,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/data-cleaning/scans/' + $json.workflowRunId + '/leads' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/data-cleaning/scans/' + $json.workflowRunId + '/leads' }}",
         "method": "GET",
         "sendHeaders": true,
         "headerParameters": {
@@ -163,7 +163,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/data-cleaning/callback' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/data-cleaning/callback' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
@@ -201,7 +201,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/data-cleaning/callback' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/data-cleaning/callback' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {

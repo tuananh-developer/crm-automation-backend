@@ -101,7 +101,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/leads/' + $json.leadId }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/leads/' + $json.leadId }}",
         "method": "GET",
         "options": {}
       },
@@ -157,7 +157,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/lead-intelligence/qualification/callback' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/lead-intelligence/qualification/callback' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {

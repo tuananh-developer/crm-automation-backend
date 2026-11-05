@@ -102,6 +102,7 @@ export class ReviewService {
     });
 
     const saved = await this.reviewTaskRepository.save(reviewTask);
+    saved.lead = lead;
     return ReviewTaskMapper.toResponseDto(saved);
   }
 
@@ -163,6 +164,9 @@ export class ReviewService {
     reviewTask.assignee = reviewer;
 
     const savedTask = await this.reviewTaskRepository.save(reviewTask);
+    savedTask.lead = reviewTask.lead;
+    savedTask.assignee = reviewer;
+    savedTask.workflowRun = reviewTask.workflowRun;
 
     await this.createNotification(reviewer.id, savedTask, reviewTask.leadId);
 
@@ -186,6 +190,9 @@ export class ReviewService {
     reviewTask.startedAt = new Date();
 
     const savedTask = await this.reviewTaskRepository.save(reviewTask);
+    savedTask.lead = reviewTask.lead;
+    savedTask.assignee = reviewTask.assignee;
+    savedTask.workflowRun = reviewTask.workflowRun;
     return ReviewTaskMapper.toResponseDto(savedTask);
   }
 
@@ -279,6 +286,10 @@ export class ReviewService {
           userAgent: null,
         }),
       );
+
+      savedTask.lead = lead ?? reviewTask.lead;
+      savedTask.assignee = reviewTask.assignee;
+      savedTask.workflowRun = reviewTask.workflowRun;
 
       return ReviewTaskMapper.toResponseDto(savedTask);
     });

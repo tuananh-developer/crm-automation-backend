@@ -5,6 +5,7 @@ import { AddEnrollmentActiveUniqueIndex1728400000000 } from './database/migratio
 import { AddCustomerChurnAssessmentAndCustomerTask1760000000000 } from './database/migrations/1760000000000-AddCustomerChurnAssessmentAndCustomerTask.js';
 import { AddAccountHealthSnapshot1800000000000 } from './database/migrations/1800000000000-AddAccountHealthSnapshot.js';
 import { AddRenewalTables1810000000000 } from './database/migrations/1810000000000-AddRenewalTables.js';
+import { AddIsStrategicToCustomers1820000000000 } from './database/migrations/1820000000000-AddIsStrategicToCustomers.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const dbUrl = process.env.DATABASE_URL;
@@ -36,6 +37,7 @@ export const AppDataSource = new DataSource(
           AddCustomerChurnAssessmentAndCustomerTask1760000000000,
           AddAccountHealthSnapshot1800000000000,
           AddRenewalTables1810000000000,
+          AddIsStrategicToCustomers1820000000000,
         ],
         migrationsTableName: 'typeorm_migrations',
       }
@@ -56,6 +58,7 @@ export const AppDataSource = new DataSource(
           AddCustomerChurnAssessmentAndCustomerTask1760000000000,
           AddAccountHealthSnapshot1800000000000,
           AddRenewalTables1810000000000,
+          AddIsStrategicToCustomers1820000000000,
         ],
         migrationsTableName: 'typeorm_migrations',
       },

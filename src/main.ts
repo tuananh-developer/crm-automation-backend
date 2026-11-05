@@ -13,7 +13,7 @@ async function bootstrap() {
   const frontendUrl =
     configService.get<string>('FRONTEND_URL') || 'http://localhost:3001';
 
-  app.setGlobalPrefix('api/v1');
+  app.setGlobalPrefix('api/v1', { exclude: ['health'] });
 
   const isProd = configService.get<string>('NODE_ENV') === 'production';
   const corsOrigins = isProd

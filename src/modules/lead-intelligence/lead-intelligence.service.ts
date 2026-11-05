@@ -182,7 +182,7 @@ export class LeadIntelligenceService {
     }
 
     // 3. Apply Confidence Threshold Rule
-    const isConfidenceBelowThreshold = dto.confidence < CONFIDENCE_THRESHOLD;
+    const isConfidenceBelowThreshold = dto.confidence <= CONFIDENCE_THRESHOLD;
     const reviewRequired =
       isConfidenceBelowThreshold ||
       dto.reviewRequired === true ||

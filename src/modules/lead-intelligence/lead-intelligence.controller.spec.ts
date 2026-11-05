@@ -3,6 +3,7 @@ import type { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { QualificationStatus } from './enums/lead-intelligence.enum.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
 import type { LeadQualification } from './entities/lead-qualification.entity.js';
+import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
 
 describe('LeadIntelligenceController', () => {
   let controller: LeadIntelligenceController;
@@ -160,5 +161,29 @@ describe('LeadIntelligenceController', () => {
 
     expect(service.getLatestEnrichment).toHaveBeenCalledWith('lead-123');
     expect(result?.id).toBe('enrich-123');
+  });
+
+  describe('Authorization and Route Metadata', () => {
+    /* eslint-disable @typescript-eslint/unbound-method */
+    it('should protect handleCallback endpoint with N8nAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        LeadIntelligenceController.prototype.handleCallback,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(N8nAuthGuard);
+    });
+
+    it('should configure dual route paths for handleCallback endpoint', () => {
+      const path = Reflect.getMetadata(
+        'path',
+        LeadIntelligenceController.prototype.handleCallback,
+      );
+      expect(path).toEqual([
+        'qualification/callback',
+        '/internal/n8n/lead-qualification/callback',
+      ]);
+    });
+    /* eslint-enable @typescript-eslint/unbound-method */
   });
 });

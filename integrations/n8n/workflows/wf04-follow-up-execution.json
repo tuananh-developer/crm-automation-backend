@@ -78,7 +78,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/communication/send",
+        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/internal/communication/send",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ to: $json.recipientEmail, subject: $json.emailSubject, html: $json.emailHtml, correlationId: $json.correlationId, idempotencyKey: 'follow-up:' + $json.executionId + ':' + $json.stepId }) }}",

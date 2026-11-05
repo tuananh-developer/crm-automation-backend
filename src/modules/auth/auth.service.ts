@@ -51,7 +51,7 @@ export class AuthService {
       name: dto.name,
       email: dto.email,
       passwordHash,
-      role: dto.role ?? UserRole.SALES,
+      role: UserRole.SALES,
       status: UserStatus.ACTIVE,
       lastLoginAt: new Date(),
     });

@@ -1,0 +1,240 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
+import {
+import { CustomerMapper } from "./mappers/customer.mapper.js";
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import { SegmentsService } from './segments.service.js';
+import {
+  CreateSegmentDto,
+  EvaluateSegmentBulkDto,
+  EvaluateSegmentDto,
+  QuerySegmentDto,
+  UpdateSegmentDto,
+} from './dto/index.js';
+import { SegmentResponseDto } from './dto/segment-response.dto.js';
+import { PaginatedResponseDto } from './dto/paginated-response.dto.js';
+import { SegmentMapper } from './mappers/segment.mapper.js';
+import { CustomerResponseDto } from './dto/customer-response.dto.js';
+
+@Controller('segments')
+@ApiTags('Segments')
+export class SegmentsController {
+  constructor(private readonly segmentsService: SegmentsService) {}
+
+  @Post()
+  @ApiOperation({
+    summary: 'Create a new segment',
+    description: 'Creates a new customer segment with the specified criteria.',
+  })
+  @ApiBody({ type: CreateSegmentDto })
+  @ApiResponse({
+    status: 201,
+    description: 'The segment has been successfully created.',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation failed or missing required fields.',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'A segment with this name already exists.',
+  })
+  async create(@Body() dto: CreateSegmentDto): Promise<SegmentResponseDto> {
+    const segment = await this.segmentsService.create(dto);
+    return SegmentMapper.toResponse(segment);
+  }
+
+  @Get()
+  @ApiOperation({
+    summary: 'Get paginated list of segments',
+    description:
+      'Retrieve segments with optional filtering by status, search, and pagination.',
+  })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description: 'Search term for segment name or description',
+  })
+  @ApiQuery({
+    name: 'isActive',
+    required: false,
+    enum: [true, false],
+    description: 'Filter segments by active status',
+  })
+  @ApiResponse({ status: 200, description: 'Paginated list of segments.' })
+  async findAll(@Query() query: QuerySegmentDto): Promise<PaginatedResponseDto<SegmentResponseDto>> {
+    const result = await this.segmentsService.findAll(query);
+    
+    return new PaginatedResponseDto<SegmentResponseDto>({
+      data: SegmentMapper.toResponseArray(result.data),
+      meta: {
+        page: result.meta.page,
+        limit: result.meta.limit,
+        total: result.meta.total,
+        totalPages: result.meta.totalPages,
+      },
+    });
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get segment details by ID' })
+  @ApiParam({ name: 'id', description: 'UUID of the segment' })
+  @ApiResponse({ status: 200, description: 'Segment found.' })
+  @ApiResponse({ status: 404, description: 'Segment not found.' })
+  async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<SegmentResponseDto> {
+    const segment = await this.segmentsService.findOne(id);
+    return SegmentMapper.toResponse(segment);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update an existing segment' })
+  @ApiParam({ name: 'id', description: 'UUID of the segment to update' })
+  @ApiBody({ type: UpdateSegmentDto })
+  @ApiResponse({ status: 200, description: 'Segment updated successfully.' })
+  @ApiResponse({ status: 404, description: 'Segment not found.' })
+  async update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateSegmentDto,
+  ): Promise<SegmentResponseDto> {
+    const segment = await this.segmentsService.update(id, dto);
+    return SegmentMapper.toResponse(segment);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete a segment' })
+  @ApiParam({ name: 'id', description: 'UUID of the segment to delete' })
+  @ApiResponse({ status: 200, description: 'Segment deleted successfully.' })
+  @ApiResponse({ status: 404, description: 'Segment not found.' })
+  async remove(@Param('id', ParseUUIDPipe) id: string): Promise<{ message: string; id: string }> {
+    return this.segmentsService.remove(id);
+  }
+
+  @Get(':id/customers')
+  @ApiOperation({
+    summary: 'Get customers in a segment',
+    description:
+      'Retrieve customers that belong to a specific segment with optional search and pagination.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the segment' })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description: 'Search term for customer name, email, or company name',
+  })
+  @ApiResponse({ status: 200, description: 'Paginated list of customers in the segment.' })
+  async getCustomers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: QuerySegmentDto,
+  ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
+    const result = await this.segmentsService.getCustomers(id, query);
+    
+    return new PaginatedResponseDto<CustomerResponseDto>({
+      data: CustomerMapper.toResponseArray(result.data),
+      meta: {
+        page: result.meta.page,
+        limit: result.meta.limit,
+        total: result.meta.total,
+        totalPages: result.meta.totalPages,
+      },
+    });
+  }
+
+  @Post(':id/evaluate')
+  @ApiOperation({
+    summary: 'Evaluate a customer against a segment',
+    description:
+      'Evaluates whether a specific customer matches the criteria of a segment.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the segment' })
+  @ApiBody({ type: EvaluateSegmentDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Evaluation result indicating match status and confidence.',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation failed or missing required fields.',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Segment or customer not found.',
+  })
+  async evaluateCustomer(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: EvaluateSegmentDto,
+  ): Promise<{
+    customerId: string;
+    customerName: string;
+    segmentId: string;
+    segmentName: string;
+    assignmentType: string;
+    confidence: number;
+    assignedReason: string;
+    assignedAt: string;
+    assignedBy: string;
+    status: string;
+    matched: boolean;
+  }> {
+    const result = await this.segmentsService.evaluateCustomer(id, dto);
+    return {
+      customerId: result.customerId,
+      customerName: result.customerName,
+      segmentId: result.segmentId,
+      segmentName: result.segmentName,
+      assignmentType: result.assignmentType,
+      confidence: result.confidence,
+      assignedReason: result.assignedReason,
+      assignedAt: result.assignedAt.toISOString(),
+      assignedBy: result.assignedBy,
+      status: result.status,
+      matched: result.matched,
+    };
+  }
+
+  @Post(':id/evaluate-all')
+  @ApiOperation({
+    summary: 'Evaluate all customers against a segment',
+    description:
+      'Evaluates all customers (or a specified subset) against the criteria of a segment.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the segment' })
+  @ApiBody({ type: EvaluateSegmentBulkDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Batch evaluation results including counts of matched customers.',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation failed or missing required fields.',
+  })
+  async evaluateAll(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: EvaluateSegmentBulkDto,
+  ): Promise<{
+    status: string;
+    total: number;
+    processed: number;
+    matched: number;
+    message: string;
+  }> {
+    return this.segmentsService.evaluateAll(id, dto);
+  }
+}

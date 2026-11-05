@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ReviewDecision, ReviewStatus } from '../enums/review.enum.js';
 import { UserRole, UserStatus } from '../../users/enums/user.enum.js';
+import { LeadResponseDto } from '../../leads/dto/lead-response.dto.js';
 
 export class ReviewAssigneeResponseDto {
   @ApiProperty({ description: 'ID người được giao duyệt' })
@@ -17,6 +18,35 @@ export class ReviewAssigneeResponseDto {
 
   @ApiProperty({ enum: UserStatus, description: 'Trạng thái hoạt động' })
   status!: UserStatus;
+}
+
+export class ReviewWorkflowRunResponseDto {
+  @ApiProperty({ description: 'ID của workflow run' })
+  id!: string;
+
+  @ApiProperty({ description: 'Tên workflow' })
+  workflowName!: string;
+
+  @ApiProperty({ description: 'Trạng thái workflow' })
+  status!: string;
+
+  @ApiPropertyOptional({ description: 'Payload đầu vào' })
+  inputPayload!: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({ description: 'Payload đầu ra' })
+  outputPayload!: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({ description: 'Thông báo lỗi nếu có' })
+  errorMessage!: string | null;
+
+  @ApiPropertyOptional({ description: 'Thời gian bắt đầu' })
+  startedAt!: Date | null;
+
+  @ApiPropertyOptional({ description: 'Thời gian kết thúc' })
+  finishedAt!: Date | null;
+
+  @ApiProperty({ description: 'Thời điểm tạo' })
+  createdAt!: Date;
 }
 
 export class ReviewTaskResponseDto {
@@ -73,6 +103,18 @@ export class ReviewTaskResponseDto {
     description: 'Thông tin an toàn của người duyệt (không lộ passwordHash)',
   })
   assignee?: ReviewAssigneeResponseDto | null;
+
+  @ApiPropertyOptional({
+    type: () => LeadResponseDto,
+    description: 'Thông tin chi tiết của Lead cần review',
+  })
+  lead?: LeadResponseDto | null;
+
+  @ApiPropertyOptional({
+    type: () => ReviewWorkflowRunResponseDto,
+    description: 'Thông tin workflow run liên quan',
+  })
+  workflowRun?: ReviewWorkflowRunResponseDto | null;
 
   @ApiPropertyOptional({ description: 'Thời điểm bắt đầu xử lý review' })
   startedAt!: Date | null;

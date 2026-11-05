@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  Allow,
   IsArray,
   IsBoolean,
   IsIn,
@@ -56,9 +57,11 @@ export class CleaningFindingDto implements DataCleaningFinding {
   severity!: Severity;
 
   @ApiProperty({ description: 'Current value in database' })
+  @Allow()
   currentValue!: unknown;
 
   @ApiProperty({ description: 'Proposed remediated value' })
+  @Allow()
   proposedValue!: unknown;
 
   @ApiProperty({ description: 'Confidence score (0.0 to 1.0)', example: 0.95 })

@@ -6,6 +6,10 @@ import type {
   DataCleaningCallbackDto,
   ApplyCleaningDto,
 } from './dto/index.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 
 describe('DataCleaningController', () => {
   let controller: DataCleaningController;
@@ -102,7 +106,7 @@ describe('DataCleaningController', () => {
   });
 
   describe('applyCleaning', () => {
-    it('should call service.applyCleaning with workflowRunId and dto', async () => {
+    it('should call service.applyCleaning with workflowRunId, dto, and userId from user', async () => {
       const dto: ApplyCleaningDto = {
         acceptedFindingIds: ['f-1', 'f-2'],
       };
@@ -117,9 +121,69 @@ describe('DataCleaningController', () => {
         expectedResponse,
       );
 
-      const res = await controller.applyCleaning('wf-123', dto);
-      expect(service.applyCleaning).toHaveBeenCalledWith('wf-123', dto);
+      const mockUser: AuthenticatedUser = {
+        id: 'user-jwt-123',
+        name: 'Test Sales',
+        email: 'test@example.com',
+        role: UserRole.SALES,
+        status: UserStatus.ACTIVE,
+        lastLoginAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      const res = await controller.applyCleaning('wf-123', dto, mockUser);
+      expect(service.applyCleaning).toHaveBeenCalledWith(
+        'wf-123',
+        dto,
+        'user-jwt-123',
+      );
       expect(res).toBe(expectedResponse);
     });
+
+    it('should pass undefined userId when user is not present', async () => {
+      const dto: ApplyCleaningDto = {
+        acceptedFindingIds: ['f-1'],
+      };
+      const expectedResponse = {
+        workflowRunId: 'wf-123',
+        appliedCount: 1,
+        skippedCount: 0,
+        totalRequested: 1,
+        results: [],
+      };
+      (service.applyCleaning as jest.Mock).mockResolvedValueOnce(
+        expectedResponse,
+      );
+
+      const res = await controller.applyCleaning('wf-123', dto, undefined);
+      expect(service.applyCleaning).toHaveBeenCalledWith(
+        'wf-123',
+        dto,
+        undefined,
+      );
+      expect(res).toBe(expectedResponse);
+    });
+  });
+
+  describe('Authorization and Guard Metadata', () => {
+    /* eslint-disable @typescript-eslint/unbound-method */
+    it('should protect applyCleaning endpoint with JwtAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        DataCleaningController.prototype.applyCleaning,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtAuthGuard);
+    });
+
+    it('should protect handleCallback endpoint with N8nAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        DataCleaningController.prototype.handleCallback,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(N8nAuthGuard);
+    });
+    /* eslint-enable @typescript-eslint/unbound-method */
   });
 });

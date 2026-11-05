@@ -12,7 +12,7 @@ import { SendCommunicationDto } from './dto/send-communication.dto.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 
 @ApiTags('Communication')
-@Controller('communication')
+@Controller('internal/communication')
 export class CommunicationController {
   constructor(private readonly communicationService: CommunicationService) {}
 
