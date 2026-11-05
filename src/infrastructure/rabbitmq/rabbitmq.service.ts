@@ -179,9 +179,22 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
     return manager.save(OutboxEvent, record);
   }
 
-  async publishOutboxEvent(event: Pick<OutboxEvent, 'id' | 'eventType' | 'exchange' | 'routingKey' | 'payload'>): Promise<void> {
-    if (!this.channelWrapper) throw new Error('RabbitMQ channel is unavailable');
-    await this.channelWrapper.publish(event.exchange, event.routingKey, event.payload, { persistent: true, contentType: 'application/json' });
+  async publishOutboxEvent(
+    event: Pick<
+      OutboxEvent,
+      'id' | 'eventType' | 'exchange' | 'routingKey' | 'payload'
+    >,
+  ): Promise<void> {
+    if (!this.channelWrapper || !this.isConnected) {
+      throw new Error('RabbitMQ is not connected; outbox event was not published');
+    }
+
+    await this.channelWrapper.publish(
+      event.exchange,
+      event.routingKey,
+      event.payload,
+      { persistent: true, contentType: 'application/json' },
+    );
   }
   async publishEvent<T = Record<string, any>>(
     eventType: string,
