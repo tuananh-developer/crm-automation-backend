@@ -184,18 +184,12 @@ describe('DataCleaningService', () => {
       );
     });
 
-    it('should survive RabbitMQ failure in resilient fallback mode', async () => {
-      (
-        rabbitmqService.publishDataCleaningRequested as jest.Mock
-      ).mockRejectedValueOnce(new Error('Broker unreachable'));
-
-      const result = await service.createScan({ scope: 'ALL' }, 'user-uuid-1');
-      expect(result.workflowRunId).toBe('wf-uuid-1');
-      expect(result.status).toBe(WorkflowStatus.PENDING);
+    it('does not persist the scan when the transactional outbox write fails', async () => {
+      (rabbitmqService.enqueueEvent as jest.Mock).mockRejectedValueOnce(new Error('Outbox unavailable'));
+      await expect(service.createScan({ scope: 'ALL' }, 'user-uuid-1')).rejects.toThrow('Outbox unavailable');
+      expect(dataSource.transaction).toHaveBeenCalled();
     });
-  });
 
-  describe('getScan', () => {
     it('should return scan report when WorkflowRun exists', async () => {
       (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce({
         ...mockWorkflowRun,
