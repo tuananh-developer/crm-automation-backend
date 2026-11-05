@@ -19,7 +19,7 @@ import { JwtAuthGuard } from './jwt-auth.guard.js';
 import { RolesGuard } from './roles.guard.js';
 import { ROLES_KEY } from '../decorators/roles.decorator.js';
 import { UserRole } from '../../modules/users/enums/user.enum.js';
-import { Public, IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
 
 const jwtProtectedControllers = [
   LeadsController,
