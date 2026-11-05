@@ -83,7 +83,7 @@ describe('OutboxPublisher', () => {
 
   it('moves an event to terminal failure after the retry limit', async () => {
     manager.query.mockResolvedValueOnce([{ ...event, attempts: 10 }]);
-    rabbitmq.publishOutboxEvent!.mockRejectedValueOnce(
+    (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
       new Error('permanent broker failure'),
     );
 
