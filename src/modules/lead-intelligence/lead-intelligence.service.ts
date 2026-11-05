@@ -118,7 +118,12 @@ export class LeadIntelligenceService {
           await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED, { leadId: lead.id, workflowRunId: persistedRun.id });
           return persistedRun;
         })
-      : await this.workflowRunsRepository.save(workflowRun);
+      : await (async () => {
+          // Keep the repository-only fallback consistent with the transactional
+          // path: persist the status transition before creating the WorkflowRun.
+          await this.leadsRepository.save(lead);
+          return this.workflowRunsRepository.save(workflowRun);
+        })();
     this.logger.log(
       `Created WorkflowRun ${savedWorkflowRun.id} for lead ${lead.id}`,
     );
