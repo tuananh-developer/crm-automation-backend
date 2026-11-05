@@ -12,6 +12,16 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 
 describe('DataCleaningController', () => {
+  const mockUser: AuthenticatedUser = {
+    id: 'user-jwt-123',
+    name: 'Test Sales',
+    email: 'test@example.com',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
   let controller: DataCleaningController;
   let service: jest.Mocked<Partial<DataCleaningService>>;
 
@@ -37,8 +47,8 @@ describe('DataCleaningController', () => {
       };
       (service.createScan as jest.Mock).mockResolvedValueOnce(expectedResponse);
 
-      const res = await controller.createScan(dto);
-      expect(service.createScan).toHaveBeenCalledWith(dto, undefined);
+      const res = await controller.createScan(dto, mockUser);
+      expect(service.createScan).toHaveBeenCalledWith(dto, mockUser);
       expect(res).toBe(expectedResponse);
     });
   });
@@ -52,8 +62,8 @@ describe('DataCleaningController', () => {
       };
       (service.getScan as jest.Mock).mockResolvedValueOnce(expectedResponse);
 
-      const res = await controller.getScan('wf-123');
-      expect(service.getScan).toHaveBeenCalledWith('wf-123', undefined);
+      const res = await controller.getScan('wf-123', mockUser);
+      expect(service.getScan).toHaveBeenCalledWith('wf-123', mockUser);
       expect(res).toBe(expectedResponse);
     });
   });
