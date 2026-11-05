@@ -27,6 +27,11 @@ export class CreateNotificationDto {
   @IsOptional()
   @IsUUID()
   reviewTaskId?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 200)
+  idempotencyKey?: string;
 }
 
 export class NotificationResponseDto {

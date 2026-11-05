@@ -8,4 +8,5 @@ export interface CreateNotificationInput {
   leadId?: string | null;
   customerId?: string | null;
   reviewTaskId?: string | null;
+  idempotencyKey?: string | null;
 }

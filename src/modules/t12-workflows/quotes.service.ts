@@ -24,6 +24,7 @@ import { Quote } from './entities/quote.entity.js';
 import { QuoteItem } from './entities/quote-item.entity.js';
 import { QuoteApproval } from './entities/quote-approval.entity.js';
 import { N8nWorkflowDispatchService } from './n8n-workflow-dispatch.service.js';
+import { hasSamePayload, isPostgresUniqueViolation } from '../../common/utils/idempotency.util.js';
 import {
   CreateCatalogItemDto,
   CreateQuoteInternalDto,
@@ -95,90 +96,39 @@ export class QuotesService {
     };
   }
 
-  async requestDraft(
-    dto: StartQuoteDraftDto,
-    actor: AuthenticatedUser,
-    rawKey?: string,
-  ) {
+  async requestDraft(dto: StartQuoteDraftDto, actor: AuthenticatedUser, rawKey?: string) {
     const target = await this.assertActorTarget(dto, actor);
-    const idempotencyKey = `WF12:${actor.id}:${this.requireKey(rawKey)}`;
-    const existing = await this.runs.findOne({
-      where: { idempotencyKey, workflowName: WF12_NAME },
-    });
-    if (existing)
-      return {
-        workflowRunId: existing.id,
-        status: existing.status,
-        reused: true,
-      };
-    const currencies = new Set<string>();
-    const requestedIds = [
-      ...new Set(dto.requestedItems.map((item) => item.catalogItemId)),
-    ];
-    const catalogItems = await this.catalog.find({
-      where: { id: In(requestedIds), isActive: true },
-    });
-    if (catalogItems.length !== requestedIds.length)
-      throw new BadRequestException(
-        'One or more requested catalog items are unavailable',
-      );
-    catalogItems.forEach((item) => currencies.add(item.currency));
-    if (currencies.size !== 1 || !currencies.has(dto.currency.toUpperCase()))
-      throw new BadRequestException(
-        'All catalog items must use the requested currency',
-      );
-
-    const run = await this.runs.save(
-      this.runs.create({
-        workflowName: WF12_NAME,
-        idempotencyKey,
-        leadId: target.leadId,
-        customerId: target.customerId,
-        triggeredByUserId: actor.id,
-        status: WorkflowStatus.PENDING,
-        inputPayload: {
-          ...target,
-          requestedItems: dto.requestedItems,
-          requirements: dto.requirements ?? null,
-          currency: dto.currency.toUpperCase(),
-        },
-        outputPayload: null,
-        errorMessage: null,
-        startedAt: new Date(),
-        finishedAt: null,
-      }),
-    );
+    const idempotencyKey = 'WF12:' + actor.id + ':' + this.requireKey(rawKey);
+    const requestedIds = [...new Set(dto.requestedItems.map((item) => item.catalogItemId))];
+    const catalogItems = await this.catalog.find({ where: { id: In(requestedIds), isActive: true } });
+    if (catalogItems.length !== requestedIds.length) throw new BadRequestException('One or more requested catalog items are unavailable');
+    const currency = dto.currency.toUpperCase();
+    if (catalogItems.some((item) => item.currency !== currency)) throw new BadRequestException('All catalog items must use the requested currency');
+    const inputPayload = { ...target, requestedItems: dto.requestedItems, requirements: dto.requirements ?? null, currency };
+    const reuseExisting = (existing: WorkflowRun) => {
+      if (existing.workflowName !== WF12_NAME) throw new ConflictException('Idempotency key is already used by another workflow');
+      if (!hasSamePayload(existing.inputPayload, inputPayload)) throw new ConflictException('Idempotency key was already used with a different quote payload');
+      return { workflowRunId: existing.id, status: existing.status, reused: true };
+    };
+    const existing = await this.runs.findOne({ where: { idempotencyKey } });
+    if (existing) return reuseExisting(existing);
+    let run: WorkflowRun;
     try {
-      await this.dispatcher.dispatch(
-        'N8N_WF12_WEBHOOK_URL',
-        'internal/t12-wf12-quote-proposal',
-        {
-          workflowRunId: run.id,
-          customerId: target.customerId,
-          leadId: target.leadId,
-          requestedItems: dto.requestedItems,
-          requirements: dto.requirements ?? null,
-          currency: dto.currency.toUpperCase(),
-          requestedBy: actor.id,
-          idempotencyKey: run.id,
-        },
-      );
-      run.status = WorkflowStatus.RUNNING;
-      await this.runs.save(run);
+      run = await this.runs.save(this.runs.create({ workflowName: WF12_NAME, idempotencyKey, leadId: target.leadId, customerId: target.customerId, triggeredByUserId: actor.id, status: WorkflowStatus.PENDING, inputPayload, outputPayload: null, errorMessage: null, startedAt: new Date(), finishedAt: null }));
+    } catch (error) {
+      if (!isPostgresUniqueViolation(error)) throw error;
+      const concurrent = await this.runs.findOne({ where: { idempotencyKey } });
+      if (!concurrent) throw error;
+      return reuseExisting(concurrent);
+    }
+    try {
+      await this.dispatcher.dispatch('N8N_WF12_WEBHOOK_URL', 'internal/t12-wf12-quote-proposal', { workflowRunId: run.id, customerId: target.customerId, leadId: target.leadId, requestedItems: dto.requestedItems, requirements: dto.requirements ?? null, currency, requestedBy: actor.id, idempotencyKey: run.id });
+      run.status = WorkflowStatus.RUNNING; await this.runs.save(run);
       return { workflowRunId: run.id, status: run.status, reused: false };
     } catch (error) {
-      run.status = WorkflowStatus.FAILED;
-      run.errorMessage =
-        error instanceof Error
-          ? error.message.slice(0, 1000)
-          : 'n8n dispatch failed';
-      run.finishedAt = new Date();
-      await this.runs.save(run);
-      throw error instanceof ServiceUnavailableException
-        ? error
-        : new ServiceUnavailableException(
-            'Unable to dispatch Quote & Proposal workflow',
-          );
+      run.status = WorkflowStatus.FAILED; run.errorMessage = error instanceof Error ? error.message.slice(0, 1000) : 'n8n dispatch failed';
+      run.finishedAt = new Date(); await this.runs.save(run);
+      throw error instanceof ServiceUnavailableException ? error : new ServiceUnavailableException('Unable to dispatch Quote & Proposal workflow');
     }
   }
 

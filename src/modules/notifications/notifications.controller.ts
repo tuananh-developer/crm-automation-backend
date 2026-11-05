@@ -111,6 +111,7 @@ export class NotificationsController {
       leadId: dto.leadId ?? null,
       customerId: dto.customerId ?? null,
       reviewTaskId: dto.reviewTaskId ?? null,
+      idempotencyKey: dto.idempotencyKey ?? null,
     });
 
     return {

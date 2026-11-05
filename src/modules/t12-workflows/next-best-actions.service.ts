@@ -29,6 +29,7 @@ import {
   StartNextBestActionDto,
 } from './dto/index.js';
 import { N8nWorkflowDispatchService } from './n8n-workflow-dispatch.service.js';
+import { hasSamePayload, isPostgresUniqueViolation } from '../../common/utils/idempotency.util.js';
 
 export const WF10_NAME = 'T12-WF10_NEXT_BEST_ACTION';
 
@@ -127,73 +128,41 @@ export class NextBestActionsService {
     return { customer };
   }
 
-  async request(
-    dto: StartNextBestActionDto,
-    actor: AuthenticatedUser,
-    rawIdempotencyKey?: string,
-  ) {
+  async request(dto: StartNextBestActionDto, actor: AuthenticatedUser, rawIdempotencyKey?: string) {
     const clientKey = this.assertIdempotencyKey(rawIdempotencyKey);
     await this.assertEntityAccess(dto, actor);
-    const idempotencyKey = `WF10:${actor.id}:${clientKey}`;
-    const existing = await this.workflowRuns.findOne({
-      where: { idempotencyKey },
-    });
-    if (existing) {
-      if (existing.workflowName !== WF10_NAME)
-        throw new ConflictException(
-          'Idempotency key is already used by another workflow',
-        );
-      return {
-        workflowRunId: existing.id,
-        status: existing.status,
-        reused: true,
-      };
-    }
-
+    const idempotencyKey = 'WF10:' + actor.id + ':' + clientKey;
+    const inputPayload = { entityType: dto.entityType, entityId: dto.entityId };
+    const reuseExisting = (existing: WorkflowRun) => {
+      if (existing.workflowName !== WF10_NAME) throw new ConflictException('Idempotency key is already used by another workflow');
+      if (!hasSamePayload(existing.inputPayload, inputPayload)) throw new ConflictException('Idempotency key was already used with a different workflow payload');
+      return { workflowRunId: existing.id, status: existing.status, reused: true };
+    };
+    const existing = await this.workflowRuns.findOne({ where: { idempotencyKey } });
+    if (existing) return reuseExisting(existing);
     const run = this.workflowRuns.create({
-      workflowName: WF10_NAME,
-      leadId: dto.entityType === 'Lead' ? dto.entityId : null,
-      customerId: dto.entityType === 'Customer' ? dto.entityId : null,
-      triggeredByUserId: actor.id,
-      idempotencyKey,
-      status: WorkflowStatus.PENDING,
-      inputPayload: { entityType: dto.entityType, entityId: dto.entityId },
-      outputPayload: null,
-      errorMessage: null,
-      startedAt: new Date(),
-      finishedAt: null,
+      workflowName: WF10_NAME, leadId: dto.entityType === 'Lead' ? dto.entityId : null,
+      customerId: dto.entityType === 'Customer' ? dto.entityId : null, triggeredByUserId: actor.id,
+      idempotencyKey, status: WorkflowStatus.PENDING, inputPayload, outputPayload: null,
+      errorMessage: null, startedAt: new Date(), finishedAt: null,
     });
-    const saved = await this.workflowRuns.save(run);
-
-    try {
-      await this.dispatcher.dispatch(
-        'N8N_WF10_WEBHOOK_URL',
-        'internal/t12-wf10-next-best-action',
-        {
-          entityType: dto.entityType,
-          entityId: dto.entityId,
-          workflowRunId: saved.id,
-          requestedBy: actor.id,
-          requestedAt: new Date().toISOString(),
-        },
-      );
-      saved.status = WorkflowStatus.RUNNING;
-      await this.workflowRuns.save(saved);
-    } catch (error) {
-      saved.status = WorkflowStatus.FAILED;
-      saved.finishedAt = new Date();
-      saved.errorMessage =
-        error instanceof Error
-          ? error.message.slice(0, 1000)
-          : 'n8n dispatch failed';
-      await this.workflowRuns.save(saved);
-      throw error instanceof ServiceUnavailableException
-        ? error
-        : new ServiceUnavailableException(
-            'Could not dispatch Next Best Action workflow',
-          );
+    let saved: WorkflowRun;
+    try { saved = await this.workflowRuns.save(run); }
+    catch (error) {
+      if (!isPostgresUniqueViolation(error)) throw error;
+      const concurrent = await this.workflowRuns.findOne({ where: { idempotencyKey } });
+      if (!concurrent) throw error;
+      return reuseExisting(concurrent);
     }
-
+    try {
+      await this.dispatcher.dispatch('N8N_WF10_WEBHOOK_URL', 'internal/t12-wf10-next-best-action', { entityType: dto.entityType, entityId: dto.entityId, workflowRunId: saved.id, requestedBy: actor.id, requestedAt: new Date().toISOString() });
+      saved.status = WorkflowStatus.RUNNING; await this.workflowRuns.save(saved);
+    } catch (error) {
+      saved.status = WorkflowStatus.FAILED; saved.finishedAt = new Date();
+      saved.errorMessage = error instanceof Error ? error.message.slice(0, 1000) : 'n8n dispatch failed';
+      await this.workflowRuns.save(saved);
+      throw error instanceof ServiceUnavailableException ? error : new ServiceUnavailableException('Could not dispatch Next Best Action workflow');
+    }
     return { workflowRunId: saved.id, status: saved.status, reused: false };
   }
 

@@ -18,6 +18,7 @@ import { Notification } from '../notifications/entities/notification.entity.js';
 import { NotificationType } from '../notifications/enums/notification.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { N8nWorkflowDispatchService } from './n8n-workflow-dispatch.service.js';
+import { hasSamePayload, isPostgresUniqueViolation } from '../../common/utils/idempotency.util.js';
 import { SalesMeeting } from './entities/sales-meeting.entity.js';
 import { ConversationTranscript } from './entities/conversation-transcript.entity.js';
 import { ConversationSummary } from './entities/conversation-summary.entity.js';
@@ -61,142 +62,56 @@ export class SalesMeetingsService {
     return key;
   }
 
-  async request(
-    dto: StartSalesMeetingDto,
-    actor: AuthenticatedUser,
-    rawKey?: string,
-  ) {
-    const key = `WF11:${actor.id}:${this.requireKey(rawKey)}`;
+  async request(dto: StartSalesMeetingDto, actor: AuthenticatedUser, rawKey?: string) {
+    const key = 'WF11:' + actor.id + ':' + this.requireKey(rawKey);
     const safeTranscript = redactMeetingTranscript(dto.transcript);
-    if (safeTranscript.length < 20 || safeTranscript.length > 120000)
-      throw new BadRequestException(
-        'Redacted transcript must contain 20..120000 characters',
-      );
-    if (Boolean(dto.leadId) === Boolean(dto.customerId))
-      throw new BadRequestException(
-        'Exactly one of leadId or customerId is required',
-      );
-    let lead: Lead | null = null;
-    let customer: Customer | null = null;
+    if (safeTranscript.length < 20 || safeTranscript.length > 120000) throw new BadRequestException('Redacted transcript must contain 20..120000 characters');
+    const transcriptHash = createHash('sha256').update(safeTranscript).digest('hex');
+    if (Boolean(dto.leadId) === Boolean(dto.customerId)) throw new BadRequestException('Exactly one of leadId or customerId is required');
+    let lead: Lead | null = null; let customer: Customer | null = null;
     if (dto.leadId) {
       lead = await this.leads.findOne({ where: { id: dto.leadId } });
-      if (!lead || (actor.role !== UserRole.ADMIN && lead.ownerId !== actor.id))
-        throw new NotFoundException('Lead not found');
+      if (!lead || (actor.role !== UserRole.ADMIN && lead.ownerId !== actor.id)) throw new NotFoundException('Lead not found');
     } else {
-      customer = await this.customers.findOne({
-        where: { id: dto.customerId! },
-      });
-      if (
-        !customer ||
-        (actor.role !== UserRole.ADMIN && customer.createdBy !== actor.id)
-      )
-        throw new NotFoundException('Customer not found');
+      customer = await this.customers.findOne({ where: { id: dto.customerId! } });
+      if (!customer || (actor.role !== UserRole.ADMIN && customer.createdBy !== actor.id)) throw new NotFoundException('Customer not found');
     }
-    const attendees = dto.attendeeIds.length
-      ? await this.users.find({
-          where: { id: In(dto.attendeeIds), status: UserStatus.ACTIVE },
-          select: { id: true },
-        })
-      : [];
-    if (attendees.length !== dto.attendeeIds.length)
-      throw new BadRequestException(
-        'All attendeeIds must reference active users',
-      );
-    const reused = await this.runs.findOne({
-      where: { idempotencyKey: key, workflowName: WF11_NAME },
-    });
-    if (reused)
-      return {
-        workflowRunId: reused.id,
-        meetingId: (reused.outputPayload?.meetingId as string) ?? null,
-        status: reused.status,
-        reused: true,
-      };
-
-    const saved = await this.dataSource.transaction(async (manager) => {
-      const runRepo = manager.getRepository(WorkflowRun);
-      const meetingRepo = manager.getRepository(SalesMeeting);
-      const run = await runRepo.save(
-        runRepo.create({
-          workflowName: WF11_NAME,
-          idempotencyKey: key,
-          leadId: lead?.id ?? null,
-          customerId: customer?.id ?? null,
-          triggeredByUserId: actor.id,
-          status: WorkflowStatus.PENDING,
-          inputPayload: {
-            attendeeIds: dto.attendeeIds,
-            meetingPurpose: dto.meetingPurpose ?? null,
-            scheduledAt: dto.scheduledAt ?? null,
-            sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT',
-          },
-          outputPayload: null,
-          errorMessage: null,
-          startedAt: new Date(),
-          finishedAt: null,
-        }),
-      );
-      const meeting = await meetingRepo.save(
-        meetingRepo.create({
-          workflowRunId: run.id,
-          ownerId: actor.id,
-          leadId: lead?.id ?? null,
-          customerId: customer?.id ?? null,
-          attendeeIds: dto.attendeeIds,
-          meetingPurpose: dto.meetingPurpose ?? null,
-          scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
-          sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT',
-          status: 'PROCESSING',
-          transcriptId: null,
-          summaryId: null,
-          notificationSentAt: null,
-        }),
-      );
-      run.outputPayload = { meetingId: meeting.id };
-      await runRepo.save(run);
-      return { run, meeting };
-    });
-
+    const attendees = dto.attendeeIds.length ? await this.users.find({ where: { id: In(dto.attendeeIds), status: UserStatus.ACTIVE }, select: { id: true } }) : [];
+    if (attendees.length !== dto.attendeeIds.length) throw new BadRequestException('All attendeeIds must reference active users');
+    const inputPayload = { leadId: lead?.id ?? null, customerId: customer?.id ?? null, attendeeIds: [...dto.attendeeIds].sort(), meetingPurpose: dto.meetingPurpose ?? null, scheduledAt: dto.scheduledAt ?? null, sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT', transcriptHash };
+    const reuseExisting = (existing: WorkflowRun) => {
+      if (existing.workflowName !== WF11_NAME) throw new ConflictException('Idempotency key is already used by another workflow');
+      if (!hasSamePayload(existing.inputPayload, inputPayload)) throw new ConflictException('Idempotency key was already used with a different meeting payload');
+      return { workflowRunId: existing.id, meetingId: (existing.outputPayload?.meetingId as string) ?? null, status: existing.status, reused: true };
+    };
+    const existing = await this.runs.findOne({ where: { idempotencyKey: key } });
+    if (existing) return reuseExisting(existing);
+    let saved: { run: WorkflowRun; meeting: SalesMeeting };
     try {
-      await this.dispatcher.dispatch(
-        'N8N_WF11_WEBHOOK_URL',
-        'internal/t12-wf11-sales-meeting',
-        {
-          meetingId: saved.meeting.id,
-          workflowRunId: saved.run.id,
-          attendeeIds: dto.attendeeIds,
-          meetingPurpose: dto.meetingPurpose ?? null,
-          transcript: safeTranscript,
-          sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT',
-          requestedBy: actor.id,
-          idempotencyKey: saved.run.id,
-        },
-      );
-      saved.run.status = WorkflowStatus.RUNNING;
-      await this.runs.save(saved.run);
-      return {
-        workflowRunId: saved.run.id,
-        meetingId: saved.meeting.id,
-        status: saved.run.status,
-        reused: false,
-      };
+      saved = await this.dataSource.transaction(async (manager) => {
+        const runRepo = manager.getRepository(WorkflowRun); const meetingRepo = manager.getRepository(SalesMeeting);
+        const run = await runRepo.save(runRepo.create({ workflowName: WF11_NAME, idempotencyKey: key, leadId: lead?.id ?? null, customerId: customer?.id ?? null, triggeredByUserId: actor.id, status: WorkflowStatus.PENDING, inputPayload, outputPayload: null, errorMessage: null, startedAt: new Date(), finishedAt: null }));
+        const meetingRecord = meetingRepo.create({ workflowRunId: run.id, ownerId: actor.id, leadId: lead?.id ?? null, customerId: customer?.id ?? null, attendeeIds: dto.attendeeIds, meetingPurpose: dto.meetingPurpose ?? null, scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null, sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT', status: 'PROCESSING', transcriptId: null, summaryId: null, notificationSentAt: null });
+        const meeting = await meetingRepo.save(meetingRecord);
+        run.outputPayload = { meetingId: meeting.id }; await runRepo.save(run);
+        return { run, meeting };
+      });
     } catch (error) {
-      saved.run.status = WorkflowStatus.FAILED;
-      saved.run.finishedAt = new Date();
-      saved.run.errorMessage =
-        error instanceof Error
-          ? error.message.slice(0, 1000)
-          : 'Dispatch failed';
+      if (!isPostgresUniqueViolation(error)) throw error;
+      const concurrent = await this.runs.findOne({ where: { idempotencyKey: key } });
+      if (!concurrent) throw error;
+      return reuseExisting(concurrent);
+    }
+    try {
+      await this.dispatcher.dispatch('N8N_WF11_WEBHOOK_URL', 'internal/t12-wf11-sales-meeting', { meetingId: saved.meeting.id, workflowRunId: saved.run.id, attendeeIds: dto.attendeeIds, meetingPurpose: dto.meetingPurpose ?? null, transcript: safeTranscript, sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT', requestedBy: actor.id, idempotencyKey: saved.run.id });
+      saved.run.status = WorkflowStatus.RUNNING; await this.runs.save(saved.run);
+      return { workflowRunId: saved.run.id, meetingId: saved.meeting.id, status: saved.run.status, reused: false };
+    } catch (error) {
+      saved.run.status = WorkflowStatus.FAILED; saved.run.finishedAt = new Date();
+      saved.run.errorMessage = error instanceof Error ? error.message.slice(0, 1000) : 'Dispatch failed';
       saved.meeting.status = 'FAILED';
-      await Promise.all([
-        this.runs.save(saved.run),
-        this.meetings.save(saved.meeting),
-      ]);
-      throw error instanceof ServiceUnavailableException
-        ? error
-        : new ServiceUnavailableException(
-            'Unable to dispatch Sales Meeting workflow',
-          );
+      await Promise.all([this.runs.save(saved.run), this.meetings.save(saved.meeting)]);
+      throw error instanceof ServiceUnavailableException ? error : new ServiceUnavailableException('Unable to dispatch Sales Meeting workflow');
     }
   }
 
