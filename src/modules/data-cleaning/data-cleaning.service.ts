@@ -582,7 +582,13 @@ export class DataCleaningService {
           if (previouslyAppliedIds.includes(finding.id) || newlyAppliedIds.includes(finding.id)) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: current, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Finding has already been applied' }); continue; }
           if (finding.safeToApply !== true) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: current, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Finding is not safe to apply automatically' }); continue; }
           if (!isAllowedCleaningField(finding.fieldName)) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: finding.currentValue, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Field is not whitelisted for automated updates' }); continue; }
-          const normalize = (value: unknown) => value == null ? '' : String(value).trim();
+          const normalize = (value: unknown) => {
+            if (value == null) return '';
+            if (typeof value === 'object') {
+              return JSON.stringify(value) ?? '';
+            }
+            return String(value).trim();
+          };
           if (normalize(current) !== normalize(finding.currentValue)) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: current, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Lead data has changed since scan was run' }); continue; }
           if (finding.fieldName === 'email') {
             const email = String(finding.proposedValue).trim().toLowerCase();
