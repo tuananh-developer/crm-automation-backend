@@ -445,10 +445,10 @@ describe('DataCleaningService', () => {
       );
 
       (mockEntityManager.findOne as jest.Mock)
-        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce(wfWithBadFinding)
         .mockResolvedValueOnce({
-        ...mockLead,
-      });
+          ...mockLead,
+        });
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-hack-1'],
@@ -509,8 +509,9 @@ describe('DataCleaningService', () => {
         wfWithEmailFinding,
       );
 
-      // First findOne returns mockLead, second findOne checks email uniqueness and finds another lead!
+      // The transaction first locks the run, then the Lead, then checks email uniqueness.
       (mockEntityManager.findOne as jest.Mock)
+        .mockResolvedValueOnce(wfWithEmailFinding)
         .mockResolvedValueOnce({ ...mockLead })
         .mockResolvedValueOnce({
           id: 'lead-uuid-2',
@@ -552,10 +553,10 @@ describe('DataCleaningService', () => {
       );
 
       (mockEntityManager.findOne as jest.Mock)
-        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce(alreadyAppliedWf)
         .mockResolvedValueOnce({
-        ...mockLead,
-      });
+          ...mockLead,
+        });
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-uuid-website'],
@@ -609,11 +610,11 @@ describe('DataCleaningService', () => {
       );
 
       (mockEntityManager.findOne as jest.Mock)
-        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce(previouslyCompletedWf)
         .mockResolvedValueOnce({
-        ...mockLead,
-        companyWebsite: 'https://acme-corp.com',
-      });
+          ...mockLead,
+          companyWebsite: 'https://acme-corp.com',
+        });
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-uuid-website'],
@@ -656,10 +657,10 @@ describe('DataCleaningService', () => {
       );
 
       (mockEntityManager.findOne as jest.Mock)
-        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce(wfWithUnsafeFinding)
         .mockResolvedValueOnce({
-        ...mockLead,
-      });
+          ...mockLead,
+        });
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-unsafe-1'],
@@ -687,10 +688,10 @@ describe('DataCleaningService', () => {
       );
 
       (mockEntityManager.findOne as jest.Mock)
-        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce(existingWf)
         .mockResolvedValueOnce({
-        ...mockLead,
-      });
+          ...mockLead,
+        });
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-uuid-website'],
@@ -712,10 +713,13 @@ describe('DataCleaningService', () => {
       );
 
       (mockEntityManager.findOne as jest.Mock)
-        .mockResolvedValueOnce(completedWorkflowRun)
         .mockResolvedValueOnce({
-        ...mockLead,
-      });
+          ...completedWorkflowRun,
+          triggeredByUserId: 'jwt-user-id',
+        })
+        .mockResolvedValueOnce({
+          ...mockLead,
+        });
 
       await service.applyCleaning(
         'wf-uuid-1',
