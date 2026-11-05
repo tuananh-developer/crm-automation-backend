@@ -174,6 +174,7 @@ describe('ReviewService', () => {
 
     notificationRepository = {
       create: jest.fn(),
+      findOne: jest.fn().mockResolvedValue(null),
       save: jest.fn(),
     };
 
@@ -213,6 +214,8 @@ describe('ReviewService', () => {
               typeof entity === 'function' ? entity.name : String(entity);
             if (entityName === 'ReviewTask') return reviewTaskRepository;
             if (entityName === 'Lead') return leadRepository;
+            if (entityName === 'User') return userRepository;
+            if (entityName === 'Notification') return notificationRepository;
             if (entityName === 'AuditLog') return auditLogRepository;
             return {};
           }),
