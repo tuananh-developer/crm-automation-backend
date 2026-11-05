@@ -63,7 +63,7 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       });
 
       if (this.channelWrapper) {
-        await this.channelWrapper.waitForConnect();
+        await this.waitForInitialConnection(this.channelWrapper, 5000);
       }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -71,6 +71,29 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
         `Failed to establish initial RabbitMQ connection: ${msg}. Event publishing will run in resilient fallback mode.`,
       );
     }
+  }
+
+  private async waitForInitialConnection(
+    channel: ChannelWrapper,
+    timeoutMs: number,
+  ): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`RabbitMQ did not connect within ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+
+      channel.waitForConnect().then(
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 
   private async setupChannel(channel: ConfirmChannel): Promise<void> {
