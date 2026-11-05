@@ -17,7 +17,7 @@
     "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
     "test:cov": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-e2e.json",
+    "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-e2e.json --runInBand",
     "prepare": "husky",
     "migration:run": "pnpm build && node -e 'try { process.loadEnvFile(); } catch {}; import(\"./dist/data-source.js\").then(async ({ AppDataSource }) => { await AppDataSource.initialize(); const m = await AppDataSource.runMigrations(); console.log(\"Migrations executed:\", m.length); await AppDataSource.destroy(); process.exit(0); }).catch(e => { console.error(e); process.exit(1); })'",
     "migration:revert": "pnpm build && node -e 'try { process.loadEnvFile(); } catch {}; import(\"./dist/data-source.js\").then(async ({ AppDataSource }) => { await AppDataSource.initialize(); await AppDataSource.undoLastMigration(); console.log(\"Last migration reverted\"); await AppDataSource.destroy(); process.exit(0); }).catch(e => { console.error(e); process.exit(1); })'",
