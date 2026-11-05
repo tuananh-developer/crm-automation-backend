@@ -37,6 +37,7 @@ export interface LeadEnrichmentRequestedEventData {
 }
 
 export interface FollowUpTriggeredEventData {
+  executionId: string;
   enrollmentId: string;
   leadId: string;
   sequenceId: string;
