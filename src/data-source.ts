@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import { InitialSchema1727866977000 } from './database/migrations/1727866977000-InitialSchema.js';
 import { AddEnrollmentActiveUniqueIndex1728400000000 } from './database/migrations/1728400000000-AddEnrollmentActiveUniqueIndex.js';
-import { AddOutboxEventsTable1729000000000 } from './database/migrations/1729000000-AddOutboxEventsTable.js';
+import { AddOutboxEventsTable1729000000000 } from './database/migrations/1729000000000-AddOutboxEventsTable.js';
 import { AddOutboxProcessingLease1793476900000 } from './database/migrations/1793476900000-AddOutboxProcessingLease.js';
 import { AddT12WorkflowDomains1793476800000 } from './database/migrations/1793476800000-AddT12WorkflowDomains.js';
 

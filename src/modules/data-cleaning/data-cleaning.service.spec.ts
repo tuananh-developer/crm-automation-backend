@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { DataCleaningService } from './data-cleaning.service.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
+import { CRM_EVENTS } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
 import type { Lead } from '../leads/entities/lead.entity.js';
@@ -111,11 +112,11 @@ describe('DataCleaningService', () => {
 
     auditLogRepository = {
       create: jest.fn().mockImplementation((val) => val),
-      save: jest.fn().mockImplementation((val) => Promise.resolve(val)),
+      save: jest.fn().mockImplementation((_target, val) => Promise.resolve(val ?? _target)),
     };
 
     rabbitmqService = {
-      publishDataCleaningRequested: jest.fn().mockResolvedValue({} as any),
+      enqueueEvent: jest.fn().mockResolvedValue({} as any),
     };
 
     mockEntityManager = {
@@ -152,12 +153,11 @@ describe('DataCleaningService', () => {
           triggeredByUserId: 'user-uuid-1',
         }),
       );
-      expect(workflowRunRepository.save).toHaveBeenCalled();
-      expect(rabbitmqService.publishDataCleaningRequested).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workflowRunId: 'wf-uuid-1',
-          scope: 'ALL',
-        }),
+      expect(dataSource.transaction).toHaveBeenCalled();
+      expect(rabbitmqService.enqueueEvent).toHaveBeenCalledWith(
+        mockEntityManager,
+        CRM_EVENTS.DATA_CLEANING_REQUESTED,
+        expect.objectContaining({ workflowRunId: 'wf-uuid-1', scope: 'ALL' }),
       );
       expect(result).toEqual({
         workflowRunId: 'wf-uuid-1',
@@ -187,7 +187,7 @@ describe('DataCleaningService', () => {
         rabbitmqService.publishDataCleaningRequested as jest.Mock
       ).mockRejectedValueOnce(new Error('Broker unreachable'));
 
-      const result = await service.createScan({ scope: 'ALL' });
+      const result = await service.createScan({ scope: 'ALL' }, 'user-uuid-1');
       expect(result.workflowRunId).toBe('wf-uuid-1');
       expect(result.status).toBe(WorkflowStatus.PENDING);
     });
@@ -204,7 +204,7 @@ describe('DataCleaningService', () => {
         },
       });
 
-      const result = await service.getScan('wf-uuid-1');
+      const result = await service.getScan('wf-uuid-1', 'user-uuid-1');
       expect(result.workflowRunId).toBe('wf-uuid-1');
       expect(result.status).toBe(WorkflowStatus.SUCCESS);
       expect(result.findings).toHaveLength(1);
@@ -213,7 +213,7 @@ describe('DataCleaningService', () => {
     it('should throw NotFoundException if WorkflowRun is not found', async () => {
       (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(null);
 
-      await expect(service.getScan('wf-non-existent')).rejects.toThrow(
+      await expect(service.getScan('wf-non-existent', 'user-uuid-1')).rejects.toThrow(
         NotFoundException,
       );
     });
@@ -500,7 +500,7 @@ describe('DataCleaningService', () => {
       });
 
       await expect(
-        service.applyCleaning('wf-uuid-1', { acceptedFindingIds: ['f-1'] }),
+        service.applyCleaning('wf-uuid-1', { acceptedFindingIds: ['f-1'] }, 'user-uuid-1'),
       ).rejects.toThrow(BadRequestException);
     });
 

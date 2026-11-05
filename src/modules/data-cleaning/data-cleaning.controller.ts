@@ -53,9 +53,9 @@ export class DataCleaningController {
   })
   createScan(
     @Body() dto: CreateScanDto,
-    @CurrentUser() user?: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.dataCleaningService.createScan(dto, user?.id);
+    return this.dataCleaningService.createScan(dto, user.id);
   }
 
   @Get('scans/:workflowRunId')
@@ -80,7 +80,7 @@ export class DataCleaningController {
   })
   getScan(
     @Param('workflowRunId', ParseUUIDPipe) workflowRunId: string,
-    @CurrentUser() user?: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.dataCleaningService.getScan(workflowRunId, user);
   }
@@ -176,7 +176,7 @@ export class DataCleaningController {
   applyCleaning(
     @Param('workflowRunId', ParseUUIDPipe) workflowRunId: string,
     @Body() dto: ApplyCleaningDto,
-    @CurrentUser() user?: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.dataCleaningService.applyCleaning(workflowRunId, dto, user);
   }

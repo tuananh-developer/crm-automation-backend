@@ -16,6 +16,7 @@ import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
 import { NotificationType } from '../notifications/enums/notification.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import { CRM_EVENTS } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
 import { UserRole } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
@@ -82,188 +83,60 @@ export class DataCleaningService {
    * Initiates a new Lead Data Cleaning Scan (UC10 - Step 4 & 5).
    * Creates a WorkflowRun and dispatches data.cleaning.requested event to RabbitMQ.
    */
-  async createScan(
-    dto: CreateScanDto,
-    userId?: string,
-  ): Promise<{
+  async createScan(dto: CreateScanDto, userId: string): Promise<{
     workflowRunId: string;
     status: WorkflowStatus;
     message: string;
   }> {
-    // The authenticated actor comes from the JWT-bound controller argument.
-    const effectiveUserId = userId || null;
-
-    const inputData: ScanInputPayload = {
-      scope: dto.scope,
-      filter: dto.filter || null,
-      requestedAt: new Date().toISOString(),
-    };
-
     const workflowRun = this.workflowRunRepository.create({
       workflowName: 'UC10_DATA_CLEANING',
       status: WorkflowStatus.PENDING,
-      triggeredByUserId: effectiveUserId,
-      inputPayload: inputData as unknown as Record<string, any>,
+      triggeredByUserId: userId,
+      inputPayload: { scope: dto.scope, filter: dto.filter || null, requestedAt: new Date().toISOString() },
       outputPayload: null,
       startedAt: new Date(),
     });
-
-    const savedRun = await this.workflowRunRepository.save(workflowRun);
-
-    // Publish event to RabbitMQ dedicated queue
-    try {
-      await this.rabbitmqService.publishDataCleaningRequested({
-        workflowRunId: savedRun.id,
-        triggeredByUserId: effectiveUserId,
-        scope: dto.scope,
-        filter: dto.filter || null,
-        timestamp: new Date().toISOString(),
+    const savedRun = await this.dataSource.transaction(async (manager) => {
+      const persisted = await manager.save(WorkflowRun, workflowRun);
+      await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.DATA_CLEANING_REQUESTED, {
+        workflowRunId: persisted.id, triggeredByUserId: userId, scope: dto.scope,
+        filter: dto.filter || null, timestamp: new Date().toISOString(),
       });
-      this.logger.log(
-        `Dispatched data cleaning requested event for WorkflowRun ${savedRun.id}`,
-      );
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.warn(
-        `Failed to publish RabbitMQ event for WorkflowRun ${savedRun.id}: ${msg}. Fallback mode active.`,
-      );
-    }
-
-    // Resilient fallback worker: if n8n/RabbitMQ takes >20s or is delayed, automatically process in-process
-    const nodeEnv = (process.env.NODE_ENV || '').toLowerCase();
-    if (nodeEnv !== 'test') {
-      setTimeout(() => {
-        void (async () => {
-          try {
-            const check = await this.workflowRunRepository.findOne({
-              where: { id: savedRun.id },
-            });
-            if (
-              check &&
-              (check.status === WorkflowStatus.PENDING ||
-                check.status === WorkflowStatus.RUNNING)
-            ) {
-              this.logger.log(
-                `Executing resilient in-process data cleaning for WorkflowRun ${savedRun.id}`,
-              );
-              await this.executeInProcessScan(savedRun.id);
-            }
-          } catch (err: unknown) {
-            const errText = err instanceof Error ? err.message : String(err);
-            this.logger.error(
-              `Error in fallback data cleaning worker: ${errText}`,
-            );
-          }
-        })();
-      }, 20000).unref();
-    }
-
-    return {
-      workflowRunId: savedRun.id,
-      status: savedRun.status,
-      message: 'Data cleaning scan initiated successfully',
-    };
+      return persisted;
+    });
+    return { workflowRunId: savedRun.id, status: savedRun.status, message: 'Data cleaning scan initiated successfully' };
   }
 
-  /**
-   * Retrieves scan status and findings report for a given WorkflowRun (UC10 - Step 11).
-   */
-  async getScan(
-    workflowRunId: string,
-    user?: AuthenticatedUser,
-  ): Promise<Record<string, unknown>> {
+  async getScan(workflowRunId: string, actor: AuthenticatedUser | string): Promise<Record<string, unknown>> {
     const workflowRun = await this.workflowRunRepository.findOne({
-      where: { id: workflowRunId },
+      where: { id: workflowRunId, workflowName: 'UC10_DATA_CLEANING' },
     });
-
-    if (!workflowRun) {
-      throw new NotFoundException(
-        `Data cleaning workflow run '${workflowRunId}' not found`,
-      );
+    if (!workflowRun) throw new NotFoundException('Data cleaning scan not found');
+    const actorId = typeof actor === 'string' ? actor : actor.id;
+    const isAdmin = typeof actor !== 'string' && actor.role === UserRole.ADMIN;
+    if (!isAdmin && workflowRun.triggeredByUserId !== actorId) {
+      throw new ForbiddenException('You do not have permission to view this scan');
     }
-
-    if (
-      user &&
-      user.role !== UserRole.ADMIN &&
-      workflowRun.triggeredByUserId !== user.id
-    ) {
-      throw new ForbiddenException(
-        'You do not have permission to view this scan',
-      );
-    }
-
-    const output =
-      (workflowRun.outputPayload as unknown as ScanOutputPayload) || {};
-
-    return {
-      workflowRunId: workflowRun.id,
-      status: workflowRun.status,
-      startedAt: workflowRun.startedAt,
-      finishedAt: workflowRun.finishedAt,
-      inputPayload: workflowRun.inputPayload,
-      summary: output.summary ?? null,
-      findings: output.findings ?? [],
-      appliedStats: output.appliedStats ?? null,
-      errorMessage: workflowRun.errorMessage,
-    };
+    const output = (workflowRun.outputPayload as unknown as ScanOutputPayload) || {};
+    return { workflowRunId: workflowRun.id, status: workflowRun.status, startedAt: workflowRun.startedAt, finishedAt: workflowRun.finishedAt, inputPayload: workflowRun.inputPayload, summary: output.summary ?? null, findings: output.findings ?? [], appliedStats: output.appliedStats ?? null, errorMessage: workflowRun.errorMessage };
   }
 
-  /**
-   * Fetches the batch of leads targeted by the scan so n8n can inspect and clean them (UC10 - Step 6).
-   */
-  async getLeadsForScan(
-    workflowRunId: string,
-  ): Promise<{ workflowRunId: string; count: number; leads: Lead[] }> {
-    const workflowRun = await this.workflowRunRepository.findOne({
-      where: { id: workflowRunId },
-    });
-
-    if (!workflowRun) {
-      throw new NotFoundException(`Workflow run '${workflowRunId}' not found`);
-    }
-
-    const inputPayload =
-      (workflowRun.inputPayload as unknown as ScanInputPayload) || {
-        scope: 'ALL',
-      };
-    const scope = inputPayload.scope || 'ALL';
-    const filter = inputPayload.filter || {};
-    const limit = Math.min(filter.limit || 500, 2000);
-
+  async getLeadsForScan(workflowRunId: string): Promise<{ workflowRunId: string; count: number; leads: Lead[] }> {
+    const workflowRun = await this.workflowRunRepository.findOne({ where: { id: workflowRunId, workflowName: 'UC10_DATA_CLEANING' } });
+    if (!workflowRun) throw new NotFoundException('Data cleaning workflow run not found');
+    const inputPayload = (workflowRun.inputPayload as unknown as ScanInputPayload) || { scope: 'ALL' };
+    const scope = inputPayload.scope || 'ALL'; const filter = inputPayload.filter || {}; const limit = Math.min(filter.limit || 500, 2000);
     const qb = this.leadsRepository.createQueryBuilder('lead');
-
     if (scope === 'FILTER') {
-      if (filter.status) {
-        qb.andWhere('lead.status = :status', { status: filter.status });
-      }
-      if (filter.sourceId) {
-        qb.andWhere('lead.sourceId = :sourceId', { sourceId: filter.sourceId });
-      }
-      if (filter.search && typeof filter.search === 'string') {
-        const searchKeyword = `%${filter.search.trim()}%`;
-        qb.andWhere(
-          '(lead.firstName ILIKE :search OR lead.lastName ILIKE :search OR lead.email ILIKE :search OR lead.companyName ILIKE :search)',
-          { search: searchKeyword },
-        );
-      }
+      if (filter.status) qb.andWhere('lead.status = :status', { status: filter.status });
+      if (filter.sourceId) qb.andWhere('lead.sourceId = :sourceId', { sourceId: filter.sourceId });
+      if (filter.search && typeof filter.search === 'string') { const term = '%' + filter.search.trim() + '%'; qb.andWhere('(lead.firstName ILIKE :search OR lead.lastName ILIKE :search OR lead.email ILIKE :search OR lead.companyName ILIKE :search)', { search: term }); }
     }
-
-    qb.orderBy('lead.createdAt', 'DESC');
-    qb.take(limit);
-
+    qb.orderBy('lead.createdAt', 'DESC'); qb.take(limit);
     const leads = await qb.getMany();
-
-    return {
-      workflowRunId,
-      count: leads.length,
-      leads,
-    };
+    return { workflowRunId, count: leads.length, leads };
   }
 
-  /**
-   * Resilient in-process scan engine: executes duplicate detection and format audits
-   * directly within the backend service if n8n/RabbitMQ is delayed or inaccessible.
-   */
   async executeInProcessScan(workflowRunId: string): Promise<void> {
     const { leads } = await this.getLeadsForScan(workflowRunId);
     const findings: DataCleaningFinding[] = [];
@@ -599,337 +472,71 @@ export class DataCleaningService {
   async applyCleaning(
     workflowRunId: string,
     dto: ApplyCleaningDto,
-    userOrUserId?: AuthenticatedUser | string,
+    actor: AuthenticatedUser | string,
   ): Promise<ApplyCleaningResult> {
-    const user =
-      typeof userOrUserId === 'object' && userOrUserId !== null
-        ? userOrUserId
-        : undefined;
-
+    const actorId = typeof actor === 'string' ? actor : actor.id;
+    const isAdmin = typeof actor !== 'string' && actor.role === UserRole.ADMIN;
     const workflowRun = await this.workflowRunRepository.findOne({
-      where: { id: workflowRunId },
+      where: { id: workflowRunId, workflowName: 'UC10_DATA_CLEANING' },
     });
-
-    if (!workflowRun) {
-      throw new NotFoundException(`Workflow run '${workflowRunId}' not found`);
-    }
-
-    if (
-      user &&
-      user.role !== UserRole.ADMIN &&
-      workflowRun.triggeredByUserId !== user.id
-    ) {
-      throw new ForbiddenException(
-        'You do not have permission to apply cleaning proposals for this scan',
-      );
-    }
-
-    if (workflowRun.status !== WorkflowStatus.SUCCESS) {
-      throw new BadRequestException(
-        `Cannot apply changes to workflow run with status '${workflowRun.status}'. Scan must be completed.`,
-      );
-    }
-
-    const output =
-      (workflowRun.outputPayload as unknown as ScanOutputPayload) || {};
+    if (!workflowRun) throw new NotFoundException('Data cleaning scan not found');
+    if (!isAdmin && workflowRun.triggeredByUserId !== actorId) throw new ForbiddenException('You do not have permission to apply cleaning proposals for this scan');
+    if (workflowRun.status !== WorkflowStatus.SUCCESS) throw new BadRequestException('Scan must be completed before applying cleaning proposals');
+    const output = (workflowRun.outputPayload as unknown as ScanOutputPayload) || {};
     const findings: DataCleaningFinding[] = output.findings || [];
-
-    if (!findings.length) {
-      throw new BadRequestException(
-        'Scan report contains no findings to apply',
-      );
-    }
-
-    const findingMap = new Map<string, DataCleaningFinding>();
-    for (const f of findings) {
-      findingMap.set(f.id, f);
-    }
-
-    const effectiveUserId =
-      user?.id ||
-      (typeof userOrUserId === 'string' ? userOrUserId : null) ||
-      workflowRun.triggeredByUserId ||
-      null;
-
-    // Execute updates within an ACID transaction with pessimistic lock to prevent lost updates
+    if (!findings.length) throw new BadRequestException('Scan report contains no findings to apply');
+    const findingMap = new Map(findings.map((finding) => [finding.id, finding]));
     const result = await this.dataSource.transaction(async (manager) => {
-      // Re-read WorkflowRun with pessimistic write lock to serialize concurrent apply requests
-      let targetWorkflowRun = workflowRun;
-      if (manager.queryRunner) {
-        const locked = await manager.findOne(WorkflowRun, {
-          where: { id: workflowRunId },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (locked) {
-          targetWorkflowRun = locked;
-        }
-      }
-
-      const currentTargetOutput =
-        (targetWorkflowRun.outputPayload as unknown as ScanOutputPayload) || {};
-      const previouslyAppliedIds: string[] =
-        currentTargetOutput.appliedFindingIds || [];
+      const lockedRun = manager.queryRunner ? await manager.findOne(WorkflowRun, { where: { id: workflowRunId, workflowName: 'UC10_DATA_CLEANING' }, lock: { mode: 'pessimistic_write' } }) : workflowRun;
+      const targetRun = lockedRun || workflowRun;
+      if (!isAdmin && targetRun.triggeredByUserId !== actorId) throw new ForbiddenException('You do not have permission to apply cleaning proposals for this scan');
+      if (targetRun.status !== WorkflowStatus.SUCCESS) throw new BadRequestException('Data cleaning scan is no longer eligible for changes');
+      const currentOutput = (targetRun.outputPayload as unknown as ScanOutputPayload) || {};
+      const previouslyAppliedIds: string[] = currentOutput.appliedFindingIds || [];
       const newlyAppliedIds: string[] = [];
-
       const results: AppliedFindingResult[] = [];
-
-      // Group requested findings by leadId to minimize lock overhead
-      const findingsByLead = new Map<string, DataCleaningFinding[]>();
-
-      for (const findingId of dto.acceptedFindingIds) {
+      const grouped = new Map<string, DataCleaningFinding[]>();
+      for (const findingId of new Set(dto.acceptedFindingIds)) {
         const finding = findingMap.get(findingId);
-        if (!finding) {
-          results.push({
-            findingId,
-            leadId: '',
-            fieldName: '',
-            oldValue: null,
-            newValue: null,
-            status: 'SKIPPED',
-            skipReason: 'Finding ID not recognized in scan report',
-          });
-          continue;
-        }
-
-        const list = findingsByLead.get(finding.recordId) || [];
-        list.push(finding);
-        findingsByLead.set(finding.recordId, list);
+        if (!finding) { results.push({ findingId, leadId: '', fieldName: '', oldValue: null, newValue: null, status: 'SKIPPED', skipReason: 'Finding ID not recognized in scan report' }); continue; }
+        const group = grouped.get(finding.recordId) || []; group.push(finding); grouped.set(finding.recordId, group);
       }
-
-      for (const [leadId, leadFindings] of findingsByLead.entries()) {
-        const lead = await manager.findOne(Lead, {
-          where: { id: leadId },
-        });
-
-        if (!lead) {
-          for (const f of leadFindings) {
-            results.push({
-              findingId: f.id,
-              leadId,
-              fieldName: f.fieldName,
-              oldValue: f.currentValue,
-              newValue: f.proposedValue,
-              status: 'SKIPPED',
-              skipReason: 'Lead not found in database',
-            });
-          }
-          continue;
+      for (const [leadId, group] of grouped) {
+        const lead = await manager.findOne(Lead, { where: { id: leadId }, lock: { mode: 'pessimistic_write' } });
+        if (!lead) { for (const finding of group) results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: finding.currentValue, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Lead not found in database' }); continue; }
+        const oldValues: Record<string, unknown> = {}; const newValues: Record<string, unknown> = {}; const appliedForLead: string[] = [];
+        for (const finding of group) {
+          const current = isAllowedCleaningField(finding.fieldName) ? getLeadFieldValue(lead, finding.fieldName) : (lead as unknown as Record<string, unknown>)[finding.fieldName];
+          if (previouslyAppliedIds.includes(finding.id) || newlyAppliedIds.includes(finding.id)) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: current, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Finding has already been applied' }); continue; }
+          if (finding.safeToApply !== true) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: current, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Finding is not safe to apply automatically' }); continue; }
+          if (!isAllowedCleaningField(finding.fieldName)) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: finding.currentValue, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Field is not whitelisted for automated updates' }); continue; }
+          const normalize = (value: unknown) => value == null ? '' : String(value).trim();
+          if (normalize(current) !== normalize(finding.currentValue)) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: current, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Lead data has changed since scan was run' }); continue; }
+          if (finding.fieldName === 'email') {
+            const email = String(finding.proposedValue).trim().toLowerCase();
+            const duplicate = await manager.findOne(Lead, { where: { email } });
+            if (duplicate && duplicate.id !== lead.id) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: current, newValue: email, status: 'SKIPPED', skipReason: 'Email is already taken by another lead' }); continue; }
+            oldValues.email = lead.email; lead.email = email; newValues.email = email;
+          } else { oldValues[finding.fieldName] = current; setLeadFieldValue(lead, finding.fieldName, finding.proposedValue); newValues[finding.fieldName] = finding.proposedValue; }
+          appliedForLead.push(finding.id); newlyAppliedIds.push(finding.id);
+          results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: finding.currentValue, newValue: finding.proposedValue, status: 'APPLIED' });
         }
-
-        const oldValuesSnapshot: Record<string, unknown> = {};
-        const newValuesSnapshot: Record<string, unknown> = {};
-        const leadAppliedFindingIds: string[] = [];
-
-        for (const finding of leadFindings) {
-          const currentLeadVal = isAllowedCleaningField(finding.fieldName)
-            ? getLeadFieldValue(lead, finding.fieldName)
-            : (lead as unknown as Record<string, unknown>)[finding.fieldName];
-
-          // a. Idempotency check: Skip if already applied
-          if (
-            previouslyAppliedIds.includes(finding.id) ||
-            newlyAppliedIds.includes(finding.id)
-          ) {
-            results.push({
-              findingId: finding.id,
-              leadId: lead.id,
-              fieldName: finding.fieldName,
-              oldValue: currentLeadVal,
-              newValue: finding.proposedValue,
-              status: 'SKIPPED',
-              skipReason: 'Finding has already been applied',
-            });
-            continue;
-          }
-
-          // b. Safety check: safeToApply must be true
-          if (finding.safeToApply !== true) {
-            results.push({
-              findingId: finding.id,
-              leadId: lead.id,
-              fieldName: finding.fieldName,
-              oldValue: currentLeadVal,
-              newValue: finding.proposedValue,
-              status: 'SKIPPED',
-              skipReason: 'Finding is not safe to apply automatically',
-            });
-            continue;
-          }
-
-          // c. Whitelist verification
-          if (!isAllowedCleaningField(finding.fieldName)) {
-            results.push({
-              findingId: finding.id,
-              leadId: lead.id,
-              fieldName: finding.fieldName,
-              oldValue: finding.currentValue,
-              newValue: finding.proposedValue,
-              status: 'SKIPPED',
-              skipReason: `Field '${finding.fieldName}' is not whitelisted for automated updates`,
-            });
-            continue;
-          }
-
-          const targetField = finding.fieldName;
-
-          // 2. Concurrency re-validation: Check if field has been modified since scan
-          const scannedVal = finding.currentValue;
-
-          // Normalize string comparison to tolerate trivial whitespace discrepancies and detect null -> value changes
-          const currentLeadStr =
-            typeof currentLeadVal === 'string'
-              ? currentLeadVal
-              : typeof currentLeadVal === 'number' ||
-                  typeof currentLeadVal === 'boolean'
-                ? String(currentLeadVal)
-                : '';
-          const scannedValStr =
-            typeof scannedVal === 'string'
-              ? scannedVal
-              : typeof scannedVal === 'number' ||
-                  typeof scannedVal === 'boolean'
-                ? String(scannedVal)
-                : '';
-
-          const normalizedCurrent =
-            currentLeadVal == null ? '' : currentLeadStr.trim();
-          const normalizedScanned =
-            scannedVal == null ? '' : scannedValStr.trim();
-
-          const isStale = normalizedCurrent !== normalizedScanned;
-
-          if (isStale) {
-            results.push({
-              findingId: finding.id,
-              leadId: lead.id,
-              fieldName: finding.fieldName,
-              oldValue: currentLeadVal,
-              newValue: finding.proposedValue,
-              status: 'SKIPPED',
-              skipReason: `Lead data has changed since scan was run (DB has '${currentLeadStr}', scan observed '${scannedValStr}')`,
-            });
-            continue;
-          }
-
-          // 3. Email uniqueness check if updating email
-          if (targetField === 'email') {
-            const normalizedEmail = String(finding.proposedValue)
-              .trim()
-              .toLowerCase();
-            const existingWithEmail = await manager.findOne(Lead, {
-              where: { email: normalizedEmail },
-            });
-
-            if (existingWithEmail && existingWithEmail.id !== lead.id) {
-              results.push({
-                findingId: finding.id,
-                leadId: lead.id,
-                fieldName: finding.fieldName,
-                oldValue: currentLeadVal,
-                newValue: finding.proposedValue,
-                status: 'SKIPPED',
-                skipReason: `Email '${normalizedEmail}' is already taken by another lead`,
-              });
-              continue;
-            }
-
-            oldValuesSnapshot['email'] = lead.email;
-            lead.email = normalizedEmail;
-            newValuesSnapshot['email'] = normalizedEmail;
-          } else {
-            oldValuesSnapshot[targetField] = currentLeadVal;
-            setLeadFieldValue(lead, targetField, finding.proposedValue);
-            newValuesSnapshot[targetField] = finding.proposedValue;
-          }
-
-          leadAppliedFindingIds.push(finding.id);
-          newlyAppliedIds.push(finding.id);
-
-          results.push({
-            findingId: finding.id,
-            leadId: lead.id,
-            fieldName: finding.fieldName,
-            oldValue: finding.currentValue,
-            newValue: finding.proposedValue,
-            status: 'APPLIED',
-          });
-        }
-
-        // If any field on this lead was modified, save lead and create AuditLog
-        if (Object.keys(newValuesSnapshot).length > 0) {
+        if (Object.keys(newValues).length > 0) {
           await manager.save(lead);
-
-          const auditLog = manager.create(AuditLog, {
-            userId: effectiveUserId,
-            action: 'LEAD_DATA_CLEANED',
-            entityType: 'Lead',
-            entityId: lead.id,
-            oldValue: oldValuesSnapshot,
-            newValue: newValuesSnapshot,
-            metadata: {
-              workflowRunId,
-              appliedFindingIds: leadAppliedFindingIds,
-              modifiedFields: Object.keys(newValuesSnapshot),
-            },
-            ipAddress: null,
-            userAgent: null,
-          });
-
-          await manager.save(auditLog);
+          const audit = manager.create(AuditLog, { userId: actorId, action: 'LEAD_DATA_CLEANED', entityType: 'Lead', entityId: lead.id, oldValue: oldValues, newValue: newValues, metadata: { workflowRunId, appliedFindingIds: appliedForLead, modifiedFields: Object.keys(newValues) }, ipAddress: null, userAgent: null });
+          await manager.save(audit);
         }
       }
-
-      const appliedCount = results.filter((r) => r.status === 'APPLIED').length;
-      const skippedCount = results.filter((r) => r.status === 'SKIPPED').length;
-
-      // Update WorkflowRun metadata with applied summary
-      const currentOutput =
-        (targetWorkflowRun.outputPayload as unknown as ScanOutputPayload) || {};
-      const existingAppliedStats: AppliedStatItem[] =
-        currentOutput.appliedStats || [];
-
-      const newStatItem: AppliedStatItem = {
-        appliedAt: new Date().toISOString(),
-        userId: effectiveUserId,
-        appliedCount,
-        skippedCount,
-        totalRequested: dto.acceptedFindingIds.length,
-      };
-
-      const updatedAppliedStats: AppliedStatItem[] = [
-        ...existingAppliedStats,
-        newStatItem,
-      ];
-
-      const mergedAppliedFindingIds = Array.from(
-        new Set([...previouslyAppliedIds, ...newlyAppliedIds]),
-      );
-
-      targetWorkflowRun.outputPayload = {
-        ...currentOutput,
-        appliedFindingIds: mergedAppliedFindingIds,
-        appliedStats: updatedAppliedStats,
-      } as Record<string, any>;
-
-      await manager.save(targetWorkflowRun);
-
-      return {
-        workflowRunId,
-        appliedCount,
-        skippedCount,
-        totalRequested: dto.acceptedFindingIds.length,
-        results,
-      };
+      const appliedCount = results.filter((item) => item.status === 'APPLIED').length;
+      const skippedCount = results.filter((item) => item.status === 'SKIPPED').length;
+      targetRun.outputPayload = { ...currentOutput, appliedFindingIds: Array.from(new Set([...previouslyAppliedIds, ...newlyAppliedIds])), appliedStats: [...(currentOutput.appliedStats || []), { appliedAt: new Date().toISOString(), userId: actorId, appliedCount, skippedCount, totalRequested: dto.acceptedFindingIds.length }] } as Record<string, any>;
+      await manager.save(targetRun);
+      return { workflowRunId, appliedCount, skippedCount, totalRequested: dto.acceptedFindingIds.length, results };
     });
-
-    this.logger.log(
-      `Applied ${result.appliedCount} findings (skipped ${result.skippedCount}) for WorkflowRun ${workflowRunId}`,
-    );
-
+    this.logger.log('Applied ' + result.appliedCount + ' findings for WorkflowRun ' + workflowRunId);
     return result;
   }
 
-  /** Internal n8n context. Only UC10_DATA_CLEANING workflow runs are exposed. */
   async getInternalScanContext(
     workflowRunId: string,
   ): Promise<Record<string, unknown>> {
