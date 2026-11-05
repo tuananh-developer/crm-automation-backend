@@ -22,7 +22,7 @@ Use durable topic exchange `crm.events`. Each independent consumer gets its own 
 
 | Consumer                                      | Durable queue               | Routing key                    | Required `data` fields                                                                          |
 | --------------------------------------------- | --------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------- |
-| Lead-created audit consumer (only if enabled) | `crm.audit.lead-created.q`  | `lead.created`                 | `leadId`                                                                                        |
+| Lead-created audit/event consumer             | `crm.audit.lead-created.q`  | `lead.created`                 | `leadId`                                                                                        |
 | Qualification                                 | `n8n.lead-qualification.q`  | `lead.qualification.requested` | `leadId`, `workflowRunId`                                                                       |
 | Enrichment                                    | `n8n.lead-enrichment.q`     | `lead.enrichment.requested`    | `leadId`, `workflowRunId`, `provider`/provider mode                                             |
 | Scoring                                       | `n8n.lead-scoring.q`        | `lead.scoring.requested`       | `leadId`, `workflowRunId`                                                                       |
