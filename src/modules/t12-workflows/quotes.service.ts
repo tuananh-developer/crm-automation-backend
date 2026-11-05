@@ -123,11 +123,30 @@ export class QuotesService {
     }
     try {
       await this.dispatcher.dispatch('N8N_WF12_WEBHOOK_URL', 'internal/t12-wf12-quote-proposal', { workflowRunId: run.id, customerId: target.customerId, leadId: target.leadId, requestedItems: dto.requestedItems, requirements: dto.requirements ?? null, currency, requestedBy: actor.id, idempotencyKey: run.id });
-      run.status = WorkflowStatus.RUNNING; await this.runs.save(run);
-      return { workflowRunId: run.id, status: run.status, reused: false };
+      // A fast callback may move the run to a terminal state before dispatch returns.
+      await this.runs.update(
+        { id: run.id, status: WorkflowStatus.PENDING },
+        { status: WorkflowStatus.RUNNING },
+      );
+      const latest = await this.runs.findOne({ where: { id: run.id } });
+      return {
+        workflowRunId: run.id,
+        status: latest?.status ?? WorkflowStatus.RUNNING,
+        reused: false,
+      };
     } catch (error) {
-      run.status = WorkflowStatus.FAILED; run.errorMessage = error instanceof Error ? error.message.slice(0, 1000) : 'n8n dispatch failed';
-      run.finishedAt = new Date(); await this.runs.save(run);
+      await this.runs.update(
+        { id: run.id, status: In([WorkflowStatus.PENDING, WorkflowStatus.RUNNING]) },
+        {
+          status: WorkflowStatus.FAILED,
+          errorMessage: error instanceof Error ? error.message.slice(0, 1000) : 'n8n dispatch failed',
+          finishedAt: new Date(),
+        },
+      );
+      const latest = await this.runs.findOne({ where: { id: run.id } });
+      if (latest && [WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL].includes(latest.status)) {
+        return { workflowRunId: run.id, status: latest.status, reused: false };
+      }
       throw error instanceof ServiceUnavailableException ? error : new ServiceUnavailableException('Unable to dispatch Quote & Proposal workflow');
     }
   }
