@@ -422,7 +422,7 @@ describe('DataCleaningService', () => {
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-hack-1'],
-      });
+      }, 'user-uuid-1');
 
       expect(result.appliedCount).toBe(0);
       expect(result.skippedCount).toBe(1);
@@ -443,7 +443,7 @@ describe('DataCleaningService', () => {
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-uuid-website'],
-      });
+      }, 'user-uuid-1');
 
       expect(result.appliedCount).toBe(0);
       expect(result.skippedCount).toBe(1);
@@ -487,7 +487,7 @@ describe('DataCleaningService', () => {
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-email-dup'],
-      });
+      }, 'user-uuid-1');
 
       expect(result.appliedCount).toBe(0);
       expect(result.skippedCount).toBe(1);
@@ -525,7 +525,7 @@ describe('DataCleaningService', () => {
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-uuid-website'],
-      });
+      }, 'user-uuid-1');
 
       expect(result.appliedCount).toBe(0);
       expect(result.skippedCount).toBe(1);
@@ -547,7 +547,7 @@ describe('DataCleaningService', () => {
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-uuid-website', 'finding-uuid-website'],
-      });
+      }, 'user-uuid-1');
 
       // The finding is matched and applied on first occurrence, second duplicate occurrence is skipped
       expect(result.appliedCount).toBe(1);
@@ -579,7 +579,7 @@ describe('DataCleaningService', () => {
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-uuid-website'],
-      });
+      }, 'user-uuid-1');
 
       expect(result.appliedCount).toBe(0);
       expect(result.skippedCount).toBe(1);
@@ -623,7 +623,7 @@ describe('DataCleaningService', () => {
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-unsafe-1'],
-      });
+      }, 'user-uuid-1');
 
       expect(result.appliedCount).toBe(0);
       expect(result.skippedCount).toBe(1);
@@ -652,7 +652,7 @@ describe('DataCleaningService', () => {
 
       const result = await service.applyCleaning('wf-uuid-1', {
         acceptedFindingIds: ['finding-uuid-website'],
-      });
+      }, 'user-uuid-1');
 
       expect(result.appliedCount).toBe(1);
       expect(mockEntityManager.save).toHaveBeenCalledWith(
