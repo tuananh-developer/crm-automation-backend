@@ -156,14 +156,34 @@ export class NextBestActionsService {
     }
     try {
       await this.dispatcher.dispatch('N8N_WF10_WEBHOOK_URL', 'internal/t12-wf10-next-best-action', { entityType: dto.entityType, entityId: dto.entityId, workflowRunId: saved.id, requestedBy: actor.id, requestedAt: new Date().toISOString() });
-      saved.status = WorkflowStatus.RUNNING; await this.workflowRuns.save(saved);
+      // The n8n callback may complete before the webhook HTTP response returns.
+      // Never overwrite a terminal callback state with RUNNING.
+      await this.workflowRuns.update(
+        { id: saved.id, status: WorkflowStatus.PENDING },
+        { status: WorkflowStatus.RUNNING },
+      );
+      const latest = await this.workflowRuns.findOne({ where: { id: saved.id } });
+      return {
+        workflowRunId: saved.id,
+        status: latest?.status ?? WorkflowStatus.RUNNING,
+        reused: false,
+      };
     } catch (error) {
-      saved.status = WorkflowStatus.FAILED; saved.finishedAt = new Date();
-      saved.errorMessage = error instanceof Error ? error.message.slice(0, 1000) : 'n8n dispatch failed';
-      await this.workflowRuns.save(saved);
+      await this.workflowRuns.update(
+        { id: saved.id, status: In([WorkflowStatus.PENDING, WorkflowStatus.RUNNING]) },
+        {
+          status: WorkflowStatus.FAILED,
+          finishedAt: new Date(),
+          errorMessage: error instanceof Error ? error.message.slice(0, 1000) : 'n8n dispatch failed',
+        },
+      );
+      const latest = await this.workflowRuns.findOne({ where: { id: saved.id } });
+      // A callback may have succeeded even when the HTTP acknowledgement was lost.
+      if (latest && [WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL].includes(latest.status)) {
+        return { workflowRunId: saved.id, status: latest.status, reused: false };
+      }
       throw error instanceof ServiceUnavailableException ? error : new ServiceUnavailableException('Could not dispatch Next Best Action workflow');
     }
-    return { workflowRunId: saved.id, status: saved.status, reused: false };
   }
 
   private async getScopedRun(
