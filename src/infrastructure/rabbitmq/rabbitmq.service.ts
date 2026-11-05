@@ -15,6 +15,8 @@ import {
   CRM_EVENTS,
   CRM_EXCHANGE,
   DEFAULT_CRM_QUEUE,
+  LEAD_ENRICHMENT_QUEUE,
+  LEAD_SCORING_QUEUE,
   DATA_CLEANING_QUEUE,
 } from './rabbitmq.constants.js';
 import type {
@@ -70,17 +72,17 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
           );
 
           // Assert dedicated queue for AI Lead Enrichment (UC03)
-          await channel.assertQueue('lead.enrichment.queue', { durable: true });
+          await channel.assertQueue(LEAD_ENRICHMENT_QUEUE, { durable: true });
           await channel.bindQueue(
-            'lead.enrichment.queue',
+            LEAD_ENRICHMENT_QUEUE,
             CRM_EXCHANGE,
             CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
           );
 
           // Assert dedicated queue for AI Lead Scoring (UC04)
-          await channel.assertQueue('lead.scoring.queue', { durable: true });
+          await channel.assertQueue(LEAD_SCORING_QUEUE, { durable: true });
           await channel.bindQueue(
-            'lead.scoring.queue',
+            LEAD_SCORING_QUEUE,
             CRM_EXCHANGE,
             CRM_EVENTS.LEAD_SCORING_REQUESTED,
           );
@@ -94,7 +96,7 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
           );
 
           this.logger.log(
-            `Exchange '${CRM_EXCHANGE}', default queue '${queueName}', 'lead.enrichment.queue', 'lead.scoring.queue', and '${DATA_CLEANING_QUEUE}' asserted and bound`,
+            `Exchange '${CRM_EXCHANGE}', default queue '${queueName}', '${LEAD_ENRICHMENT_QUEUE}', '${LEAD_SCORING_QUEUE}', and '${DATA_CLEANING_QUEUE}' asserted and bound`,
           );
         },
       });

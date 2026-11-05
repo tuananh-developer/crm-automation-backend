@@ -10,4 +10,6 @@ export const CRM_EVENTS = {
 } as const;
 
 export const DEFAULT_CRM_QUEUE = 'crm_events_queue';
+export const LEAD_ENRICHMENT_QUEUE = 'lead.enrichment.queue';
+export const LEAD_SCORING_QUEUE = 'lead.scoring.queue';
 export const DATA_CLEANING_QUEUE = 'data.cleaning.queue';

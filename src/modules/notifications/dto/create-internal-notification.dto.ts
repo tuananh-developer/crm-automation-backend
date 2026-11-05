@@ -47,8 +47,8 @@ export class CreateInternalNotificationDto {
     default: NotificationSeverity.INFO,
   })
   @IsOptional()
-  @IsString()
-  severity?: string;
+  @IsEnum(NotificationSeverity)
+  severity?: NotificationSeverity;
 
   @ApiPropertyOptional({ description: 'Associated lead UUID', format: 'uuid' })
   @IsOptional()

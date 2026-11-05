@@ -201,4 +201,49 @@ describe('NotificationsService', () => {
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  it('persists explicit notification severity (HIGH / MEDIUM / INFO) end-to-end', async () => {
+    (notificationRepository.create as jest.Mock).mockImplementation(
+      (input: Partial<Notification>) => input as Notification,
+    );
+    (notificationRepository.save as jest.Mock).mockImplementation(
+      (notification: Notification) => Promise.resolve(notification),
+    );
+
+    const highNotif = await service.create({
+      userId: 'user-1',
+      type: NotificationType.WORKFLOW_COMPLETED,
+      severity: 'HIGH',
+      title: 'Lead Enrichment Failed',
+      message: 'Enrichment failed with error',
+      leadId: 'lead-1',
+    });
+
+    expect(notificationRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'HIGH',
+      }),
+    );
+    expect(highNotif.severity).toBe('HIGH');
+
+    const mediumNotif = await service.create({
+      userId: 'user-1',
+      type: NotificationType.WORKFLOW_COMPLETED,
+      severity: 'MEDIUM',
+      title: 'Lead Enrichment Partial',
+      message: 'Enrichment completed partially',
+      leadId: 'lead-1',
+    });
+
+    expect(mediumNotif.severity).toBe('MEDIUM');
+
+    const defaultNotif = await service.create({
+      userId: 'user-1',
+      type: NotificationType.WORKFLOW_COMPLETED,
+      title: 'Default Severity Notification',
+      leadId: 'lead-1',
+    });
+
+    expect(defaultNotif.severity).toBe('INFO');
+  });
 });

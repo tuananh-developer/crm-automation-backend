@@ -1,6 +1,7 @@
 import {
   IsEnum,
   IsInt,
+  IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
@@ -13,11 +14,12 @@ import { EnrichmentStatus } from '../enums/lead-intelligence.enum.js';
 
 export class EnrichmentCallbackDto {
   @IsUUID()
+  @IsNotEmpty()
   leadId!: string;
 
   @IsUUID()
-  @IsOptional()
-  workflowRunId?: string;
+  @IsNotEmpty()
+  workflowRunId!: string;
 
   @IsEnum(EnrichmentStatus)
   status!: EnrichmentStatus;

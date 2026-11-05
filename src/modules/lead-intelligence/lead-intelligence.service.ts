@@ -450,42 +450,46 @@ export class LeadIntelligenceService {
     const companySize = dto.companySize ?? null;
 
     // ── WorkflowRun Verification & Idempotency Check ────────────────────────
-    if (dto.workflowRunId) {
-      const existingRun = await this.workflowRunsRepository.findOne({
-        where: { id: dto.workflowRunId },
-      });
-      if (!existingRun) {
-        throw new NotFoundException(
-          `WorkflowRun with ID '${dto.workflowRunId}' not found`,
-        );
-      }
-      if (
-        existingRun.workflowName !== 'lead-enrichment' ||
-        existingRun.leadId !== dto.leadId
-      ) {
-        throw new BadRequestException(
-          `WorkflowRun '${dto.workflowRunId}' does not belong to lead '${dto.leadId}' or is not a lead-enrichment workflow`,
-        );
-      }
+    if (!dto.workflowRunId || !dto.workflowRunId.trim()) {
+      throw new BadRequestException(
+        'workflowRunId is required for enrichment callback correlation',
+      );
+    }
 
-      const existingEnrichment = await this.enrichmentsRepository.findOne({
-        where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
-      });
+    const existingRun = await this.workflowRunsRepository.findOne({
+      where: { id: dto.workflowRunId },
+    });
+    if (!existingRun) {
+      throw new NotFoundException(
+        `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+      );
+    }
+    if (
+      existingRun.workflowName !== 'lead-enrichment' ||
+      existingRun.leadId !== dto.leadId
+    ) {
+      throw new BadRequestException(
+        `WorkflowRun '${dto.workflowRunId}' does not belong to lead '${dto.leadId}' or is not a lead-enrichment workflow`,
+      );
+    }
 
-      if (
-        existingEnrichment &&
-        existingEnrichment.status !== EnrichmentStatus.PENDING &&
-        (existingRun.status === WorkflowStatus.SUCCESS ||
-          existingRun.status === WorkflowStatus.FAILED)
-      ) {
-        this.logger.warn(
-          `Idempotent duplicate callback detected for workflowRunId=${dto.workflowRunId}. Returning existing enrichment result.`,
-        );
-        return {
-          enrichment: existingEnrichment,
-          workflowRunUpdated: false,
-        };
-      }
+    const existingEnrichment = await this.enrichmentsRepository.findOne({
+      where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
+    });
+
+    if (
+      existingEnrichment &&
+      existingEnrichment.status !== EnrichmentStatus.PENDING &&
+      (existingRun.status === WorkflowStatus.SUCCESS ||
+        existingRun.status === WorkflowStatus.FAILED)
+    ) {
+      this.logger.warn(
+        `Idempotent duplicate callback detected for workflowRunId=${dto.workflowRunId}. Returning existing enrichment result.`,
+      );
+      return {
+        enrichment: existingEnrichment,
+        workflowRunUpdated: false,
+      };
     }
 
     // ── Transaction Execution ───────────────────────────────────────────────
@@ -494,21 +498,16 @@ export class LeadIntelligenceService {
       enrichmentRepo: Repository<LeadEnrichment>;
       workflowRunRepo: Repository<WorkflowRun>;
     }) => {
-      // 1. Find the pending enrichment record
-      const enrichment = dto.workflowRunId
-        ? await repos.enrichmentRepo.findOne({
-            where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
-          })
-        : await repos.enrichmentRepo.findOne({
-            where: { leadId: dto.leadId, status: EnrichmentStatus.PENDING },
-            order: { createdAt: 'DESC' },
-          });
+      // 1. Find the pending enrichment record strictly correlated with workflowRunId and leadId
+      const enrichment = await repos.enrichmentRepo.findOne({
+        where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
+      });
 
       const target =
         enrichment ??
         repos.enrichmentRepo.create({
           leadId: dto.leadId,
-          workflowRunId: dto.workflowRunId ?? null,
+          workflowRunId: dto.workflowRunId,
           provider,
           status: EnrichmentStatus.PENDING,
           enrichedAt: new Date(),
