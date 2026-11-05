@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { Lead } from '../leads/entities/lead.entity.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
@@ -138,6 +138,9 @@ export class DataCleaningService {
   async getLeadsForScan(workflowRunId: string): Promise<{ workflowRunId: string; count: number; leads: Lead[] }> {
     const workflowRun = await this.workflowRunRepository.findOne({ where: { id: workflowRunId, workflowName: 'UC10_DATA_CLEANING' } });
     if (!workflowRun) throw new NotFoundException('Data cleaning workflow run not found');
+    if (![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(workflowRun.status)) {
+      throw new ConflictException('Data-cleaning run is not active');
+    }
     const inputPayload = (workflowRun.inputPayload as unknown as ScanInputPayload) || { scope: 'ALL' };
     const scope = inputPayload.scope || 'ALL'; const filter = inputPayload.filter || {}; const limit = Math.min(filter.limit || 500, 2000);
     const qb = this.leadsRepository.createQueryBuilder('lead');
@@ -451,7 +454,7 @@ export class DataCleaningService {
       );
     }
 
-    workflowRun.status =
+    const nextStatus =
       dto.status === 'FAILED'
         ? WorkflowStatus.FAILED
         : dto.status === 'PARTIAL'
@@ -460,28 +463,64 @@ export class DataCleaningService {
 
     const existingOutput =
       (workflowRun.outputPayload as unknown as ScanOutputPayload) || {};
-
     const updatedOutput: ScanOutputPayload = {
       ...existingOutput,
       summary: dto.summary,
       findings: dto.findings,
       receivedAt: new Date().toISOString(),
     };
+    const finishedAt = new Date();
 
-    workflowRun.outputPayload = updatedOutput as Record<string, any>;
-    workflowRun.finishedAt = new Date();
-    workflowRun.errorMessage = dto.errorMessage || null;
+    // A conditional UPDATE makes callback completion single-writer even when
+    // n8n retries or two workers deliver the same callback concurrently.
+    const updateResult = await this.workflowRunRepository.update(
+      {
+        id: workflowRun.id,
+        workflowName: 'UC10_DATA_CLEANING',
+        status: In([WorkflowStatus.PENDING, WorkflowStatus.RUNNING]),
+      },
+      {
+        status: nextStatus,
+        outputPayload: updatedOutput as Record<string, any>,
+        finishedAt,
+        errorMessage: dto.errorMessage || null,
+      },
+    );
 
-    await this.workflowRunRepository.save(workflowRun);
+    if ((updateResult.affected ?? 0) === 0) {
+      const latestRun = await this.workflowRunRepository.findOne({
+        where: {
+          id: workflowRun.id,
+          workflowName: 'UC10_DATA_CLEANING',
+        },
+      });
+      if (
+        latestRun &&
+        [
+          WorkflowStatus.SUCCESS,
+          WorkflowStatus.PARTIAL,
+          WorkflowStatus.FAILED,
+        ].includes(latestRun.status)
+      ) {
+        return {
+          success: true,
+          workflowRunId: latestRun.id,
+          status: latestRun.status,
+        };
+      }
+      throw new ConflictException(
+        'WorkflowRun stopped being active before callback completion',
+      );
+    }
 
     this.logger.log(
-      `Updated WorkflowRun ${workflowRun.id} status to ${workflowRun.status} with ${dto.findings?.length || 0} findings`,
+      `Updated WorkflowRun ${workflowRun.id} status to ${nextStatus} with ${dto.findings?.length || 0} findings`,
     );
 
     return {
       success: true,
       workflowRunId: workflowRun.id,
-      status: workflowRun.status,
+      status: nextStatus,
     };
   }
 
