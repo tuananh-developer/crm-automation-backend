@@ -43,6 +43,13 @@
       "arguments": {}
     },
     {
+      "name": "crm.audit.lead-created.q",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
       "name": "n8n.lead-qualification.q",
       "vhost": "/",
       "durable": true,
@@ -79,6 +86,14 @@
     }
   ],
   "bindings": [
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "crm.audit.lead-created.q",
+      "destination_type": "queue",
+      "routing_key": "lead.created",
+      "arguments": {}
+    },
     {
       "source": "crm.events",
       "vhost": "/",
