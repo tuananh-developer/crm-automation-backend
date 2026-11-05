@@ -12,6 +12,7 @@ import amqp, {
 import type { ConfirmChannel } from 'amqplib';
 import type { EntityManager } from 'typeorm';
 import { randomUUID } from 'node:crypto';
+import {
   CRM_EVENTS,
   CRM_EXCHANGE,
   DATA_CLEANING_QUEUE,
