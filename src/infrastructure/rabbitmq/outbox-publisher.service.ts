@@ -25,8 +25,21 @@ export class OutboxPublisher {
         'FROM candidates WHERE event.id = candidates.id',
         'RETURNING event.id, event.event_type AS "eventType", event.exchange, event.routing_key AS "routingKey", event.payload, event.attempts, event.lock_token AS "lockToken"'
       ].join(' ');
-      const events = await this.dataSource.transaction(manager => manager.query<ClaimedEvent[]>(sql, [25]));
-      for (const event of events) await this.publishOne(event);
+      const events = await this.dataSource.transaction((manager) =>
+        manager.query<ClaimedEvent[]>(sql, [25]),
+      );
+      const outcomes = await Promise.allSettled(
+        events.map((event) => this.publishOne(event)),
+      );
+      for (const outcome of outcomes) {
+        if (outcome.status === 'rejected') {
+          const message =
+            outcome.reason instanceof Error
+              ? outcome.reason.message
+              : String(outcome.reason);
+          this.logger.error(`Outbox event processing failed: ${message}`);
+        }
+      }
     } catch (error) {
       this.logger.error('Outbox polling failed: ' + (error instanceof Error ? error.message : String(error)));
     } finally { this.running = false; }
