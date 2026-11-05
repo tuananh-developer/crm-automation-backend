@@ -19,6 +19,7 @@ import {
   ENRICHMENT_QUEUE,
   FOLLOW_UP_QUEUE,
   LEGACY_CRM_QUEUE,
+  LEAD_CREATED_QUEUE,
   QUALIFICATION_QUEUE,
   SCORING_QUEUE,
 } from './rabbitmq.constants.js';
@@ -101,6 +102,7 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
     await channel.assertExchange(CRM_EXCHANGE, 'topic', { durable: true });
 
     const consumers = [
+      [LEAD_CREATED_QUEUE, CRM_EVENTS.LEAD_CREATED],
       [QUALIFICATION_QUEUE, CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED],
       [ENRICHMENT_QUEUE, CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED],
       [SCORING_QUEUE, CRM_EVENTS.LEAD_SCORING_REQUESTED],
