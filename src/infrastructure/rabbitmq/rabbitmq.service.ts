@@ -143,18 +143,37 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
   }
 
   getRabbitmqUrl(): string {
-    const isProd = this.configService.get<string>('NODE_ENV') === 'production';
+    const nodeEnv = (
+      this.configService.get<string>('NODE_ENV') ||
+      process.env.NODE_ENV ||
+      ''
+    ).toLowerCase();
+    const isProd = nodeEnv === 'production';
     const useCloudAmqp =
-      this.configService.get<string>('USE_CLOUD_AMQP') === 'true';
-    const fullUrl = this.configService.get<string>('RABBITMQ_URL');
+      (this.configService.get<string>('USE_CLOUD_AMQP') ||
+        process.env.USE_CLOUD_AMQP) === 'true';
+    const fullUrl =
+      this.configService.get<string>('RABBITMQ_URL') ||
+      process.env.RABBITMQ_URL;
 
-    // 1. In production or when USE_CLOUD_AMQP=true: target CloudAMQP broker
+    if (isProd && !fullUrl) {
+      throw new Error(
+        'FATAL: RABBITMQ_URL is required in production; local guest credentials are not allowed',
+      );
+    }
+    if (useCloudAmqp && !fullUrl) {
+      throw new Error(
+        'RABBITMQ_URL is required when USE_CLOUD_AMQP=true',
+      );
+    }
+
+    // Production and explicit CloudAMQP mode must never silently fall back to localhost.
     if ((isProd || useCloudAmqp) && fullUrl) {
-      this.logger.log('Targeting CloudAMQP broker (Production / Cloud mode)');
+      this.logger.log('Targeting configured CloudAMQP broker');
       return fullUrl;
     }
 
-    // 2. In development / local mode: prioritize local Docker RabbitMQ broker
+    // Development mode: prioritize local Docker RabbitMQ broker
     const host =
       this.configService.get<string>('LOCAL_RABBITMQ_HOST') || 'localhost';
     const port = this.configService.get<number>('LOCAL_RABBITMQ_PORT') || 5672;
