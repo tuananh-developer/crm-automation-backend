@@ -10,6 +10,7 @@ import amqp, {
   type AmqpConnectionManager,
 } from 'amqp-connection-manager';
 import type { ConfirmChannel } from 'amqplib';
+import type { EntityManager } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import {
   CRM_EVENTS,
@@ -20,6 +21,7 @@ import {
   QUALIFICATION_QUEUE,
   SCORING_QUEUE,
 } from './rabbitmq.constants.js';
+import { OutboxEvent, OutboxEventStatus } from './entities/outbox-event.entity.js';
 import type {
   CrmEvent,
   LeadCreatedEventData,
@@ -148,6 +150,16 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
     return this.isConnected;
   }
 
+  async enqueueEvent<T = Record<string, unknown>>(manager: EntityManager, eventType: string, data: T): Promise<OutboxEvent> {
+    const event: CrmEvent<T> = { eventId: randomUUID(), eventType, version: 1, occurredAt: new Date().toISOString(), data };
+    const record = manager.create(OutboxEvent, { eventType, exchange: CRM_EXCHANGE, routingKey: eventType, payload: event as unknown as Record<string, any>, status: OutboxEventStatus.PENDING, attempts: 0, lastError: null, nextAttemptAt: null, publishedAt: null, lockedUntil: null, lockToken: null });
+    return manager.save(OutboxEvent, record);
+  }
+
+  async publishOutboxEvent(event: Pick<OutboxEvent, 'id' | 'eventType' | 'exchange' | 'routingKey' | 'payload'>): Promise<void> {
+    if (!this.channelWrapper) throw new Error('RabbitMQ channel is unavailable');
+    await this.channelWrapper.publish(event.exchange, event.routingKey, event.payload, { persistent: true, contentType: 'application/json' });
+  }
   async publishEvent<T = Record<string, any>>(
     eventType: string,
     data: T,
