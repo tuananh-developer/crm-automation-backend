@@ -386,7 +386,6 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     const segRes = await api
       .post('/api/v1/segments')
       .send({
-        createdBy: testUserId,
         name: `Enterprise VIP Segment ${timestamp}`,
         description: 'High ARR and verified enterprise customers',
         criteria: {
