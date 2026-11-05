@@ -428,13 +428,19 @@ export class SalesMeetingsService {
             dueDate: item.dueDate,
             evidence: item.evidence,
             confidence: Number(item.confidence),
-            requiresConfirmation: item.requiresConfirmation,
+          };
+          const comparablePayload = {
+            summaryId: payload.summaryId,
+            workflowRunId: payload.workflowRunId,
+            title: payload.title,
+            description: payload.description,
+            ownerAttendeeId: payload.ownerAttendeeId,
+            dueDate: payload.dueDate,
+            evidence: payload.evidence,
+            confidence: Number(payload.confidence),
           };
           if (
-            !hasSamePayload(existingPayload, {
-              ...payload,
-              confidence: Number(payload.confidence),
-            })
+            !hasSamePayload(existingPayload, comparablePayload)
           ) {
             throw new ConflictException(
               'Action item idempotency key was already used with different content',
