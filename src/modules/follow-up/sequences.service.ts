@@ -445,17 +445,36 @@ export class SequencesService {
     let scheduledDate: Date;
 
     if (this.dataSource) {
+      // Persist the enrollment, first execution, interaction and dispatch event
+      // atomically. The OutboxPublisher sends it only after this transaction commits.
       const txResult = await this.dataSource.transaction(async (manager) => {
-        return executeEnrollment({
+        const result = await executeEnrollment({
           enrollmentRepo: manager.getRepository(LeadFollowUpEnrollment),
           executionRepo: manager.getRepository(FollowUpExecution),
           interactionRepo: manager.getRepository(Interaction),
         });
+
+        await this.rabbitmqService.enqueueEvent(
+          manager,
+          CRM_EVENTS.FOLLOW_UP_TRIGGERED,
+          {
+            enrollmentId: result.savedEnrollment.id,
+            executionId: result.savedExecution.id,
+            leadId: lead.id,
+            sequenceId: sequence.id,
+            stepId: firstStep.id,
+            scheduledAt: result.scheduledDate.toISOString(),
+          },
+        );
+
+        return result;
       });
       savedEnrollment = txResult.savedEnrollment;
       savedExecution = txResult.savedExecution;
       scheduledDate = txResult.scheduledDate;
     } else {
+      // Compatibility for isolated consumers/tests constructed without DataSource.
+      // Production Nest wiring always provides DataSource and uses the transactional outbox.
       const result = await executeEnrollment({
         enrollmentRepo: this.enrollmentsRepository,
         executionRepo: this.executionsRepository,
@@ -464,21 +483,23 @@ export class SequencesService {
       savedEnrollment = result.savedEnrollment;
       savedExecution = result.savedExecution;
       scheduledDate = result.scheduledDate;
+
+      await this.rabbitmqService.publishEvent(
+        CRM_EVENTS.FOLLOW_UP_TRIGGERED,
+        {
+          enrollmentId: savedEnrollment.id,
+          executionId: savedExecution.id,
+          leadId: lead.id,
+          sequenceId: sequence.id,
+          stepId: firstStep.id,
+          scheduledAt: scheduledDate.toISOString(),
+        },
+      );
     }
 
     this.logger.log(
       `Enrolled lead ${lead.id} into sequence ${sequence.id} (Enrollment ID: ${savedEnrollment.id}, firstStep: ${firstStep.id})`,
     );
-
-    // 6. Publish event to RabbitMQ
-    await this.rabbitmqService.publishEvent(CRM_EVENTS.FOLLOW_UP_TRIGGERED, {
-      enrollmentId: savedEnrollment.id,
-      executionId: savedExecution.id,
-      leadId: lead.id,
-      sequenceId: sequence.id,
-      stepId: firstStep.id,
-      scheduledAt: scheduledDate.toISOString(),
-    });
 
     return {
       message: 'Lead successfully enrolled into follow-up sequence',
