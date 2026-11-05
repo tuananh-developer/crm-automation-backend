@@ -378,6 +378,9 @@ describe('DataCleaningService', () => {
 
       (mockEntityManager.findOne as jest.Mock).mockImplementation(
         (entity, opts) => {
+          if ((entity as { name?: string }).name === 'WorkflowRun') {
+            return Promise.resolve(completedWorkflowRun);
+          }
           if (opts.where.id === 'lead-uuid-1') {
             return Promise.resolve({ ...mockLead });
           }
@@ -441,7 +444,9 @@ describe('DataCleaningService', () => {
         wfWithBadFinding,
       );
 
-      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+      (mockEntityManager.findOne as jest.Mock)
+        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce({
         ...mockLead,
       });
 
@@ -461,7 +466,9 @@ describe('DataCleaningService', () => {
       );
 
       // Lead in database has already been updated to something different than scanned currentValue
-      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+      (mockEntityManager.findOne as jest.Mock)
+        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce({
         ...mockLead,
         companyWebsite: 'https://updated-externally.com',
       });
@@ -544,7 +551,9 @@ describe('DataCleaningService', () => {
         alreadyAppliedWf,
       );
 
-      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+      (mockEntityManager.findOne as jest.Mock)
+        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce({
         ...mockLead,
       });
 
@@ -566,7 +575,9 @@ describe('DataCleaningService', () => {
         completedWorkflowRun,
       );
 
-      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+      (mockEntityManager.findOne as jest.Mock)
+        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce({
         ...mockLead,
       });
 
@@ -597,7 +608,9 @@ describe('DataCleaningService', () => {
         previouslyCompletedWf,
       );
 
-      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+      (mockEntityManager.findOne as jest.Mock)
+        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce({
         ...mockLead,
         companyWebsite: 'https://acme-corp.com',
       });
@@ -642,7 +655,9 @@ describe('DataCleaningService', () => {
         wfWithUnsafeFinding,
       );
 
-      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+      (mockEntityManager.findOne as jest.Mock)
+        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce({
         ...mockLead,
       });
 
@@ -671,7 +686,9 @@ describe('DataCleaningService', () => {
         existingWf,
       );
 
-      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+      (mockEntityManager.findOne as jest.Mock)
+        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce({
         ...mockLead,
       });
 
@@ -694,7 +711,9 @@ describe('DataCleaningService', () => {
         { ...completedWorkflowRun, triggeredByUserId: 'jwt-user-id' },
       );
 
-      (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
+      (mockEntityManager.findOne as jest.Mock)
+        .mockResolvedValueOnce(completedWorkflowRun)
+        .mockResolvedValueOnce({
         ...mockLead,
       });
 
