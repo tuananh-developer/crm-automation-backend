@@ -104,13 +104,40 @@ export class SalesMeetingsService {
     }
     try {
       await this.dispatcher.dispatch('N8N_WF11_WEBHOOK_URL', 'internal/t12-wf11-sales-meeting', { meetingId: saved.meeting.id, workflowRunId: saved.run.id, attendeeIds: dto.attendeeIds, meetingPurpose: dto.meetingPurpose ?? null, transcript: safeTranscript, sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT', requestedBy: actor.id, idempotencyKey: saved.run.id });
-      saved.run.status = WorkflowStatus.RUNNING; await this.runs.save(saved.run);
-      return { workflowRunId: saved.run.id, meetingId: saved.meeting.id, status: saved.run.status, reused: false };
+      // The n8n callback can finish before the HTTP webhook acknowledgement.
+      await this.runs.update(
+        { id: saved.run.id, status: WorkflowStatus.PENDING },
+        { status: WorkflowStatus.RUNNING },
+      );
+      const latest = await this.runs.findOne({ where: { id: saved.run.id } });
+      return {
+        workflowRunId: saved.run.id,
+        meetingId: saved.meeting.id,
+        status: latest?.status ?? WorkflowStatus.RUNNING,
+        reused: false,
+      };
     } catch (error) {
-      saved.run.status = WorkflowStatus.FAILED; saved.run.finishedAt = new Date();
-      saved.run.errorMessage = error instanceof Error ? error.message.slice(0, 1000) : 'Dispatch failed';
-      saved.meeting.status = 'FAILED';
-      await Promise.all([this.runs.save(saved.run), this.meetings.save(saved.meeting)]);
+      await this.runs.update(
+        { id: saved.run.id, status: In([WorkflowStatus.PENDING, WorkflowStatus.RUNNING]) },
+        {
+          status: WorkflowStatus.FAILED,
+          finishedAt: new Date(),
+          errorMessage: error instanceof Error ? error.message.slice(0, 1000) : 'Dispatch failed',
+        },
+      );
+      const latest = await this.runs.findOne({ where: { id: saved.run.id } });
+      if (latest && [WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL].includes(latest.status)) {
+        return {
+          workflowRunId: saved.run.id,
+          meetingId: saved.meeting.id,
+          status: latest.status,
+          reused: false,
+        };
+      }
+      // Do not mark the meeting FAILED if a callback already completed the run.
+      if (latest?.status === WorkflowStatus.FAILED) {
+        await this.meetings.update({ id: saved.meeting.id }, { status: 'FAILED' });
+      }
       throw error instanceof ServiceUnavailableException ? error : new ServiceUnavailableException('Unable to dispatch Sales Meeting workflow');
     }
   }
