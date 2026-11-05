@@ -15,6 +15,7 @@ describe('NotificationsService', () => {
     type: NotificationType.HUMAN_REVIEW_REQUIRED,
     title: 'Human review required',
     content: 'Lead lead-1 requires manual review.',
+    severity: 'INFO',
     leadId: 'lead-1',
     customerId: null,
     reviewTaskId: 'review-1',
@@ -154,6 +155,26 @@ describe('NotificationsService', () => {
     expect(result.isRead).toBe(false);
     expect(result.readAt).toBeNull();
     expect(result.type).toBe(NotificationType.FOLLOW_UP_FAILED);
+    expect(result.severity).toBe('INFO');
+  });
+
+  it('persists explicit notification severity when provided', async () => {
+    (notificationRepository.create as jest.Mock).mockImplementation(
+      (input: Partial<Notification>) => input as Notification,
+    );
+    (notificationRepository.save as jest.Mock).mockImplementation(
+      (notification: Notification) => Promise.resolve(notification),
+    );
+
+    const result = await service.create({
+      userId: 'user-1',
+      type: NotificationType.WORKFLOW_COMPLETED,
+      title: 'Hot Lead Opportunity',
+      severity: 'HIGH',
+      leadId: 'lead-1',
+    });
+
+    expect(result.severity).toBe('HIGH');
   });
 
   it('resolves recipient userId from lead owner when userId is omitted', async () => {
