@@ -11,9 +11,7 @@ import amqp, {
 } from 'amqp-connection-manager';
 import type { ConfirmChannel } from 'amqplib';
 import type { EntityManager } from 'typeorm';
-import type { EntityManager } from 'typeorm';
 import { randomUUID } from 'node:crypto';
-import {
   CRM_EVENTS,
   CRM_EXCHANGE,
   DATA_CLEANING_QUEUE,
@@ -22,7 +20,6 @@ import {
   QUALIFICATION_QUEUE,
   SCORING_QUEUE,
 } from './rabbitmq.constants.js';
-import { OutboxEvent, OutboxEventStatus } from './entities/outbox-event.entity.js';
 import { OutboxEvent, OutboxEventStatus } from './entities/outbox-event.entity.js';
 import type {
   CrmEvent,

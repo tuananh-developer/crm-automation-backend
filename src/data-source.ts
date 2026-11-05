@@ -34,7 +34,9 @@ export const AppDataSource = new DataSource(
         migrations: [
           InitialSchema1727866977000,
           AddEnrollmentActiveUniqueIndex1728400000000,
+          AddOutboxEventsTable1729000000000,
           AddT12WorkflowDomains1793476800000,
+          AddOutboxProcessingLease1793476900000,
         ],
         migrationsTableName: 'typeorm_migrations',
       }
@@ -52,7 +54,9 @@ export const AppDataSource = new DataSource(
         migrations: [
           InitialSchema1727866977000,
           AddEnrollmentActiveUniqueIndex1728400000000,
+          AddOutboxEventsTable1729000000000,
           AddT12WorkflowDomains1793476800000,
+          AddOutboxProcessingLease1793476900000,
         ],
         migrationsTableName: 'typeorm_migrations',
       },

@@ -14,6 +14,7 @@ async function bootstrap() {
   const configuredFrontendUrl = configService.get<string>('FRONTEND_URL');
   if (isProd && !configuredFrontendUrl?.trim()) throw new Error('FRONTEND_URL must be configured in production');
   const frontendOrigins = configuredFrontendUrl?.split(',').map((origin) => origin.trim()).filter(Boolean) ?? [];
+  if (isProd && frontendOrigins.length === 0) throw new Error('FRONTEND_URL must contain at least one valid origin in production');
   app.setGlobalPrefix('api/v1');
   const corsOrigins = isProd ? frontendOrigins : [...(frontendOrigins.length ? frontendOrigins : ['http://localhost:3001']), 'http://localhost:3000', 'http://localhost:3001', 'http://localhost:5678'];
 
