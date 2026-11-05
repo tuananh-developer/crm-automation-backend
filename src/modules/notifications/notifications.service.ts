@@ -62,7 +62,7 @@ export class NotificationsService {
     return result.affected ?? 0;
   }
 
-  /** Used by other modules (UC06, UC07) to raise an in-app notification. */
+  /** Used by other modules (UC06, UC07, WF14) to raise an in-app notification. */
   async create(input: CreateNotificationInput): Promise<Notification> {
     return this.notificationRepository.save(
       this.notificationRepository.create({
@@ -70,6 +70,7 @@ export class NotificationsService {
         type: input.type,
         title: input.title,
         content: input.content ?? input.message ?? null,
+        severity: input.severity ?? 'INFO',
         leadId: input.leadId ?? null,
         customerId: input.customerId ?? null,
         reviewTaskId: input.reviewTaskId ?? null,

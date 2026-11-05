@@ -436,23 +436,88 @@ export class FeedbackService {
 
     const resolvedFeedbackId = feedback ? feedback.id : null;
 
-    // Helper to verify payload equivalence for idempotency
+    const normalizeTimestamp = (
+      val?: Date | string | null,
+    ): number | string | null => {
+      if (val === undefined || val === null || val === '') return null;
+      const date = val instanceof Date ? val : new Date(val);
+      const time = date.getTime();
+      return Number.isNaN(time) ? String(val) : time;
+    };
+
+    const requestedAssignee =
+      dto.assignedTo ??
+      (dto as { assigneeId?: string | null; assignee?: string | null })
+        .assigneeId ??
+      (dto as { assignee?: string | null }).assignee ??
+      null;
+
+    const requestedDueRaw =
+      dto.dueAt ?? (dto as { dueDate?: Date | string | null }).dueDate ?? null;
+
+    const requestedSourceType =
+      dto.sourceEntityType ?? (resolvedFeedbackId ? 'CUSTOMER_FEEDBACK' : null);
+
+    const requestedSourceId = dto.sourceEntityId ?? resolvedFeedbackId ?? null;
+
+    // Helper to verify complete payload equivalence for idempotency
     const verifyPayloadMatch = (existingTask: CustomerTask) => {
+      const existingFeedbackId = existingTask.customerFeedbackId ?? null;
+      const existingAssignee =
+        existingTask.assignedTo ??
+        (
+          existingTask as {
+            assigneeId?: string | null;
+            assignee?: string | null;
+          }
+        ).assigneeId ??
+        (existingTask as { assignee?: string | null }).assignee ??
+        null;
+      const existingDueRaw =
+        existingTask.dueAt ??
+        (existingTask as { dueDate?: Date | string | null }).dueDate ??
+        null;
+      const existingSourceType =
+        existingTask.sourceEntityType ??
+        (existingFeedbackId ? 'CUSTOMER_FEEDBACK' : null);
+      const existingSourceId =
+        existingTask.sourceEntityId ?? existingFeedbackId ?? null;
+
       const customerMatches = existingTask.customerId === dto.customerId;
       const taskTypeMatches = existingTask.taskType === dto.taskType;
       const titleMatches = existingTask.title === dto.title;
-      const feedbackMatches =
-        (existingTask.customerFeedbackId ?? null) === resolvedFeedbackId;
-      const sourceEntityMatches =
-        (existingTask.sourceEntityId ?? null) ===
-        (dto.sourceEntityId ?? resolvedFeedbackId ?? null);
+      const descriptionMatches =
+        (existingTask.description ?? null) === (dto.description ?? null);
+      const priorityMatches =
+        String(existingTask.priority ?? CustomerTaskPriority.MEDIUM) ===
+        String(dto.priority ?? CustomerTaskPriority.MEDIUM);
+      const statusMatches =
+        String(existingTask.status ?? CustomerTaskStatus.OPEN) ===
+        String(dto.status ?? CustomerTaskStatus.OPEN);
+      const assigneeMatches = existingAssignee === requestedAssignee;
+      const dueAtMatches =
+        normalizeTimestamp(existingDueRaw) ===
+        normalizeTimestamp(requestedDueRaw);
+      const feedbackMatches = existingFeedbackId === resolvedFeedbackId;
+      const sourceEntityTypeMatches =
+        existingSourceType === requestedSourceType;
+      const sourceEntityMatches = existingSourceId === requestedSourceId;
+      const workflowRunMatches =
+        (existingTask.workflowRunId ?? null) === (dto.workflowRunId ?? null);
 
       if (
         !customerMatches ||
         !taskTypeMatches ||
         !titleMatches ||
+        !descriptionMatches ||
+        !priorityMatches ||
+        !statusMatches ||
+        !assigneeMatches ||
+        !dueAtMatches ||
         !feedbackMatches ||
-        !sourceEntityMatches
+        !sourceEntityTypeMatches ||
+        !sourceEntityMatches ||
+        !workflowRunMatches
       ) {
         throw new ConflictException(
           `Idempotency key '${dto.idempotencyKey}' was already used with different request parameters`,
@@ -476,18 +541,17 @@ export class FeedbackService {
       const task = this.customerTasksRepository.create({
         customerId: dto.customerId,
         customerFeedbackId: resolvedFeedbackId,
+        workflowRunId: dto.workflowRunId ?? null,
         taskType: dto.taskType,
         title: dto.title,
         description: dto.description ?? null,
         priority: dto.priority ?? CustomerTaskPriority.MEDIUM,
         status: dto.status ?? CustomerTaskStatus.OPEN,
-        assignedTo: dto.assignedTo ?? null,
-        dueAt: dto.dueAt ? new Date(dto.dueAt) : null,
+        assignedTo: requestedAssignee,
+        dueAt: requestedDueRaw ? new Date(requestedDueRaw) : null,
         idempotencyKey: dto.idempotencyKey,
-        sourceEntityType:
-          dto.sourceEntityType ??
-          (resolvedFeedbackId ? 'CUSTOMER_FEEDBACK' : null),
-        sourceEntityId: dto.sourceEntityId ?? resolvedFeedbackId ?? null,
+        sourceEntityType: requestedSourceType,
+        sourceEntityId: requestedSourceId,
       });
 
       const saved = await this.customerTasksRepository.save(task);

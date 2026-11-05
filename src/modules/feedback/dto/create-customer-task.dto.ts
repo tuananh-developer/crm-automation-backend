@@ -87,4 +87,9 @@ export class CreateCustomerTaskDto {
   @IsOptional()
   @IsUUID('4')
   sourceEntityId?: string;
+
+  @ApiPropertyOptional({ description: 'Workflow run ID', format: 'uuid' })
+  @IsOptional()
+  @IsUUID('4')
+  workflowRunId?: string;
 }

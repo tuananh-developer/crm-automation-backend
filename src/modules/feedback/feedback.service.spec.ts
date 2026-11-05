@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   BadRequestException,
   ConflictException,
@@ -514,6 +516,117 @@ describe('FeedbackService', () => {
       expect(res.created).toBe(false);
       expect(res.task.id).toBe('collision-task-id');
     });
+
+    it('should return existing task when full payload (description, priority, status, dueAt, assignedTo) matches', async () => {
+      const dueIso = '2026-11-10T12:00:00.000Z';
+      customersRepository.findOne.mockResolvedValue({ id: 'customer-1' });
+      feedbackRepository.findOne.mockResolvedValue({
+        id: 'feedback-1',
+        customerId: 'customer-1',
+      });
+      customerTasksRepository.findOne.mockResolvedValue({
+        id: 'full-match-task',
+        customerId: 'customer-1',
+        customerFeedbackId: 'feedback-1',
+        sourceEntityType: 'CUSTOMER_FEEDBACK',
+        sourceEntityId: 'feedback-1',
+        workflowRunId: 'run-1',
+        taskType: 'FEEDBACK_ESCALATION',
+        title: 'Urgent Customer Feedback: Billing',
+        description: 'Double charged on invoice',
+        priority: CustomerTaskPriority.HIGH,
+        status: CustomerTaskStatus.OPEN,
+        assignedTo: 'user-1-uuid',
+        dueAt: new Date(dueIso),
+        idempotencyKey: 'feedback-task-full',
+      });
+
+      const res = await service.ensureCustomerTask({
+        customerId: 'customer-1',
+        customerFeedbackId: 'feedback-1',
+        sourceEntityType: 'CUSTOMER_FEEDBACK',
+        sourceEntityId: 'feedback-1',
+        workflowRunId: 'run-1',
+        taskType: 'FEEDBACK_ESCALATION',
+        title: 'Urgent Customer Feedback: Billing',
+        description: 'Double charged on invoice',
+        priority: CustomerTaskPriority.HIGH,
+        status: CustomerTaskStatus.OPEN,
+        assignedTo: 'user-1-uuid',
+        dueAt: dueIso,
+        idempotencyKey: 'feedback-task-full',
+      });
+
+      expect(res.created).toBe(false);
+      expect(res.task.id).toBe('full-match-task');
+    });
+
+    it('should throw ConflictException when reusing idempotencyKey with modified description, priority, dueAt, or assignedTo', async () => {
+      const dueIso = '2026-11-10T12:00:00.000Z';
+      const baseExistingTask = {
+        id: 'existing-task-full',
+        customerId: 'customer-1',
+        customerFeedbackId: null,
+        sourceEntityType: null,
+        sourceEntityId: null,
+        workflowRunId: null,
+        taskType: 'FEEDBACK_ESCALATION',
+        title: 'Escalated feedback',
+        description: 'Original description',
+        priority: CustomerTaskPriority.HIGH,
+        status: CustomerTaskStatus.OPEN,
+        assignedTo: 'user-1-uuid',
+        dueAt: new Date(dueIso),
+        idempotencyKey: 'reused-full-key',
+      };
+
+      customersRepository.findOne.mockResolvedValue({ id: 'customer-1' });
+      customerTasksRepository.findOne.mockResolvedValue(baseExistingTask);
+
+      const baseDto = {
+        customerId: 'customer-1',
+        taskType: 'FEEDBACK_ESCALATION',
+        title: 'Escalated feedback',
+        description: 'Original description',
+        priority: CustomerTaskPriority.HIGH,
+        status: CustomerTaskStatus.OPEN,
+        assignedTo: 'user-1-uuid',
+        dueAt: dueIso,
+        idempotencyKey: 'reused-full-key',
+      };
+
+      // 1. Modified description
+      await expect(
+        service.ensureCustomerTask({
+          ...baseDto,
+          description: 'Changed description',
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      // 2. Modified priority
+      await expect(
+        service.ensureCustomerTask({
+          ...baseDto,
+          priority: CustomerTaskPriority.CRITICAL,
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      // 3. Modified dueAt / dueDate
+      await expect(
+        service.ensureCustomerTask({
+          ...baseDto,
+          dueAt: '2026-11-12T12:00:00.000Z',
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      // 4. Modified assignedTo / assignee
+      await expect(
+        service.ensureCustomerTask({
+          ...baseDto,
+          assignedTo: 'user-2-uuid',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
   });
 
   describe('Read endpoints & internal get', () => {
@@ -554,6 +667,210 @@ describe('FeedbackService', () => {
 
       const fb = await service.getInternalFeedback('fb-1');
       expect(fb.id).toBe('fb-1');
+    });
+  });
+
+  describe('T12-WF14 n8n Workflow Contract & Runtime Verification', () => {
+    const workflowPath = path.resolve(
+      process.cwd(),
+      'integrations/n8n/workflows/t12-wf14-customer-feedback.json',
+    );
+    const workflowJson = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+
+    it('1. configures headerAuth on the Webhook Trigger node and rejects unauthenticated calls', () => {
+      const triggerNode = workflowJson.nodes.find(
+        (n: any) => n.name === 'Webhook Trigger',
+      );
+      expect(triggerNode).toBeDefined();
+      expect(triggerNode.parameters.path).toBe('t12-wf14-customer-feedback');
+      expect(triggerNode.parameters.authentication).toBe('headerAuth');
+      expect(triggerNode.credentials?.httpHeaderAuth).toBeDefined();
+      expect(triggerNode.credentials.httpHeaderAuth.id).toBeTruthy();
+
+      const validateInputNode = workflowJson.nodes.find(
+        (n: any) => n.name === 'Code: Validate Feedback Input',
+      );
+      expect(validateInputNode).toBeDefined();
+
+      // Execute the validation code with missing/invalid X-N8N-API-KEY header
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const runValidateInput = new Function(
+        '$input',
+        '$env',
+        validateInputNode.parameters.jsCode,
+      );
+
+      expect(() =>
+        runValidateInput(
+          {
+            first: () => ({
+              json: {
+                headers: {},
+                body: {
+                  feedbackId: 'fb-1',
+                  customerId: 'cust-1',
+                  safeContent: 'Test feedback',
+                },
+              },
+            }),
+          },
+          { N8N_API_KEY: 'secret-n8n-key' },
+        ),
+      ).toThrow(/Unauthorized/i);
+
+      // Valid header succeeds
+      const validResult = runValidateInput(
+        {
+          first: () => ({
+            json: {
+              headers: { 'x-n8n-api-key': 'secret-n8n-key' },
+              body: {
+                feedbackId: 'fb-1',
+                customerId: 'cust-1',
+                safeContent: 'Test feedback',
+              },
+            },
+          }),
+        },
+        { N8N_API_KEY: 'secret-n8n-key' },
+      );
+      expect(validResult[0].json.feedbackId).toBe('fb-1');
+    });
+
+    it('2. configures Save Feedback callback node to stop workflow on error instead of continuing to escalation', () => {
+      const saveFeedbackNode = workflowJson.nodes.find(
+        (n: any) => n.name === 'HTTP Request: Save Feedback',
+      );
+      expect(saveFeedbackNode).toBeDefined();
+      expect(saveFeedbackNode.onError).toBe('stopWorkflow');
+      expect(saveFeedbackNode.onError).not.toBe('continueRegularOutput');
+    });
+
+    it('3. strictly validates AI boolean escalationRequired without coercing string "false" to true', () => {
+      const validateClassNode = workflowJson.nodes.find(
+        (n: any) => n.name === 'Code: Validate Classification',
+      );
+      expect(validateClassNode).toBeDefined();
+
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const runValidateClassification = new Function(
+        '$input',
+        '$',
+        validateClassNode.parameters.jsCode,
+      );
+
+      const mockContextLookup = () => ({
+        first: () => ({
+          json: {
+            feedbackId: 'fb-123',
+            customerId: 'cust-123',
+            workflowRunId: 'run-123',
+            normalizedSafeContent: 'Minor UI layout suggestion on dashboard.',
+          },
+        }),
+      });
+
+      // Case A: Gemini returns string "false" for escalationRequired -> MUST fail schema validation and NOT coerce to true
+      const stringFalseOutput = runValidateClassification(
+        {
+          first: () => ({
+            json: {
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          sentiment: 'NEUTRAL',
+                          category: 'Feature Request',
+                          urgency: 'LOW',
+                          executiveSummary: 'Minor UI feedback',
+                          escalationRequired: 'false',
+                          escalationReason: null,
+                        }),
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          }),
+        },
+        mockContextLookup,
+      );
+
+      expect(stringFalseOutput[0].json.status).toBe('FAILED');
+      expect(stringFalseOutput[0].json.classificationMode).toBe(
+        'HEURISTIC_FALLBACK',
+      );
+      expect(stringFalseOutput[0].json.escalationRequired).toBe(false);
+      expect(stringFalseOutput[0].json.errorMessage).toContain(
+        'escalationRequired must be a boolean',
+      );
+
+      // Case B: Gemini returns missing/undefined escalationRequired -> MUST fail schema validation
+      const missingBoolOutput = runValidateClassification(
+        {
+          first: () => ({
+            json: {
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          sentiment: 'POSITIVE',
+                          category: 'General',
+                          urgency: 'LOW',
+                        }),
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          }),
+        },
+        mockContextLookup,
+      );
+
+      expect(missingBoolOutput[0].json.status).toBe('FAILED');
+      expect(missingBoolOutput[0].json.classificationMode).toBe(
+        'HEURISTIC_FALLBACK',
+      );
+
+      // Case C: Gemini returns valid boolean false -> succeeds with GEMINI_AI and escalationRequired === false
+      const validFalseOutput = runValidateClassification(
+        {
+          first: () => ({
+            json: {
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          sentiment: 'NEUTRAL',
+                          category: 'Feature Request',
+                          urgency: 'LOW',
+                          executiveSummary: 'Minor UI feedback',
+                          escalationRequired: false,
+                          escalationReason: null,
+                        }),
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          }),
+        },
+        mockContextLookup,
+      );
+
+      expect(validFalseOutput[0].json.status).toBe('SUCCESS');
+      expect(validFalseOutput[0].json.classificationMode).toBe('GEMINI_AI');
+      expect(validFalseOutput[0].json.escalationRequired).toBe(false);
     });
   });
 });

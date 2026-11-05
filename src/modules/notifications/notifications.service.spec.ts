@@ -153,5 +153,46 @@ describe('NotificationsService', () => {
     expect(result.isRead).toBe(false);
     expect(result.readAt).toBeNull();
     expect(result.type).toBe(NotificationType.FOLLOW_UP_FAILED);
+    expect(result.severity).toBe('INFO');
+  });
+
+  it('persists explicit notification severity (HIGH / INFO) end-to-end', async () => {
+    (notificationRepository.create as jest.Mock).mockImplementation(
+      (input: Partial<Notification>) => input as Notification,
+    );
+    (notificationRepository.save as jest.Mock).mockImplementation(
+      (notification: Notification) => Promise.resolve(notification),
+    );
+
+    const highNotif = await service.create({
+      userId: 'user-1',
+      type: NotificationType.CUSTOMER_FEEDBACK_PROCESSED,
+      title: 'Customer Feedback Classified',
+      message: 'Feedback has been classified as NEGATIVE (Product Quality).',
+      severity: 'HIGH',
+      customerId: 'customer-1',
+    });
+
+    expect(notificationRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        type: NotificationType.CUSTOMER_FEEDBACK_PROCESSED,
+        content: 'Feedback has been classified as NEGATIVE (Product Quality).',
+        severity: 'HIGH',
+        customerId: 'customer-1',
+      }),
+    );
+    expect(highNotif.severity).toBe('HIGH');
+
+    const infoNotif = await service.create({
+      userId: 'user-1',
+      type: NotificationType.CUSTOMER_FEEDBACK_PROCESSED,
+      title: 'Customer Feedback Classified',
+      message: 'Feedback has been classified as POSITIVE (Customer Support).',
+      severity: 'INFO',
+      customerId: 'customer-1',
+    });
+
+    expect(infoNotif.severity).toBe('INFO');
   });
 });

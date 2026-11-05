@@ -85,9 +85,18 @@ export class CreateFeedbackAndCustomerTasksTables1728600000000 implements Migrat
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "idx_customer_tasks_assessment_id" ON "customer_tasks" ("assessment_id");
     `);
+
+    await queryRunner.query(`
+      ALTER TABLE "notifications"
+      ADD COLUMN IF NOT EXISTS "severity" character varying(30) DEFAULT 'INFO';
+    `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      ALTER TABLE "notifications"
+      DROP COLUMN IF EXISTS "severity";
+    `);
     await queryRunner.query(`
       DROP TABLE IF EXISTS "customer_tasks";
     `);
