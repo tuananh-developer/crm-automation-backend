@@ -29,7 +29,6 @@ import type {
   AppliedFindingResult,
   DataCleaningFinding,
   AllowedCleaningField,
-  AppliedStatItem,
   ScanInputPayload,
   ScanOutputPayload,
 } from './interfaces/data-cleaning.interface.js';
@@ -584,10 +583,16 @@ export class DataCleaningService {
           if (!isAllowedCleaningField(finding.fieldName)) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: finding.currentValue, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Field is not whitelisted for automated updates' }); continue; }
           const normalize = (value: unknown) => {
             if (value == null) return '';
-            if (typeof value === 'object') {
-              return JSON.stringify(value) ?? '';
+            if (typeof value === 'string') return value.trim();
+            if (
+              typeof value === 'number' ||
+              typeof value === 'boolean' ||
+              typeof value === 'bigint' ||
+              typeof value === 'symbol'
+            ) {
+              return String(value);
             }
-            return String(value).trim();
+            return JSON.stringify(value) ?? '';
           };
           if (normalize(current) !== normalize(finding.currentValue)) { results.push({ findingId: finding.id, leadId, fieldName: finding.fieldName, oldValue: current, newValue: finding.proposedValue, status: 'SKIPPED', skipReason: 'Lead data has changed since scan was run' }); continue; }
           if (finding.fieldName === 'email') {
