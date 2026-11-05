@@ -20,7 +20,7 @@ export class OutboxPublisher {
       const sql = [
         'WITH candidates AS (SELECT id FROM outbox_events',
         "WHERE (status = 'PENDING' AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())) OR (status = 'PROCESSING' AND locked_until <= NOW())",
-        'ORDER BY created_at ASC FOR UPDATE SKIP LOCKED LIMIT $1)',
+        'ORDER BY created_at ASC LIMIT $1 FOR UPDATE SKIP LOCKED)',
         "UPDATE outbox_events AS event SET status = 'PROCESSING', attempts = event.attempts + 1, locked_until = NOW() + INTERVAL '2 minutes', lock_token = gen_random_uuid()",
         'FROM candidates WHERE event.id = candidates.id',
         'RETURNING event.id, event.event_type AS "eventType", event.exchange, event.routing_key AS "routingKey", event.payload, event.attempts, event.lock_token AS "lockToken"'

@@ -496,7 +496,7 @@ export class DataCleaningService {
       const newlyAppliedIds: string[] = [];
       const results: AppliedFindingResult[] = [];
       const grouped = new Map<string, DataCleaningFinding[]>();
-      for (const findingId of new Set(dto.acceptedFindingIds)) {
+      for (const findingId of dto.acceptedFindingIds) {
         const finding = findingMap.get(findingId);
         if (!finding) { results.push({ findingId, leadId: '', fieldName: '', oldValue: null, newValue: null, status: 'SKIPPED', skipReason: 'Finding ID not recognized in scan report' }); continue; }
         const group = grouped.get(finding.recordId) || []; group.push(finding); grouped.set(finding.recordId, group);

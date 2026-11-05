@@ -19,7 +19,8 @@ const useSsl =
       dbUrl.includes('render.com')),
   );
 
-const sslConfig = useSsl ? { rejectUnauthorized: false } : false;
+const sslCa = process.env.DB_SSL_CA?.split(String.raw`\n`).join('\n');
+const sslConfig = useSsl ? { rejectUnauthorized: true, ...(sslCa ? { ca: sslCa } : {}) } : false;
 
 export const AppDataSource = new DataSource(
   dbUrl

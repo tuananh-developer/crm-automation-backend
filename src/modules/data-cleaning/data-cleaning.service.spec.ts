@@ -121,7 +121,7 @@ describe('DataCleaningService', () => {
 
     mockEntityManager = {
       findOne: jest.fn(),
-      save: jest.fn().mockImplementation((val) => Promise.resolve(val)),
+      save: jest.fn().mockImplementation((_target, val) => Promise.resolve(val ?? _target)),
       create: jest.fn().mockImplementation((_, val) => val),
     };
 
@@ -177,7 +177,9 @@ describe('DataCleaningService', () => {
       expect(workflowRunRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({ triggeredByUserId: 'jwt-user' }),
       );
-      expect(rabbitmqService.publishDataCleaningRequested).toHaveBeenCalledWith(
+      expect(rabbitmqService.enqueueEvent).toHaveBeenCalledWith(
+        mockEntityManager,
+        CRM_EVENTS.DATA_CLEANING_REQUESTED,
         expect.objectContaining({ triggeredByUserId: 'jwt-user' }),
       );
     });
@@ -664,7 +666,7 @@ describe('DataCleaningService', () => {
 
     it('should prioritize authenticated user over workflowRun.triggeredByUserId for audit log', async () => {
       (workflowRunRepository.findOne as jest.Mock).mockResolvedValueOnce(
-        completedWorkflowRun,
+        { ...completedWorkflowRun, triggeredByUserId: 'jwt-user-id' },
       );
 
       (mockEntityManager.findOne as jest.Mock).mockResolvedValueOnce({
