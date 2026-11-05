@@ -16,9 +16,9 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
 
   const api = {
     get: (path: string) =>
-      api.get(path).set('Authorization', `Bearer ${accessToken}`),
+      request(app.getHttpServer()).get(path).set('Authorization', `Bearer ${accessToken}`),
     post: (path: string) =>
-      api.post(path).set('Authorization', `Bearer ${accessToken}`),
+      request(app.getHttpServer()).post(path).set('Authorization', `Bearer ${accessToken}`),
   };
 
   beforeAll(async () => {
