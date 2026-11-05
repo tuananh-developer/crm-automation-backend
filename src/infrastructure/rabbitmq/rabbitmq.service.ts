@@ -90,7 +90,7 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
         },
         (error: unknown) => {
           clearTimeout(timer);
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         },
       );
     });
