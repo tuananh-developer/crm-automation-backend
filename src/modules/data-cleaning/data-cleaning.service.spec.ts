@@ -719,6 +719,7 @@ describe('DataCleaningService', () => {
         })
         .mockResolvedValueOnce({
           ...mockLead,
+          ownerId: 'jwt-user-id',
         });
 
       await service.applyCleaning(
