@@ -24,6 +24,7 @@ import {
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole } from '../users/enums/user.enum.js';
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
@@ -79,6 +80,7 @@ export class NotificationsController {
    * correlated through the backend. Browsers never call this directly.
    */
   @Post('internal/create')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @UseGuards(N8nAuthGuard)
   @UsePipes(
