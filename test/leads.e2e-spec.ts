@@ -10,8 +10,16 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
   let dataSource: DataSource;
   let createdLeadId: string | null = null;
   let sourceId: string;
+  let accessToken: string;
   const uniqueSuffix = Date.now();
   const testEmail = `lead.e2e.${uniqueSuffix}@acme-corp.com`;
+
+  const api = {
+    get: (path: string) =>
+      api.get(path).set('Authorization', `Bearer ${accessToken}`),
+    post: (path: string) =>
+      api.post(path).set('Authorization', `Bearer ${accessToken}`),
+  };
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -31,24 +39,24 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
 
     dataSource = app.get(DataSource);
 
-    // Ensure a test lead source exists
-    const res = await request(app.getHttpServer())
-      .post('/api/v1/lead-sources')
+    const registration = await request(app.getHttpServer())
+      .post('/api/v1/auth/register')
       .send({
-        name: `E2E Test Source ${uniqueSuffix}`,
-        description: 'Lead source for e2e integration testing',
-        isActive: true,
+        name: 'Leads E2E Sales',
+        email: `leads.e2e.${uniqueSuffix}@example.test`,
+        password: 'E2eStrongPassword123!',
       });
+    expect(registration.status).toBe(201);
+    accessToken = registration.body.accessToken;
 
-    if (res.status === 201) {
-      sourceId = res.body.id;
-    } else {
-      // Fallback to query existing source
-      const existing = await dataSource.query(
-        'SELECT id FROM lead_sources WHERE "isActive" = true LIMIT 1;',
-      );
-      sourceId = existing[0].id;
-    }
+    // Lead-source creation is Admin-only; create an isolated fixture directly.
+    const sources = await dataSource.query(
+      `INSERT INTO lead_sources (name, description, is_active)
+       VALUES ($1, $2, true)
+       RETURNING id;`,
+      [`Leads E2E Source ${uniqueSuffix}`, 'Source created by the E2E database fixture'],
+    );
+    sourceId = sources[0].id;
   });
 
   afterAll(async () => {
@@ -64,7 +72,7 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
   });
 
   it('1. should reject invalid body with 400 Bad Request', async () => {
-    const res = await request(app.getHttpServer()).post('/api/v1/leads').send({
+    const res = await api.post('/api/v1/leads').send({
       firstName: 'John',
       // missing email and sourceId
     });
@@ -74,7 +82,7 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
   });
 
   it('2. should create a new Lead with 201 Created and status NEW', async () => {
-    const res = await request(app.getHttpServer()).post('/api/v1/leads').send({
+    const res = await api.post('/api/v1/leads').send({
       firstName: 'Alexander',
       lastName: 'Hamilton',
       email: testEmail,
@@ -93,7 +101,7 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
   });
 
   it('3. should reject duplicate email with 409 Conflict (anti-race condition / unique check)', async () => {
-    const res = await request(app.getHttpServer()).post('/api/v1/leads').send({
+    const res = await api.post('/api/v1/leads').send({
       firstName: 'Alexander Duplicate',
       lastName: 'Hamilton',
       email: testEmail, // duplicate email
@@ -105,7 +113,7 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
   });
 
   it('4. should retrieve the created lead via GET /api/v1/leads/:id', async () => {
-    const res = await request(app.getHttpServer())
+    const res = await api
       .get(`/api/v1/leads/${createdLeadId}`)
       .expect(200);
 
@@ -118,7 +126,7 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
 
     // Send repeated requests sequentially to reach the 10/min threshold
     for (let i = 0; i < 12; i++) {
-      const res = await request(app.getHttpServer())
+      const res = await api
         .post('/api/v1/leads')
         .send({
           firstName: 'Spam',
