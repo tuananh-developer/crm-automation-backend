@@ -27,11 +27,11 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
 
   const api = {
     get: (path: string) =>
-      api.get(path).set('Authorization', `Bearer ${accessToken}`),
+      request(app.getHttpServer()).get(path).set('Authorization', `Bearer ${accessToken}`),
     post: (path: string) =>
-      api.post(path).set('Authorization', `Bearer ${accessToken}`),
+      request(app.getHttpServer()).post(path).set('Authorization', `Bearer ${accessToken}`),
     patch: (path: string) =>
-      api.patch(path).set('Authorization', `Bearer ${accessToken}`),
+      request(app.getHttpServer()).patch(path).set('Authorization', `Bearer ${accessToken}`),
   };
 
   beforeAll(async () => {
