@@ -441,8 +441,6 @@ export class SequencesService {
     };
 
     let savedEnrollment: LeadFollowUpEnrollment;
-    let savedExecution: FollowUpExecution;
-    let scheduledDate: Date;
 
     if (this.dataSource) {
       // Persist the enrollment, first execution, interaction and dispatch event
@@ -467,11 +465,9 @@ export class SequencesService {
           },
         );
 
-        return result;
+        return result.savedEnrollment;
       });
-      savedEnrollment = txResult.savedEnrollment;
-      savedExecution = txResult.savedExecution;
-      scheduledDate = txResult.scheduledDate;
+      savedEnrollment = txResult;
     } else {
       // Compatibility for isolated consumers/tests constructed without DataSource.
       // Production Nest wiring always provides DataSource and uses the transactional outbox.
@@ -481,18 +477,16 @@ export class SequencesService {
         interactionRepo: this.interactionsRepository,
       });
       savedEnrollment = result.savedEnrollment;
-      savedExecution = result.savedExecution;
-      scheduledDate = result.scheduledDate;
 
       await this.rabbitmqService.publishEvent(
         CRM_EVENTS.FOLLOW_UP_TRIGGERED,
         {
-          enrollmentId: savedEnrollment.id,
-          executionId: savedExecution.id,
+          enrollmentId: result.savedEnrollment.id,
+          executionId: result.savedExecution.id,
           leadId: lead.id,
           sequenceId: sequence.id,
           stepId: firstStep.id,
-          scheduledAt: scheduledDate.toISOString(),
+          scheduledAt: result.scheduledDate.toISOString(),
         },
       );
     }
