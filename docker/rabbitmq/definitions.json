@@ -69,6 +69,13 @@
       "durable": true,
       "auto_delete": false,
       "arguments": {}
+    },
+    {
+      "name": "n8n.follow-up-execution.q",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
     }
   ],
   "bindings": [
@@ -102,6 +109,14 @@
       "destination": "n8n.data-cleaning.q",
       "destination_type": "queue",
       "routing_key": "data.cleaning.requested",
+      "arguments": {}
+    },
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "n8n.follow-up-execution.q",
+      "destination_type": "queue",
+      "routing_key": "lead.follow_up.triggered",
       "arguments": {}
     }
   ]
