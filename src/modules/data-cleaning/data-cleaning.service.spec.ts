@@ -39,7 +39,7 @@ describe('DataCleaningService', () => {
     industry: 'Software',
     status: LeadStatus.NEW,
     sourceId: 'source-1',
-    ownerId: null,
+    ownerId: 'user-uuid-1',
     convertedCustomerId: null,
     convertedBy: null,
     convertedAt: null,
