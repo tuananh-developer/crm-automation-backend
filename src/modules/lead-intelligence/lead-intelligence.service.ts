@@ -28,6 +28,7 @@ import {
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { ReviewStatus } from '../review/enums/review.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import { CRM_EVENTS } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
 import { UserRole } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
@@ -89,7 +90,6 @@ export class LeadIntelligenceService {
 
     // Update lead status to QUALIFYING
     lead.status = LeadStatus.QUALIFYING;
-    await this.leadsRepository.save(lead);
 
     // Create workflow run record
     const workflowRun = this.workflowRunsRepository.create({
@@ -111,17 +111,22 @@ export class LeadIntelligenceService {
       },
     });
 
-    const savedWorkflowRun =
-      await this.workflowRunsRepository.save(workflowRun);
+    const savedWorkflowRun = this.dataSource
+      ? await this.dataSource.transaction(async (manager) => {
+          await manager.save(lead);
+          const persistedRun = await manager.save(WorkflowRun, workflowRun);
+          await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED, { leadId: lead.id, workflowRunId: persistedRun.id });
+          return persistedRun;
+        })
+      : await this.workflowRunsRepository.save(workflowRun);
     this.logger.log(
       `Created WorkflowRun ${savedWorkflowRun.id} for lead ${lead.id}`,
     );
 
     // Publish event to RabbitMQ for n8n consumption
-    await this.rabbitmqService.publishLeadQualificationRequested({
-      leadId: lead.id,
-      workflowRunId: savedWorkflowRun.id,
-    });
+    if (!this.dataSource) {
+      await this.rabbitmqService.publishLeadQualificationRequested({ leadId: lead.id, workflowRunId: savedWorkflowRun.id });
+    }
 
     return {
       message: 'Lead qualification workflow triggered successfully',
@@ -679,38 +684,25 @@ export class LeadIntelligenceService {
         website,
       },
     });
-    const savedWorkflowRun =
-      await this.workflowRunsRepository.save(workflowRun);
-    this.logger.log(
-      `Created WorkflowRun ${savedWorkflowRun.id} for lead enrichment of lead ${lead.id}`,
-    );
-
-    // 2. Create pending LeadEnrichment record
-    const enrichment = this.enrichmentsRepository.create({
-      leadId: lead.id,
-      workflowRunId: savedWorkflowRun.id,
-      provider,
-      status: EnrichmentStatus.PENDING,
-      enrichedAt: new Date(),
-    });
-    const savedEnrichment = await this.enrichmentsRepository.save(enrichment);
-    this.logger.log(
-      `Created LeadEnrichment ${savedEnrichment.id} (status=PENDING) for lead ${lead.id}`,
-    );
-
-    // 3. Publish event
-    await this.rabbitmqService.publishLeadEnrichmentRequested({
-      leadId: lead.id,
-      workflowRunId: savedWorkflowRun.id,
-      provider,
-      email: lead.email ?? undefined,
-      companyName: lead.companyName ?? undefined,
-      companyWebsite: lead.companyWebsite ?? undefined,
-      domain,
-      website,
-    });
-
-    return {
+    let savedWorkflowRun: WorkflowRun;
+    let savedEnrichment: LeadEnrichment;
+    if (this.dataSource) {
+      const persisted = await this.dataSource.transaction(async (manager) => {
+        const run = await manager.save(WorkflowRun, workflowRun);
+        const enrichment = this.enrichmentsRepository.create({ leadId: lead.id, workflowRunId: run.id, provider, status: EnrichmentStatus.PENDING, enrichedAt: new Date() });
+        const saved = await manager.save(LeadEnrichment, enrichment);
+        await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED, { leadId: lead.id, workflowRunId: run.id, provider, email: lead.email ?? undefined, companyName: lead.companyName ?? undefined, companyWebsite: lead.companyWebsite ?? undefined, domain, website });
+        return { run, enrichment: saved };
+      });
+      savedWorkflowRun = persisted.run;
+      savedEnrichment = persisted.enrichment;
+    } else {
+      savedWorkflowRun = await this.workflowRunsRepository.save(workflowRun);
+      const enrichment = this.enrichmentsRepository.create({ leadId: lead.id, workflowRunId: savedWorkflowRun.id, provider, status: EnrichmentStatus.PENDING, enrichedAt: new Date() });
+      savedEnrichment = await this.enrichmentsRepository.save(enrichment);
+      await this.rabbitmqService.publishLeadEnrichmentRequested({ leadId: lead.id, workflowRunId: savedWorkflowRun.id, provider, email: lead.email ?? undefined, companyName: lead.companyName ?? undefined, companyWebsite: lead.companyWebsite ?? undefined, domain, website });
+    }
+    this.logger.log('Created WorkflowRun ' + savedWorkflowRun.id + ' and LeadEnrichment ' + savedEnrichment.id + ' for lead ' + lead.id);    return {
       message: 'Lead enrichment workflow triggered successfully',
       workflowRunId: savedWorkflowRun.id,
       enrichmentId: savedEnrichment.id,
@@ -1239,30 +1231,20 @@ export class LeadIntelligenceService {
         interactionCount: context.interactions.length,
       },
     });
-    const savedWorkflowRun =
-      await this.workflowRunsRepository.save(workflowRun);
-    this.logger.log(
-      `Created WorkflowRun ${savedWorkflowRun.id} for lead scoring of lead ${lead.id}`,
-    );
-
-    // 2. Publish event to RabbitMQ
-    await this.rabbitmqService.publishLeadScoringRequested({
-      leadId: lead.id,
-      workflowRunId: savedWorkflowRun.id,
-      leadData,
-      qualificationData,
-      enrichmentData,
-      interactions,
-      scoringContext: {
-        lead: leadData,
-        qualification: qualificationData,
-        enrichment: enrichmentData,
-        interactions,
-        scoringFeatures: context.scoringFeatures,
-      },
-    });
-
-    return {
+    const savedWorkflowRun = this.dataSource
+      ? await this.dataSource.transaction(async (manager) => {
+          const persistedRun = await manager.save(WorkflowRun, workflowRun);
+          await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.LEAD_SCORING_REQUESTED, {
+            leadId: lead.id, workflowRunId: persistedRun.id, leadData, qualificationData, enrichmentData, interactions,
+            scoringContext: { lead: leadData, qualification: qualificationData, enrichment: enrichmentData, interactions, scoringFeatures: context.scoringFeatures },
+          });
+          return persistedRun;
+        })
+      : await this.workflowRunsRepository.save(workflowRun);
+    if (!this.dataSource) {
+      await this.rabbitmqService.publishLeadScoringRequested({ leadId: lead.id, workflowRunId: savedWorkflowRun.id, leadData, qualificationData, enrichmentData, interactions, scoringContext: { lead: leadData, qualification: qualificationData, enrichment: enrichmentData, interactions, scoringFeatures: context.scoringFeatures } });
+    }
+    this.logger.log('Created WorkflowRun ' + savedWorkflowRun.id + ' for lead scoring of lead ' + lead.id);    return {
       message: 'Lead scoring workflow triggered successfully',
       workflowRunId: savedWorkflowRun.id,
       leadId: lead.id,
