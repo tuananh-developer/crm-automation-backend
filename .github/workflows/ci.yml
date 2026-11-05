@@ -11,6 +11,48 @@ jobs:
   ci:
     name: Lint · Build · Test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: crm_backend
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d crm_backend"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      rabbitmq:
+        image: rabbitmq:3-management
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: crm_backend
+      LOCAL_DB_HOST: localhost
+      LOCAL_DB_PORT: 5432
+      LOCAL_DB_USER: postgres
+      LOCAL_DB_PASSWORD: postgres
+      LOCAL_DB_NAME: crm_backend
+      USE_LOCAL_DB: "true"
+      LOCAL_RABBITMQ_HOST: localhost
+      LOCAL_RABBITMQ_PORT: 5672
+      LOCAL_RABBITMQ_USER: guest
+      LOCAL_RABBITMQ_PASSWORD: guest
+      JWT_SECRET: ci-only-test-secret
+      N8N_API_KEY: ci-only-test-api-key
 
     steps:
       - name: Checkout code
@@ -47,5 +89,11 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Test
+      - name: Unit tests
         run: pnpm test
+
+      - name: Run database migrations
+        run: pnpm migration:run
+
+      - name: End-to-end tests
+        run: pnpm test:e2e -- --runInBand

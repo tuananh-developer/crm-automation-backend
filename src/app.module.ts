@@ -54,7 +54,8 @@ import { T12WorkflowsModule } from './modules/t12-workflows/t12-workflows.module
               dbUrl.includes('render.com'),
             );
 
-          const sslConfig = useSsl ? { rejectUnauthorized: false } : false;
+          const sslCa = config.get<string>('DB_SSL_CA')?.split(String.raw`\n`).join('\n');
+          const sslConfig = useSsl ? { rejectUnauthorized: true, ...(sslCa ? { ca: sslCa } : {}) } : false;
 
           return {
             type: 'postgres',

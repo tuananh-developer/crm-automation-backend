@@ -55,6 +55,12 @@ export class OutboxEvent {
   @Column({ name: 'lock_token', type: 'uuid', nullable: true })
   lockToken!: string | null;
 
+  @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
+  lockedUntil!: Date | null;
+
+  @Column({ name: 'lock_token', type: 'uuid', nullable: true })
+  lockToken!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 }
