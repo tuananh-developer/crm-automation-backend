@@ -9,6 +9,7 @@ import {
   ENRICHMENT_QUEUE,
   FOLLOW_UP_QUEUE,
   LEGACY_CRM_QUEUE,
+  LEAD_CREATED_QUEUE,
   QUALIFICATION_QUEUE,
   SCORING_QUEUE,
 } from './rabbitmq.constants.js';
@@ -115,6 +116,7 @@ describe('RabbitMQService', () => {
       durable: true,
     });
     expect(channel.bindQueue.mock.calls).toEqual([
+      [LEAD_CREATED_QUEUE, CRM_EXCHANGE, CRM_EVENTS.LEAD_CREATED],
       [
         QUALIFICATION_QUEUE,
         CRM_EXCHANGE,
