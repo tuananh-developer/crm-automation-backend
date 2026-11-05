@@ -14,3 +14,4 @@ export const QUALIFICATION_QUEUE = 'n8n.lead-qualification.q';
 export const ENRICHMENT_QUEUE = 'n8n.lead-enrichment.q';
 export const SCORING_QUEUE = 'n8n.lead-scoring.q';
 export const DATA_CLEANING_QUEUE = 'n8n.data-cleaning.q';
+export const FOLLOW_UP_QUEUE = 'n8n.follow-up-execution.q';
