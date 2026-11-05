@@ -150,10 +150,8 @@ describe('DataCleaningController', () => {
       expect(res).toBe(expectedResponse);
     });
 
-    it('should pass undefined userId when user is not present', async () => {
-      const dto: ApplyCleaningDto = {
-        acceptedFindingIds: ['f-1'],
-      };
+    it('always forwards the authenticated actor to remediation', async () => {
+      const dto: ApplyCleaningDto = { acceptedFindingIds: ['f-1'] };
       const expectedResponse = {
         workflowRunId: 'wf-123',
         appliedCount: 1,
@@ -161,18 +159,13 @@ describe('DataCleaningController', () => {
         totalRequested: 1,
         results: [],
       };
-      (service.applyCleaning as jest.Mock).mockResolvedValueOnce(
-        expectedResponse,
-      );
+      (service.applyCleaning as jest.Mock).mockResolvedValueOnce(expectedResponse);
 
-      const res = await controller.applyCleaning('wf-123', dto, undefined);
-      expect(service.applyCleaning).toHaveBeenCalledWith(
-        'wf-123',
-        dto,
-        undefined,
-      );
-      expect(res).toBe(expectedResponse);
-    });
+      const result = await controller.applyCleaning('wf-123', dto, mockUser);
+
+      expect(service.applyCleaning).toHaveBeenCalledWith('wf-123', dto, mockUser);
+      expect(result).toBe(expectedResponse);
+    });;
   });
 
   describe('Authorization and Guard Metadata', () => {
