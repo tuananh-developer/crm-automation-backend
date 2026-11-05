@@ -62,7 +62,7 @@ describe('OutboxPublisher', () => {
   });
 
   it('schedules an exponential retry when publication fails', async () => {
-    rabbitmq.publishOutboxEvent!.mockRejectedValueOnce(
+    (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
       new Error('broker unavailable'),
     );
 
@@ -112,7 +112,7 @@ describe('OutboxPublisher', () => {
 
   it('does not start a second poll while the previous batch is still processing', async () => {
     let releasePublish!: () => void;
-    rabbitmq.publishOutboxEvent!.mockImplementation(
+    (rabbitmq.publishOutboxEvent as jest.Mock).mockImplementation(
       () => new Promise<void>((resolve) => { releasePublish = resolve; }),
     );
 
