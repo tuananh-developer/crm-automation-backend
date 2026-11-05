@@ -277,7 +277,7 @@ describe('LeadsService', () => {
         ),
       ).rejects.toThrow(ConflictException);
 
-      expect(rabbitmqService.publishLeadCreated).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
     it('should throw NotFoundException if sourceId does not exist', async () => {
