@@ -15,10 +15,42 @@ import {
 describe('RabbitMQService', () => {
   let service: RabbitMQService;
   let channel: jest.Mocked<Pick<ChannelWrapper, 'publish'>>;
+  let configService: { get: jest.Mock };
 
   beforeEach(() => {
-    service = new RabbitMQService({} as ConfigService);
+    configService = { get: jest.fn() };
+    service = new RabbitMQService(configService as unknown as ConfigService);
     channel = { publish: jest.fn().mockResolvedValue(undefined) };
+  });
+
+  it('fails fast in production when RABBITMQ_URL is missing', () => {
+    configService.get.mockImplementation((key: string) =>
+      key === 'NODE_ENV' ? 'production' : undefined,
+    );
+
+    expect(() => service.getRabbitmqUrl()).toThrow(
+      'FATAL: RABBITMQ_URL is required in production',
+    );
+  });
+
+  it('fails fast when CloudAMQP is explicitly enabled without a URL', () => {
+    configService.get.mockImplementation((key: string) =>
+      key === 'USE_CLOUD_AMQP' ? 'true' : undefined,
+    );
+
+    expect(() => service.getRabbitmqUrl()).toThrow(
+      'RABBITMQ_URL is required when USE_CLOUD_AMQP=true',
+    );
+  });
+
+  it('uses local broker defaults only outside production and cloud mode', () => {
+    configService.get.mockImplementation((key: string) =>
+      key === 'LOCAL_RABBITMQ_HOST' ? 'rabbitmq.local' : undefined,
+    );
+
+    expect(service.getRabbitmqUrl()).toBe(
+      'amqp://guest:guest@rabbitmq.local:5672',
+    );
   });
 
   it('returns the envelope only after the broker confirms publication', async () => {
