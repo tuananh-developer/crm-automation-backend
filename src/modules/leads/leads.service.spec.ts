@@ -245,7 +245,7 @@ describe('LeadsService', () => {
       ).rejects.toThrow(ConflictException);
 
       expect(leadsRepository.save).not.toHaveBeenCalled();
-      expect(rabbitmqService.publishLeadCreated).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
     it('should throw ConflictException if duplicate email race condition triggers 23505 QueryFailedError on save', async () => {
