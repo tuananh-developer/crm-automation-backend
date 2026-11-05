@@ -108,6 +108,7 @@ describe('DataCleaningService', () => {
           Promise.resolve({ id: 'wf-uuid-1', ...val }),
         ),
       findOne: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
     auditLogRepository = {
@@ -248,15 +249,45 @@ describe('DataCleaningService', () => {
 
       const result = await service.handleCallback(callbackDto);
 
-      expect(workflowRunRepository.save).toHaveBeenCalledWith(
+      expect(workflowRunRepository.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'wf-uuid-1',
+          workflowName: 'UC10_DATA_CLEANING',
+          status: expect.any(Object),
+        }),
         expect.objectContaining({
           status: WorkflowStatus.SUCCESS,
           outputPayload: expect.objectContaining({
             findings: [mockFinding],
           }),
+          finishedAt: expect.any(Date),
         }),
       );
       expect(result.success).toBe(true);
+      expect(result.status).toBe(WorkflowStatus.SUCCESS);
+    });
+
+
+    it('treats a concurrent terminal callback as idempotent after losing the conditional update race', async () => {
+      (workflowRunRepository.findOne as jest.Mock)
+        .mockResolvedValueOnce({ ...mockWorkflowRun })
+        .mockResolvedValueOnce({
+          ...mockWorkflowRun,
+          status: WorkflowStatus.SUCCESS,
+        });
+      (workflowRunRepository.update as jest.Mock).mockResolvedValueOnce({
+        affected: 0,
+      });
+
+      const result = await service.handleCallback({
+        workflowRunId: 'wf-uuid-1',
+        status: 'PARTIAL',
+        summary: {} as any,
+        findings: [],
+      });
+
+      expect(workflowRunRepository.update).toHaveBeenCalledTimes(1);
+      expect(workflowRunRepository.findOne).toHaveBeenCalledTimes(2);
       expect(result.status).toBe(WorkflowStatus.SUCCESS);
     });
 
@@ -287,7 +318,7 @@ describe('DataCleaningService', () => {
           findings: [],
         }),
       ).rejects.toThrow(ConflictException);
-      expect(workflowRunRepository.save).not.toHaveBeenCalled();
+      expect(workflowRunRepository.update).not.toHaveBeenCalled();
     });
 
     it('should treat duplicate terminal callbacks as idempotent', async () => {
