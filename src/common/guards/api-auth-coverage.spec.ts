@@ -12,6 +12,9 @@ import { ReviewController } from '../../modules/review/review.controller.js';
 import { LeadSourcesController } from '../../modules/leads/lead-sources.controller.js';
 import { LeadsController } from '../../modules/leads/leads.controller.js';
 import { UsersController } from '../../modules/users/users.controller.js';
+import { NextBestActionsController } from '../../modules/t12-workflows/next-best-actions.controller.js';
+import { SalesMeetingsController } from '../../modules/t12-workflows/sales-meetings.controller.js';
+import { QuotesController } from '../../modules/t12-workflows/quotes.controller.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 import { RolesGuard } from './roles.guard.js';
 import { ROLES_KEY } from '../decorators/roles.decorator.js';
@@ -27,6 +30,9 @@ const jwtProtectedControllers = [
   ReviewController,
   NotificationsController,
   UsersController,
+  NextBestActionsController,
+  SalesMeetingsController,
+  QuotesController,
 ] as const;
 
 describe('API authentication guard coverage', () => {
@@ -35,6 +41,22 @@ describe('API authentication guard coverage', () => {
     (controller) => {
       const guards = Reflect.getMetadata('__guards__', controller);
 
+      expect(guards).toContain(JwtAuthGuard);
+    },
+  );
+
+  it.each([
+    [DataCleaningController, 'createScan'],
+    [DataCleaningController, 'getScan'],
+    [DataCleaningController, 'applyCleaning'],
+  ] as const)(
+    '%p.%s requires JWT authentication for user-facing Data Cleaning routes',
+    (controller, method) => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        Object.getOwnPropertyDescriptor(controller.prototype, method)
+          ?.value as object,
+      );
       expect(guards).toContain(JwtAuthGuard);
     },
   );
