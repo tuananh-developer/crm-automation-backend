@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -17,6 +18,7 @@ import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { ReviewTask } from '../review/entities/review-task.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
+import { UserRole } from '../users/enums/user.enum.js';
 import {
   EnrichmentStatus,
   QualificationStatus,
@@ -44,6 +46,50 @@ import {
 export const CONFIDENCE_THRESHOLD = 0.8;
 export const DEFAULT_ENRICHMENT_PROVIDER = 'mock';
 
+/**
+ * Evaluates whether a job title represents executive / buying decision authority.
+ * Explicitly excludes individual contributor / team-lead titles (e.g. "Team Lead", "Lead Developer").
+ */
+export function isExecutiveDecisionMakerTitle(rawTitle: unknown): boolean {
+  if (typeof rawTitle !== 'string') return false;
+  const normalized = rawTitle.trim().toLowerCase();
+  if (!normalized) return false;
+
+  const nonExecutiveLeadPattern =
+    /\b(team lead|tech lead|technical lead|lead developer|lead engineer|qa lead|test lead|support lead|design lead|project lead|shift lead|squad lead|module lead|chapter lead)\b/i;
+  if (nonExecutiveLeadPattern.test(normalized)) {
+    return false;
+  }
+
+  if (/\b(ceo|cto|cfo|coo|cmo|cio|ciso|cro|cpo)\b/i.test(normalized)) {
+    return true;
+  }
+
+  const executivePatterns = [
+    /\bchief\b/i,
+    /\bvice president\b/i,
+    /\bvp\b/i,
+    /\bsvp\b/i,
+    /\bevp\b/i,
+    /\bpresident\b/i,
+    /\bdirector\b/i,
+    /\bfounder\b/i,
+    /\bco-founder\b/i,
+    /\bcofounder\b/i,
+    /\bowner\b/i,
+    /\bmanaging partner\b/i,
+    /\bgeneral manager\b/i,
+    /\bhead of\b/i,
+    /\bcountry manager\b/i,
+    /\bgiám đốc\b/i,
+    /\bchủ tịch\b/i,
+    /\btrưởng ban\b/i,
+    /\btrưởng phòng\b/i,
+  ];
+
+  return executivePatterns.some((pattern) => pattern.test(normalized));
+}
+
 @Injectable()
 export class LeadIntelligenceService {
   private readonly logger = new Logger(LeadIntelligenceService.name);
@@ -69,6 +115,24 @@ export class LeadIntelligenceService {
     @Optional()
     private readonly dataSource?: DataSource,
   ) {}
+
+  private async assertLeadAccess(
+    leadId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<Lead> {
+    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
+    if (!lead) {
+      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
+    }
+
+    if (actor && actor.role !== UserRole.ADMIN && lead.ownerId !== actor.id) {
+      throw new ForbiddenException(
+        'You do not have permission to access intelligence for this lead',
+      );
+    }
+
+    return lead;
+  }
 
   async triggerQualification(
     leadId: string,
@@ -651,17 +715,17 @@ export class LeadIntelligenceService {
    *  4. Up to 20 recent Interactions
    *  5. Pre-extracted scoring features summary
    */
-  async getScoringContext(leadId: string): Promise<{
+  async getScoringContext(
+    leadId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<{
     lead: Lead;
     qualification: LeadQualification | null;
     enrichment: LeadEnrichment | null;
     interactions: Interaction[];
     scoringFeatures: Record<string, any>;
   }> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
+    const lead = await this.assertLeadAccess(leadId, actor);
 
     const [qualification, enrichment, interactions] = await Promise.all([
       this.getLatestQualification(leadId),
@@ -681,12 +745,7 @@ export class LeadIntelligenceService {
     const industry = enrichment?.companyIndustry || lead.industry || null;
     const jobTitle = enrichment?.contactJobTitle || lead.jobTitle || '';
 
-    const isDecisionMaker = Boolean(
-      jobTitle &&
-      /c[etom]o|founder|co-founder|owner|president|vp|vice president|director|head|manager|lead/i.test(
-        jobTitle,
-      ),
-    );
+    const isDecisionMaker = isExecutiveDecisionMakerTitle(jobTitle);
 
     const now = Date.now();
     const recentInteractions = interactions.filter((i) => {
@@ -810,35 +869,12 @@ export class LeadIntelligenceService {
   /**
    * Evaluates the canonical lead scoring policy (UC04).
    * Backend owns the authoritative 0-100 score, label thresholds, and policy version 1.0.
+   * Feature points are ALWAYS derived from raw context (lead, qual, enrich, interactions);
+   * caller-supplied point overrides in scoringFeatures/features are never trusted.
    */
   async evaluateScoringPolicy(
     dto: EvaluateScoringPolicyDto,
   ): Promise<EvaluateScoringPolicyResponseDto> {
-    const feat = dto.scoringFeatures || dto.features || {};
-
-    const baseScore =
-      typeof feat['baseScore'] === 'number' ? feat['baseScore'] : 20;
-    let profileFitPoints =
-      typeof feat['profileFitPoints'] === 'number'
-        ? feat['profileFitPoints']
-        : undefined;
-    let decisionMakerPoints =
-      typeof feat['decisionMakerPoints'] === 'number'
-        ? feat['decisionMakerPoints']
-        : undefined;
-    let qualificationPoints =
-      typeof feat['qualificationPoints'] === 'number'
-        ? feat['qualificationPoints']
-        : undefined;
-    let engagementPoints =
-      typeof feat['engagementPoints'] === 'number'
-        ? feat['engagementPoints']
-        : undefined;
-    let enrichmentBonus =
-      typeof feat['enrichmentBonus'] === 'number'
-        ? feat['enrichmentBonus']
-        : undefined;
-
     const enrichObj =
       typeof dto.enrich === 'object' && dto.enrich !== null
         ? dto.enrich
@@ -848,80 +884,71 @@ export class LeadIntelligenceService {
     const qualObj =
       typeof dto.qual === 'object' && dto.qual !== null ? dto.qual : undefined;
 
-    // Deterministic calculation from raw context if feature points not pre-calculated
-    if (typeof profileFitPoints !== 'number') {
-      const companySize =
-        enrichObj?.['companySize'] ?? leadObj?.['companySize'];
-      if (typeof companySize === 'number') {
-        if (companySize >= 100) profileFitPoints = 20;
-        else if (companySize >= 20) profileFitPoints = 15;
-        else if (companySize >= 5) profileFitPoints = 10;
-        else profileFitPoints = 5;
-      } else if (leadObj?.['companyName'] || enrichObj?.['companyName']) {
-        profileFitPoints = 10;
-      } else {
-        profileFitPoints = 0;
-      }
+    const baseScore = 20;
+
+    // 1. Profile Fit Points (0..20)
+    let profileFitPoints = 0;
+    const rawCompanySize =
+      enrichObj?.['companySize'] ?? leadObj?.['companySize'];
+    const companySize =
+      typeof rawCompanySize === 'number' &&
+      Number.isFinite(rawCompanySize) &&
+      rawCompanySize >= 0
+        ? rawCompanySize
+        : undefined;
+    const hasCompanyName =
+      (typeof enrichObj?.['companyName'] === 'string' &&
+        enrichObj['companyName'].trim().length > 0) ||
+      (typeof leadObj?.['companyName'] === 'string' &&
+        leadObj['companyName'].trim().length > 0);
+
+    if (typeof companySize === 'number') {
+      if (companySize >= 100) profileFitPoints = 20;
+      else if (companySize >= 20) profileFitPoints = 15;
+      else if (companySize >= 5) profileFitPoints = 10;
+      else profileFitPoints = 5;
+    } else if (hasCompanyName) {
+      profileFitPoints = 10;
     }
 
-    if (typeof decisionMakerPoints !== 'number') {
-      const rawJobTitle =
-        enrichObj?.['contactJobTitle'] ?? leadObj?.['jobTitle'];
-      const jobTitle =
-        typeof rawJobTitle === 'string' ? rawJobTitle.toLowerCase() : '';
-      const decisionKeywords = [
-        'ceo',
-        'cto',
-        'cfo',
-        'coo',
-        'cmo',
-        'cio',
-        'chief',
-        'officer',
-        'president',
-        'vp',
-        'vice president',
-        'director',
-        'founder',
-        'owner',
-        'head of',
-        'lead',
-      ];
-      if (decisionKeywords.some((kw) => jobTitle.includes(kw))) {
-        decisionMakerPoints = 20;
-      } else if (jobTitle.length > 0) {
-        decisionMakerPoints = 10;
-      } else {
-        decisionMakerPoints = 0;
-      }
+    // 2. Decision Maker Points (0..20)
+    let decisionMakerPoints = 0;
+    const rawJobTitle = enrichObj?.['contactJobTitle'] ?? leadObj?.['jobTitle'];
+    const normalizedJobTitle =
+      typeof rawJobTitle === 'string' ? rawJobTitle.trim() : '';
+    if (isExecutiveDecisionMakerTitle(normalizedJobTitle)) {
+      decisionMakerPoints = 20;
+    } else if (normalizedJobTitle.length > 0) {
+      decisionMakerPoints = 10;
     }
 
-    if (typeof qualificationPoints !== 'number') {
-      if (qualObj && qualObj['status'] === 'QUALIFIED') {
-        const conf =
-          typeof qualObj['confidence'] === 'number'
-            ? qualObj['confidence']
-            : 0.85;
-        qualificationPoints = Math.round(conf * 25);
-      } else if (qualObj && qualObj['status'] === 'DISQUALIFIED') {
-        qualificationPoints = -20;
-      } else if (qualObj && qualObj['status'] === 'NEEDS_REVIEW') {
-        qualificationPoints = 10;
-      } else {
-        qualificationPoints = 0;
-      }
+    // 3. Qualification Points (-20..25)
+    let qualificationPoints = 0;
+    if (qualObj && qualObj['status'] === 'QUALIFIED') {
+      const rawConf =
+        typeof qualObj['confidence'] === 'number' &&
+        Number.isFinite(qualObj['confidence'])
+          ? qualObj['confidence']
+          : 0.85;
+      const clampedConf = Math.max(0, Math.min(1, rawConf));
+      qualificationPoints = Math.round(clampedConf * 25);
+    } else if (qualObj && qualObj['status'] === 'DISQUALIFIED') {
+      qualificationPoints = -20;
+    } else if (qualObj && qualObj['status'] === 'NEEDS_REVIEW') {
+      qualificationPoints = 10;
     }
 
-    if (typeof engagementPoints !== 'number') {
-      const count = Array.isArray(dto.interactions)
-        ? dto.interactions.length
-        : 0;
-      engagementPoints = Math.min(25, count * 8);
-    }
+    // 4. Engagement Points (0..25)
+    const validInteractions = Array.isArray(dto.interactions)
+      ? dto.interactions.filter(
+          (item) => typeof item === 'object' && item !== null,
+        )
+      : [];
+    const engagementPoints = Math.min(25, validInteractions.length * 8);
 
-    if (typeof enrichmentBonus !== 'number') {
-      enrichmentBonus = enrichObj && enrichObj['status'] === 'SUCCESS' ? 10 : 0;
-    }
+    // 5. Enrichment Bonus (0..10)
+    const enrichmentBonus =
+      enrichObj && enrichObj['status'] === 'SUCCESS' ? 10 : 0;
 
     const calculatedTotal =
       baseScore +
@@ -956,16 +983,27 @@ export class LeadIntelligenceService {
       enrichmentBonus,
     };
 
+    const scoringFeatures: Record<string, unknown> = {
+      ...breakdown,
+      hasCompanyName,
+      companySize: companySize ?? null,
+      jobTitle: normalizedJobTitle || null,
+      isDecisionMaker: decisionMakerPoints === 20,
+      qualificationStatus:
+        typeof qualObj?.['status'] === 'string' ? qualObj['status'] : null,
+      enrichmentStatus:
+        typeof enrichObj?.['status'] === 'string' ? enrichObj['status'] : null,
+      interactionCount: validInteractions.length,
+      ...(dto.contextAudit ? { contextAudit: dto.contextAudit } : {}),
+    };
+
     return Promise.resolve({
       score: canonicalScore,
       label,
       policyVersion,
       reason,
       breakdown,
-      scoringFeatures: {
-        ...feat,
-        ...breakdown,
-      },
+      scoringFeatures,
       modelInfo: {
         provider: 'crm-scoring-policy',
         model: 'deterministic-scoring-v1',
@@ -982,15 +1020,12 @@ export class LeadIntelligenceService {
    */
   async triggerScoring(
     leadId: string,
-    dto?: TriggerScoringDto,
+    _dto?: TriggerScoringDto,
     actor?: AuthenticatedUser,
   ): Promise<TriggerScoringResponseDto> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
+    const lead = await this.assertLeadAccess(leadId, actor);
 
-    const context = await this.getScoringContext(leadId);
+    const context = await this.getScoringContext(leadId, actor);
 
     const leadData = {
       id: lead.id,
@@ -1042,11 +1077,11 @@ export class LeadIntelligenceService {
       occurredAt: i.occurredAt,
     }));
 
-    // 1. Create WorkflowRun
+    // 1. Create WorkflowRun (never trust caller-supplied dto.userId for audit attribution)
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 'lead-scoring',
       leadId: lead.id,
-      triggeredByUserId: actor?.id ?? dto?.userId ?? null,
+      triggeredByUserId: actor?.id ?? null,
       status: WorkflowStatus.PENDING,
       startedAt: new Date(),
       inputPayload: {
@@ -1200,9 +1235,14 @@ export class LeadIntelligenceService {
           : null);
       const modelVersion =
         dto.modelVersion ||
+        (modelInfoObj && typeof modelInfoObj.modelVersion === 'string'
+          ? modelInfoObj.modelVersion
+          : null) ||
         (modelInfoObj && typeof modelInfoObj.version === 'string'
           ? modelInfoObj.version
-          : null);
+          : null) ||
+        dto.policyVersion ||
+        null;
 
       const snapshotObj =
         typeof dto.inputOutputSnapshot === 'object' &&
@@ -1279,7 +1319,13 @@ export class LeadIntelligenceService {
     });
   }
 
-  async getScoresByLead(leadId: string): Promise<LeadScore[]> {
+  async getScoresByLead(
+    leadId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<LeadScore[]> {
+    if (actor) {
+      await this.assertLeadAccess(leadId, actor);
+    }
     return this.scoresRepository.find({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -1287,7 +1333,13 @@ export class LeadIntelligenceService {
     });
   }
 
-  async getLatestScore(leadId: string): Promise<LeadScore | null> {
+  async getLatestScore(
+    leadId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<LeadScore | null> {
+    if (actor) {
+      await this.assertLeadAccess(leadId, actor);
+    }
     return this.scoresRepository.findOne({
       where: { leadId },
       order: { createdAt: 'DESC' },

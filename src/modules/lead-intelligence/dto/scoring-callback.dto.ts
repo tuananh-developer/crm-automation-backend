@@ -53,6 +53,10 @@ export class ScoringCallbackDto {
   @IsString()
   modelVersion?: string;
 
+  @IsOptional()
+  @IsString()
+  policyVersion?: string;
+
   /** Comprehensive model details (name, version, tokens, prompt latency, etc.) */
   @IsOptional()
   modelInfo?: Record<string, unknown> | string;

@@ -1,4 +1,10 @@
-import { IsNotEmpty, IsObject, IsOptional, IsUUID } from 'class-validator';
+import {
+  IsArray,
+  IsNotEmpty,
+  IsObject,
+  IsOptional,
+  IsUUID,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ScoreLabel } from '../enums/lead-intelligence.enum.js';
 
@@ -14,33 +20,44 @@ export class EvaluateScoringPolicyDto {
   workflowRunId!: string;
 
   @ApiPropertyOptional({
-    description: 'Pre-calculated or structured scoring features',
+    description:
+      'Optional context metadata (caller-supplied point overrides are ignored by backend policy)',
   })
   @IsOptional()
   @IsObject()
   scoringFeatures?: Record<string, unknown>;
 
-  @ApiPropertyOptional({ description: 'Features alias' })
+  @ApiPropertyOptional({ description: 'Features alias (non-authoritative)' })
   @IsOptional()
   @IsObject()
   features?: Record<string, unknown>;
 
-  @ApiPropertyOptional({ description: 'Lead profile context' })
+  @ApiPropertyOptional({ description: 'Raw lead profile context' })
   @IsOptional()
   @IsObject()
   lead?: Record<string, unknown>;
 
   @ApiPropertyOptional({ description: 'Latest qualification data' })
   @IsOptional()
-  qual?: Record<string, unknown>;
+  @IsObject()
+  qual?: Record<string, unknown> | null;
 
   @ApiPropertyOptional({ description: 'Latest enrichment data' })
   @IsOptional()
-  enrich?: Record<string, unknown>;
+  @IsObject()
+  enrich?: Record<string, unknown> | null;
 
-  @ApiPropertyOptional({ description: 'Recent interactions' })
+  @ApiPropertyOptional({ description: 'Recent interactions list' })
   @IsOptional()
+  @IsArray()
   interactions?: unknown[];
+
+  @ApiPropertyOptional({
+    description: 'Audit metadata for context read sources',
+  })
+  @IsOptional()
+  @IsObject()
+  contextAudit?: Record<string, unknown>;
 }
 
 export class EvaluateScoringPolicyResponseDto {

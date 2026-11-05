@@ -13,6 +13,7 @@ import {
   DEFAULT_NOTIFICATION_LIMIT,
   QueryNotificationsDto,
 } from './dto/index.js';
+import { NotificationSeverity } from './enums/notification.enum.js';
 import type { CreateNotificationInput } from './interfaces/index.js';
 
 export type { CreateNotificationInput };
@@ -100,6 +101,7 @@ export class NotificationsService {
         type: input.type,
         title: input.title,
         content: input.content ?? input.message ?? null,
+        severity: input.severity ?? NotificationSeverity.INFO,
         leadId: input.leadId ?? null,
         customerId: input.customerId ?? null,
         reviewTaskId: input.reviewTaskId ?? null,

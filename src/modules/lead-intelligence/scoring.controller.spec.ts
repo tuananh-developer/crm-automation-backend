@@ -5,6 +5,8 @@ import type { LeadScore } from './entities/lead-score.entity.js';
 import type { ScoringCallbackDto } from './dto/scoring-callback.dto.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
 
 describe('ScoringController', () => {
   let controller: ScoringController;
@@ -128,10 +130,13 @@ describe('ScoringController', () => {
     expect(result.score?.score).toBe(85);
   });
 
-  it('should return scoring context', async () => {
-    const result = await controller.getScoringContext('lead-123');
+  it('should return scoring context and forward actor', async () => {
+    const result = await controller.getScoringContext('lead-123', mockActor);
 
-    expect(service.getScoringContext).toHaveBeenCalledWith('lead-123');
+    expect(service.getScoringContext).toHaveBeenCalledWith(
+      'lead-123',
+      mockActor,
+    );
     expect(result.lead.id).toBe('lead-123');
   });
 
@@ -142,22 +147,22 @@ describe('ScoringController', () => {
     expect(result.lead.id).toBe('lead-123');
   });
 
-  it('should return score history', async () => {
-    const result = await controller.getScores('lead-123');
+  it('should return score history and forward actor', async () => {
+    const result = await controller.getScores('lead-123', mockActor);
 
-    expect(service.getScoresByLead).toHaveBeenCalledWith('lead-123');
+    expect(service.getScoresByLead).toHaveBeenCalledWith('lead-123', mockActor);
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('score-123');
   });
 
-  it('should return latest score', async () => {
-    const result = await controller.getLatestScore('lead-123');
+  it('should return latest score and forward actor', async () => {
+    const result = await controller.getLatestScore('lead-123', mockActor);
 
-    expect(service.getLatestScore).toHaveBeenCalledWith('lead-123');
+    expect(service.getLatestScore).toHaveBeenCalledWith('lead-123', mockActor);
     expect(result?.label).toBe(ScoreLabel.HOT);
   });
 
-  describe('Route Metadata', () => {
+  describe('Route Metadata & Guards', () => {
     /* eslint-disable @typescript-eslint/unbound-method */
     it('should configure canonical callback route paths on handleCallback', () => {
       const path = Reflect.getMetadata(
@@ -177,6 +182,33 @@ describe('ScoringController', () => {
         ScoringController.prototype.evaluatePolicy,
       );
       expect(path).toEqual(['evaluate-policy', 'scoring/evaluate-policy']);
+    });
+
+    it('should protect user-facing scoring routes with JwtAuthGuard', () => {
+      const userMethods = [
+        ScoringController.prototype.triggerScoring,
+        ScoringController.prototype.getScoringContext,
+        ScoringController.prototype.getScores,
+        ScoringController.prototype.getLatestScore,
+      ];
+
+      for (const method of userMethods) {
+        const guards = Reflect.getMetadata('__guards__', method);
+        expect(guards).toContain(JwtAuthGuard);
+      }
+    });
+
+    it('should protect internal n8n scoring routes with N8nAuthGuard', () => {
+      const internalMethods = [
+        ScoringController.prototype.getScoringContextInternal,
+        ScoringController.prototype.evaluatePolicy,
+        ScoringController.prototype.handleCallback,
+      ];
+
+      for (const method of internalMethods) {
+        const guards = Reflect.getMetadata('__guards__', method);
+        expect(guards).toContain(N8nAuthGuard);
+      }
     });
     /* eslint-enable @typescript-eslint/unbound-method */
   });
