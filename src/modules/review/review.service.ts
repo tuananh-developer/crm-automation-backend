@@ -10,6 +10,7 @@ import { ReviewTask } from './entities/review-task.entity.js';
 import { ReviewDecision, ReviewStatus } from './enums/review.enum.js';
 import { Lead } from '../leads/entities/lead.entity.js';
 import { User } from '../users/entities/user.entity.js';
+import { randomUUID } from 'node:crypto';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
@@ -205,15 +206,15 @@ export class ReviewService {
       }
 
       const previousAssigneeId = reviewTask.assignedTo;
+      const assignmentChanged = previousAssigneeId !== reviewer.id;
       reviewTask.assignedTo = reviewer.id;
       reviewTask.assignee = reviewer;
       const savedTask = await taskRepository.save(reviewTask);
 
-      const idempotencyKey = `review-task:${savedTask.id}:assigned:${reviewer.id}`;
-      const existingNotification = await notificationRepository.findOne({
-        where: { idempotencyKey },
-      });
-      if (!existingNotification) {
+      // Repeating the same assignment is a no-op for notifications and audit.
+      // A genuinely new assignment transition receives its own idempotency key,
+      // including when a task is later reassigned back to a previous reviewer.
+      if (assignmentChanged) {
         await notificationRepository.save(
           notificationRepository.create({
             userId: reviewer.id,
@@ -223,26 +224,26 @@ export class ReviewService {
             leadId: savedTask.leadId,
             customerId: null,
             reviewTaskId: savedTask.id,
-            idempotencyKey,
+            idempotencyKey: randomUUID(),
             isRead: false,
             readAt: null,
           }),
         );
-      }
 
-      await auditRepository.save(
-        auditRepository.create({
-          userId: actor.id,
-          action: 'REVIEW_ASSIGNED',
-          entityType: 'ReviewTask',
-          entityId: savedTask.id,
-          oldValue: { assignedTo: previousAssigneeId },
-          newValue: { assignedTo: reviewer.id },
-          metadata: { leadId: savedTask.leadId },
-          ipAddress: null,
-          userAgent: null,
-        }),
-      );
+        await auditRepository.save(
+          auditRepository.create({
+            userId: actor.id,
+            action: 'REVIEW_ASSIGNED',
+            entityType: 'ReviewTask',
+            entityId: savedTask.id,
+            oldValue: { assignedTo: previousAssigneeId },
+            newValue: { assignedTo: reviewer.id },
+            metadata: { leadId: savedTask.leadId },
+            ipAddress: null,
+            userAgent: null,
+          }),
+        );
+      }
 
       savedTask.lead = reviewTask.lead;
       savedTask.assignee = reviewer;
