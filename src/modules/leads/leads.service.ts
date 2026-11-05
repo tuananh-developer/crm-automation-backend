@@ -16,6 +16,7 @@ import { Customer } from '../customers/entities/customer.entity.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import { LeadStatus } from './enums/lead.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import { CRM_EVENTS } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
 import type { PaginatedResponseDto } from '../../common/index.js';
 import {
   ConvertLeadResponseDto,
@@ -118,11 +119,12 @@ export class LeadsService {
     });
 
     try {
-      const savedLead = await this.leadsRepository.save(lead);
+      const savedLead = await this.dataSource.transaction(async (manager) => {
+        const persistedLead = await manager.save(Lead, lead);
+        await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.LEAD_CREATED, { leadId: persistedLead.id });
+        return persistedLead;
+      });
       this.logger.log(`Created new lead ${savedLead.id} (${savedLead.email})`);
-
-      // 5. Publish lead.created event to RabbitMQ
-      await this.rabbitmqService.publishLeadCreated(savedLead.id);
 
       return LeadMapper.toResponseDto(savedLead);
     } catch (error: unknown) {
