@@ -96,4 +96,4 @@ jobs:
         run: pnpm migration:run
 
       - name: End-to-end tests
-        run: pnpm test:e2e -- --runInBand
+        run: pnpm test:e2e
