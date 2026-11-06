@@ -327,7 +327,7 @@ export class ReviewService {
           : savedTask.decision === ReviewDecision.REJECT
             ? LeadStatus.LOST
             : LeadStatus.QUALIFYING;
-      const leadUpdate = await leadRepo.update(
+      await leadRepo.update(
         { id: savedTask.leadId },
         { status: targetLeadStatus },
       );
