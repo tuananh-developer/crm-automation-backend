@@ -342,6 +342,7 @@ describe('LeadIntelligenceService', () => {
         type: 'REVIEW_REQUIRED',
         title: 'Review Required',
         content: 'Please review this Lead',
+        severity: 'INFO',
         leadId: 'lead-123',
         customerId: null,
         reviewTaskId: 'review-123',

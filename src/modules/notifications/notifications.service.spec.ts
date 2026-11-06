@@ -4,7 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { NotificationsService } from './notifications.service.js';
-import { NotificationType } from './enums/notification.enum.js';
+import {
+  NotificationSeverity,
+  NotificationType,
+} from './enums/notification.enum.js';
 import type { Repository } from 'typeorm';
 import type { Notification } from './entities/notification.entity.js';
 import type { Lead } from '../leads/entities/lead.entity.js';
@@ -19,6 +22,7 @@ describe('NotificationsService', () => {
     type: NotificationType.HUMAN_REVIEW_REQUIRED,
     title: 'Human review required',
     content: 'Lead lead-1 requires manual review.',
+    severity: NotificationSeverity.INFO,
     leadId: 'lead-1',
     customerId: null,
     reviewTaskId: 'review-1',
