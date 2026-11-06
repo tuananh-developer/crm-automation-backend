@@ -1,73 +1,59 @@
 import {
   Injectable,
   InternalServerErrorException,
-  Logger,
-  ServiceUnavailableException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import type { EntityManager } from 'typeorm';
+import {
+  OutboxEvent,
+  OutboxEventStatus,
+  OutboxTransport,
+} from '../../infrastructure/rabbitmq/entities/outbox-event.entity.js';
+
+export type N8nWebhookKey =
+  | 'N8N_WF10_WEBHOOK_URL'
+  | 'N8N_WF11_WEBHOOK_URL'
+  | 'N8N_WF12_WEBHOOK_URL';
 
 @Injectable()
 export class N8nWorkflowDispatchService {
-  private readonly logger = new Logger(N8nWorkflowDispatchService.name);
-
-  constructor(private readonly configService: ConfigService) {}
-
-  async dispatch(
-    workflowUrlKey:
-      'N8N_WF10_WEBHOOK_URL' | 'N8N_WF11_WEBHOOK_URL' | 'N8N_WF12_WEBHOOK_URL',
+  /**
+   * Persist the dispatch intent in the same transaction as its WorkflowRun.
+   * The OutboxPublisher owns delivery, retry and recovery after process restarts.
+   */
+  async enqueue(
+    manager: EntityManager,
+    workflowUrlKey: N8nWebhookKey,
     workflowPath: string,
     payload: Record<string, unknown>,
-  ): Promise<{ acknowledged: boolean; httpStatus: number }> {
-    const secret =
-      this.configService.get<string>('N8N_API_KEY') ||
-      this.configService.get<string>('N8N_WEBHOOK_SECRET');
-    if (!secret) {
+  ): Promise<OutboxEvent> {
+    const allowedPaths: Record<N8nWebhookKey, string> = {
+      N8N_WF10_WEBHOOK_URL: 'internal/t12-wf10-next-best-action',
+      N8N_WF11_WEBHOOK_URL: 'internal/t12-wf11-sales-meeting',
+      N8N_WF12_WEBHOOK_URL: 'internal/t12-wf12-quote-proposal',
+    };
+    if (allowedPaths[workflowUrlKey] !== workflowPath) {
       throw new InternalServerErrorException(
-        'N8N_API_KEY or N8N_WEBHOOK_SECRET is not configured',
+        'Workflow dispatch destination is not allowlisted',
       );
     }
 
-    const baseUrl = this.configService.get<string>('N8N_BASE_URL');
-    const configuredUrl = this.configService.get<string>(workflowUrlKey);
-    const url =
-      configuredUrl ||
-      (baseUrl
-        ? `${baseUrl.replace(/\/$/, '')}/webhook/${workflowPath.replace(/^\//, '')}`
-        : undefined);
-    if (!url) {
-      throw new InternalServerErrorException(
-        `${workflowUrlKey} or N8N_BASE_URL must be configured before dispatch`,
-      );
-    }
-
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'X-N8N-API-KEY': secret,
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`n8n dispatch failed for ${workflowPath}: ${message}`);
-      throw new ServiceUnavailableException('Unable to reach n8n webhook');
-    }
-
-    // Do not log the payload: it can contain CRM or transcript data.
-    if (!response.ok) {
-      this.logger.error(
-        `n8n webhook ${workflowPath} returned HTTP ${response.status}`,
-      );
-      throw new ServiceUnavailableException(
-        `n8n webhook rejected dispatch (HTTP ${response.status})`,
-      );
-    }
-
-    return { acknowledged: true, httpStatus: response.status };
+    const repository = manager.getRepository(OutboxEvent);
+    const record = repository.create({
+      eventType: 'n8n.workflow.dispatch.requested',
+      exchange: '',
+      routingKey: '',
+      transport: OutboxTransport.HTTP,
+      destination: workflowUrlKey,
+      destinationPath: workflowPath,
+      payload,
+      status: OutboxEventStatus.PENDING,
+      attempts: 0,
+      lastError: null,
+      nextAttemptAt: null,
+      publishedAt: null,
+      lockedUntil: null,
+      lockToken: null,
+    });
+    return repository.save(record);
   }
 }

@@ -4,6 +4,7 @@ import { InitialSchema1727866977000 } from './database/migrations/1727866977000-
 import { AddEnrollmentActiveUniqueIndex1728400000000 } from './database/migrations/1728400000000-AddEnrollmentActiveUniqueIndex.js';
 import { AddOutboxEventsTable1729000000000 } from './database/migrations/1729000000000-AddOutboxEventsTable.js';
 import { AddOutboxProcessingLease1793476900000 } from './database/migrations/1793476900000-AddOutboxProcessingLease.js';
+import { AddOutboxHttpDispatch1793477000000 } from './database/migrations/1793477000000-AddOutboxHttpDispatch.js';
 import { AddT12WorkflowDomains1793476800000 } from './database/migrations/1793476800000-AddT12WorkflowDomains.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -30,13 +31,17 @@ export const AppDataSource = new DataSource(
         ssl: sslConfig,
         synchronize: false,
         logging: !isProduction,
-        entities: ['dist/modules/**/*.entity.js'],
+        entities: [
+          'dist/modules/**/*.entity.js',
+          'dist/infrastructure/**/*.entity.js',
+        ],
         migrations: [
           InitialSchema1727866977000,
           AddEnrollmentActiveUniqueIndex1728400000000,
           AddOutboxEventsTable1729000000000,
           AddT12WorkflowDomains1793476800000,
           AddOutboxProcessingLease1793476900000,
+          AddOutboxHttpDispatch1793477000000,
         ],
         migrationsTableName: 'typeorm_migrations',
       }
@@ -50,13 +55,17 @@ export const AppDataSource = new DataSource(
         ssl: sslConfig,
         synchronize: false,
         logging: !isProduction,
-        entities: ['dist/modules/**/*.entity.js'],
+        entities: [
+          'dist/modules/**/*.entity.js',
+          'dist/infrastructure/**/*.entity.js',
+        ],
         migrations: [
           InitialSchema1727866977000,
           AddEnrollmentActiveUniqueIndex1728400000000,
           AddOutboxEventsTable1729000000000,
           AddT12WorkflowDomains1793476800000,
           AddOutboxProcessingLease1793476900000,
+          AddOutboxHttpDispatch1793477000000,
         ],
         migrationsTableName: 'typeorm_migrations',
       },

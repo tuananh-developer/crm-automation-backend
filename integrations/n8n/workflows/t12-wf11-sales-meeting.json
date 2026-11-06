@@ -401,6 +401,60 @@
         2720,
         340
       ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/workflow-executions/claim' }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { workflowRunId: ($json.body || $json).workflowRunId, workflowName: 'T12-WF11_SALES_MEETING', n8nExecutionId: String($exec.id) } }}"
+      },
+      "id": "a1100000-0000-4000-8000-000000000110",
+      "name": "HTTP Request: Claim Workflow Execution",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        320,
+        160
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "notes": "Atomically claims this WorkflowRun before transcript/AI processing. A duplicate n8n execution receives claimed=false and is stopped by the next node.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const claim = $input.first()?.json ?? {};\nif (claim.claimed !== true) {\n  return [];\n}\nreturn [{ json: $('Webhook Trigger').first().json }];"
+      },
+      "id": "a1100000-0000-4000-8000-000000000111",
+      "name": "Code: Stop Duplicate Execution",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        160
+      ],
+      "notes": "Only the execution that atomically claimed the WorkflowRun may continue.",
+      "notesInFlow": true
     }
   ],
   "connections": {
@@ -408,7 +462,7 @@
       "main": [
         [
           {
-            "node": "Code: Validate Meeting Input",
+            "node": "HTTP Request: Claim Workflow Execution",
             "type": "main",
             "index": 0
           }
@@ -519,6 +573,28 @@
         [
           {
             "node": "Code: Finalize Meeting Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Claim Workflow Execution": {
+      "main": [
+        [
+          {
+            "node": "Code: Stop Duplicate Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Stop Duplicate Execution": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate Meeting Input",
             "type": "main",
             "index": 0
           }
