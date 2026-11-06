@@ -325,7 +325,7 @@ describe('FollowUpService', () => {
         buildEnrollment({ lead: buildLead() }),
       );
       (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(buildStep());
-      (executionsRepository.findOne as jest.Mock).mockResolvedValue(null);
+
       (enrollmentsRepository.save as jest.Mock).mockImplementation(
         (enrollment: LeadFollowUpEnrollment) => Promise.resolve(enrollment),
       );
@@ -380,7 +380,7 @@ describe('FollowUpService', () => {
         buildEnrollment({ lead: buildLead() }),
       );
       (stepsRepository.findOne as jest.Mock).mockResolvedValue(buildStep());
-      (executionsRepository.findOne as jest.Mock).mockResolvedValue(null);
+
     });
 
     it('should mark the execution FAILED then RETRYING and store the error when the provider fails', async () => {
