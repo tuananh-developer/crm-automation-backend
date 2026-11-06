@@ -145,6 +145,7 @@ Apply DTO cannot force safety/approval; the backend reloads each target and enfo
 - `POST /api/v1/quotes/:quoteId/submit-for-approval`; `POST /api/v1/quotes/:quoteId/approve`; `POST /api/v1/quotes/:quoteId/reject`.
 - `GET/POST /api/v1/customer-contracts`; `GET/PATCH /api/v1/customer-contracts/:contractId`.
 - `GET /api/v1/customer-contracts/due-for-renewal`.
+- `POST /api/v1/internal/n8n/workflow-executions/claim` — machine-authenticated, atomic WorkflowRun execution claim. Requires `workflowRunId`, an allowlisted T12 `workflowName`, and the n8n `n8nExecutionId`; only the first distinct active execution may continue to AI processing, while retries from that same execution are idempotent.
 - `GET/POST /api/v1/customer-contracts/:contractId/renewal-attempts`; `GET /api/v1/renewal-attempts/:attemptId`.
 
 ## 10. Dashboard, workflow runs, notification and Communication APIs

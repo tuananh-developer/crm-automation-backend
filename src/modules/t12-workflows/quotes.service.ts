@@ -4,11 +4,10 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, Repository, type EntityManager } from 'typeorm';
 import { isUUID } from 'class-validator';
 import { Lead } from '../leads/entities/lead.entity.js';
 import { Customer } from '../customers/entities/customer.entity.js';
@@ -35,6 +34,7 @@ import {
   UpdateCatalogItemDto,
 } from './dto/index.js';
 import { calculateQuotePrice } from './utils/quote-pricing.util.js';
+import { hasSameQuoteDraftPayload } from './utils/quote-idempotency.util.js';
 
 export const WF12_NAME = 'T12-WF12_QUOTE_PROPOSAL';
 
@@ -96,58 +96,106 @@ export class QuotesService {
     };
   }
 
-  async requestDraft(dto: StartQuoteDraftDto, actor: AuthenticatedUser, rawKey?: string) {
+  async requestDraft(
+    dto: StartQuoteDraftDto,
+    actor: AuthenticatedUser,
+    rawKey?: string,
+  ) {
     const target = await this.assertActorTarget(dto, actor);
-    const idempotencyKey = 'WF12:' + actor.id + ':' + this.requireKey(rawKey);
-    const requestedIds = [...new Set(dto.requestedItems.map((item) => item.catalogItemId))];
-    const catalogItems = await this.catalog.find({ where: { id: In(requestedIds), isActive: true } });
-    if (catalogItems.length !== requestedIds.length) throw new BadRequestException('One or more requested catalog items are unavailable');
+    const idempotencyKey =
+      'WF12:' + actor.id + ':' + this.requireKey(rawKey);
+    const requestedIds = [
+      ...new Set(dto.requestedItems.map((item) => item.catalogItemId)),
+    ];
+    const catalogItems = await this.catalog.find({
+      where: { id: In(requestedIds), isActive: true },
+    });
+    if (catalogItems.length !== requestedIds.length) {
+      throw new BadRequestException(
+        'One or more requested catalog items are unavailable',
+      );
+    }
     const currency = dto.currency.toUpperCase();
-    if (catalogItems.some((item) => item.currency !== currency)) throw new BadRequestException('All catalog items must use the requested currency');
-    const inputPayload = { ...target, requestedItems: dto.requestedItems, requirements: dto.requirements ?? null, currency };
-    const reuseExisting = (existing: WorkflowRun) => {
-      if (existing.workflowName !== WF12_NAME) throw new ConflictException('Idempotency key is already used by another workflow');
-      if (!hasSamePayload(existing.inputPayload, inputPayload)) throw new ConflictException('Idempotency key was already used with a different quote payload');
-      return { workflowRunId: existing.id, status: existing.status, reused: true };
+    if (catalogItems.some((item) => item.currency !== currency)) {
+      throw new BadRequestException(
+        'All catalog items must use the requested currency',
+      );
+    }
+
+    const inputPayload = {
+      ...target,
+      requestedItems: dto.requestedItems,
+      requirements: dto.requirements ?? null,
+      currency,
     };
+    const reuseExisting = (existing: WorkflowRun) => {
+      if (existing.workflowName !== WF12_NAME) {
+        throw new ConflictException(
+          'Idempotency key is already used by another workflow',
+        );
+      }
+      if (!hasSamePayload(existing.inputPayload, inputPayload)) {
+        throw new ConflictException(
+          'Idempotency key was already used with a different quote payload',
+        );
+      }
+      return {
+        workflowRunId: existing.id,
+        status: existing.status,
+        reused: true,
+      };
+    };
+
     const existing = await this.runs.findOne({ where: { idempotencyKey } });
     if (existing) return reuseExisting(existing);
-    let run: WorkflowRun;
+
     try {
-      run = await this.runs.save(this.runs.create({ workflowName: WF12_NAME, idempotencyKey, leadId: target.leadId, customerId: target.customerId, triggeredByUserId: actor.id, status: WorkflowStatus.PENDING, inputPayload, outputPayload: null, errorMessage: null, startedAt: new Date(), finishedAt: null }));
+      const run = await this.dataSource.transaction(async (manager) => {
+        const runRepository = manager.getRepository(WorkflowRun);
+        const created = await runRepository.save(
+          runRepository.create({
+            workflowName: WF12_NAME,
+            idempotencyKey,
+            leadId: target.leadId,
+            customerId: target.customerId,
+            triggeredByUserId: actor.id,
+            status: WorkflowStatus.PENDING,
+            inputPayload,
+            outputPayload: null,
+            errorMessage: null,
+            startedAt: new Date(),
+            finishedAt: null,
+          }),
+        );
+
+        await this.dispatcher.enqueue(
+          manager,
+          'N8N_WF12_WEBHOOK_URL',
+          'internal/t12-wf12-quote-proposal',
+          {
+            workflowRunId: created.id,
+            customerId: target.customerId,
+            leadId: target.leadId,
+            requestedItems: dto.requestedItems,
+            requirements: dto.requirements ?? null,
+            currency,
+            requestedBy: actor.id,
+            idempotencyKey: created.id,
+          },
+        );
+        return created;
+      });
+
+      return {
+        workflowRunId: run.id,
+        status: run.status,
+        reused: false,
+      };
     } catch (error) {
       if (!isPostgresUniqueViolation(error)) throw error;
       const concurrent = await this.runs.findOne({ where: { idempotencyKey } });
       if (!concurrent) throw error;
       return reuseExisting(concurrent);
-    }
-    try {
-      await this.dispatcher.dispatch('N8N_WF12_WEBHOOK_URL', 'internal/t12-wf12-quote-proposal', { workflowRunId: run.id, customerId: target.customerId, leadId: target.leadId, requestedItems: dto.requestedItems, requirements: dto.requirements ?? null, currency, requestedBy: actor.id, idempotencyKey: run.id });
-      // A fast callback may move the run to a terminal state before dispatch returns.
-      await this.runs.update(
-        { id: run.id, status: WorkflowStatus.PENDING },
-        { status: WorkflowStatus.RUNNING },
-      );
-      const latest = await this.runs.findOne({ where: { id: run.id } });
-      return {
-        workflowRunId: run.id,
-        status: latest?.status ?? WorkflowStatus.RUNNING,
-        reused: false,
-      };
-    } catch (error) {
-      await this.runs.update(
-        { id: run.id, status: In([WorkflowStatus.PENDING, WorkflowStatus.RUNNING]) },
-        {
-          status: WorkflowStatus.FAILED,
-          errorMessage: error instanceof Error ? error.message.slice(0, 1000) : 'n8n dispatch failed',
-          finishedAt: new Date(),
-        },
-      );
-      const latest = await this.runs.findOne({ where: { id: run.id } });
-      if (latest && [WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL].includes(latest.status)) {
-        return { workflowRunId: run.id, status: latest.status, reused: false };
-      }
-      throw error instanceof ServiceUnavailableException ? error : new ServiceUnavailableException('Unable to dispatch Quote & Proposal workflow');
     }
   }
 
@@ -236,8 +284,17 @@ export class QuotesService {
 
   private async canonicalPrice(
     dto: QuotePricePreviewDto | CreateQuoteInternalDto,
+    manager?: EntityManager,
   ) {
-    const run = await this.getRun(dto.workflowRunId);
+    const runRepository = manager?.getRepository(WorkflowRun) ?? this.runs;
+    const run = manager
+      ? await runRepository.findOne({
+          where: { id: dto.workflowRunId, workflowName: WF12_NAME },
+          lock: { mode: 'pessimistic_write' },
+        })
+      : await this.getRun(dto.workflowRunId);
+    if (!run) throw new NotFoundException('Quote workflow run not found');
+
     if (
       ![
         WorkflowStatus.RUNNING,
@@ -245,44 +302,65 @@ export class QuotesService {
         WorkflowStatus.SUCCESS,
         WorkflowStatus.PARTIAL,
       ].includes(run.status)
-    )
+    ) {
       throw new ConflictException('Quote workflow is not eligible for pricing');
+    }
+
     const input = run.inputPayload ?? {};
     if (
       (dto.leadId ?? null) !== (run.leadId ?? null) ||
       (dto.customerId ?? null) !== (run.customerId ?? null)
-    )
+    ) {
       throw new BadRequestException('Quote entity does not match WorkflowRun');
+    }
+
     const requested = (input.requestedItems ?? []) as Array<{
       catalogItemId: string;
       quantity: number;
     }>;
-    const passed = dto.items;
     const normalizedRequested = [...requested].sort((a, b) =>
       a.catalogItemId.localeCompare(b.catalogItemId),
     );
-    const normalizedPassed = [...passed].sort((a, b) =>
+    const normalizedPassed = [...dto.items].sort((a, b) =>
       a.catalogItemId.localeCompare(b.catalogItemId),
     );
     if (
       JSON.stringify(normalizedRequested) !== JSON.stringify(normalizedPassed)
-    )
+    ) {
       throw new BadRequestException(
         'Line item IDs and quantities must match the original request; AI cannot add or change products',
       );
+    }
+
     const currency = String(input.currency ?? '').toUpperCase();
-    if (dto.currency.toUpperCase() !== currency)
+    if (dto.currency.toUpperCase() !== currency) {
       throw new BadRequestException(
         'Currency must match the original quote request',
       );
+    }
+
     const ids = requested.map((item) => item.catalogItemId);
-    const catalog = await this.catalog.find({
+    if (manager && ids.length > 0) {
+      // Prevent catalog price/availability changes between calculation and
+      // quote persistence. Sort IDs to keep lock acquisition deterministic.
+      await manager.query(
+        'SELECT id FROM product_catalog_items WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE',
+        [ids],
+      );
+    }
+
+    const catalogRepository =
+      manager?.getRepository(ProductCatalogItem) ?? this.catalog;
+    const catalog = await catalogRepository.find({
       where: { id: In(ids), isActive: true },
     });
-    if (catalog.length !== new Set(ids).size)
+    if (catalog.length !== new Set(ids).size) {
       throw new BadRequestException('Catalog item unavailable or inactive');
-    if (catalog.some((item) => item.currency !== currency))
+    }
+    if (catalog.some((item) => item.currency !== currency)) {
       throw new BadRequestException('Catalog currency mismatch');
+    }
+
     const map = new Map(catalog.map((item) => [item.id, item]));
     const lines = requested.map((item) => {
       const product = map.get(item.catalogItemId)!;
@@ -318,26 +396,39 @@ export class QuotesService {
   }
 
   async saveDraft(dto: CreateQuoteInternalDto) {
-    const { run, priced } = await this.canonicalPrice({
-      ...dto,
-      idempotencyKey: dto.workflowRunId,
-    });
-    const existing = await this.quotes.findOne({
-      where: { workflowRunId: run.id },
-    });
-    if (existing)
-      return {
-        id: existing.id,
-        workflowRunId: run.id,
-        status: existing.status,
-        totalAmount: existing.totalAmount,
-        approvalRequired: existing.approvalRequired,
-        reused: true,
-      };
     return this.dataSource.transaction(async (manager) => {
+      const { run, priced } = await this.canonicalPrice(
+        { ...dto, idempotencyKey: dto.workflowRunId },
+        manager,
+      );
       const quoteRepo = manager.getRepository(Quote);
       const lineRepo = manager.getRepository(QuoteItem);
       const runRepo = manager.getRepository(WorkflowRun);
+
+      // canonicalPrice locks the WorkflowRun and selected catalog rows. This
+      // makes the existence check and the quote snapshot single-writer.
+      const existing = await quoteRepo.findOne({
+        where: { workflowRunId: run.id },
+      });
+      if (existing) {
+        const existingItems = await lineRepo.find({
+          where: { quoteId: existing.id },
+        });
+        if (!hasSameQuoteDraftPayload(existing, existingItems, dto)) {
+          throw new ConflictException(
+            'WorkflowRun already has a quote with a different draft payload',
+          );
+        }
+        return {
+          id: existing.id,
+          workflowRunId: run.id,
+          status: existing.status,
+          totalAmount: existing.totalAmount,
+          approvalRequired: existing.approvalRequired,
+          reused: true,
+        };
+      }
+
       const quote = await quoteRepo.save(
         quoteRepo.create({
           workflowRunId: run.id,
@@ -361,8 +452,9 @@ export class QuotesService {
           pricingSnapshot: priced as unknown as Record<string, unknown>,
         }),
       );
-      for (const line of priced.items) {
-        await lineRepo.save(
+
+      await lineRepo.save(
+        priced.items.map((line) =>
           lineRepo.create({
             quoteId: quote.id,
             catalogItemId: line.catalogItemId,
@@ -377,8 +469,9 @@ export class QuotesService {
             lineTax: line.lineTax,
             lineTotal: line.lineTotal,
           }),
-        );
-      }
+        ),
+      );
+
       run.status = priced.approvalRequired
         ? WorkflowStatus.PARTIAL
         : WorkflowStatus.SUCCESS;
@@ -391,6 +484,7 @@ export class QuotesService {
       };
       run.finishedAt = priced.approvalRequired ? null : new Date();
       await runRepo.save(run);
+
       return {
         id: quote.id,
         workflowRunId: run.id,

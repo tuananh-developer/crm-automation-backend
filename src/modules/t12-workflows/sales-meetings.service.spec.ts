@@ -1,4 +1,6 @@
 import { ConflictException } from '@nestjs/common';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import type { DataSource, Repository } from 'typeorm';
 import { SalesMeetingsService } from './sales-meetings.service.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
@@ -10,11 +12,13 @@ import type { SalesMeeting } from './entities/sales-meeting.entity.js';
 import type { ConversationTranscript } from './entities/conversation-transcript.entity.js';
 import type { ConversationSummary } from './entities/conversation-summary.entity.js';
 import type { ConversationActionItem } from './entities/conversation-action-item.entity.js';
-import type { N8nWorkflowDispatchService } from './n8n-workflow-dispatch.service.js';
 import type {
   SaveConversationTranscriptDto,
   SaveMeetingSummaryDto,
   SaveMeetingActionItemsDto,
+  ConfirmMeetingActionItemDto,
+  NotifyMeetingDto,
+  StartSalesMeetingDto,
 } from './dto/index.js';
 
 describe('SalesMeetingsService persistence idempotency', () => {
@@ -38,6 +42,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
   let repositories: Record<string, any>;
   let dataSource: { transaction: jest.Mock };
   let manager: { getRepository: jest.Mock };
+  let dispatcher: { enqueue: jest.Mock };
 
   beforeEach(() => {
     const makeRepository = (id: string) => ({
@@ -56,6 +61,8 @@ describe('SalesMeetingsService persistence idempotency', () => {
       ConversationTranscript: makeRepository('transcript-1'),
       ConversationSummary: makeRepository('summary-1'),
       ConversationActionItem: makeRepository('action-1'),
+      Notification: makeRepository('notification-1'),
+      OutboxEvent: makeRepository('outbox-1'),
     };
 
     manager = {
@@ -67,6 +74,8 @@ describe('SalesMeetingsService persistence idempotency', () => {
       ),
     };
 
+    dispatcher = { enqueue: jest.fn().mockResolvedValue({ id: 'outbox-1' }) };
+
     service = new SalesMeetingsService(
       repositories.WorkflowRun as Repository<WorkflowRun>,
       repositories.Lead as Repository<Lead>,
@@ -77,7 +86,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       repositories.ConversationSummary as Repository<ConversationSummary>,
       repositories.ConversationActionItem as Repository<ConversationActionItem>,
       dataSource as unknown as DataSource,
-      {} as N8nWorkflowDispatchService,
+      dispatcher,
     );
   });
 
@@ -278,4 +287,157 @@ describe('SalesMeetingsService persistence idempotency', () => {
       }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
+
+  it('serializes action-item confirmation and rejects a second concurrent decision', async () => {
+    repositories.ConversationActionItem.findOne.mockResolvedValue({
+      id: 'action-1',
+      summaryId: 'summary-1',
+      status: 'PENDING_CONFIRMATION',
+      requiresConfirmation: true,
+      confirmedBy: null,
+      confirmationNote: null,
+    });
+    repositories.ConversationSummary.findOne.mockResolvedValue({
+      id: 'summary-1',
+      meetingId: 'meeting-1',
+    });
+    repositories.SalesMeeting.findOne.mockResolvedValue({ ...meeting });
+
+    const actor: AuthenticatedUser = {
+      id: 'owner-1',
+      name: 'Owner',
+      email: 'owner@example.com',
+      role: UserRole.SALES,
+      status: UserStatus.ACTIVE,
+      lastLoginAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const dto: ConfirmMeetingActionItemDto = {
+      decision: 'CONFIRM',
+      comment: 'Approved',
+    };
+    const result = await service.confirmActionItem('action-1', dto, actor);
+
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(repositories.ConversationActionItem.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'action-1' },
+        lock: { mode: 'pessimistic_write' },
+      }),
+    );
+    expect(repositories.ConversationActionItem.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'CONFIRMED',
+        requiresConfirmation: false,
+        confirmedBy: 'owner-1',
+        confirmationNote: 'Approved',
+      }),
+    );
+    expect(result).toMatchObject({
+      id: 'action-1',
+      status: 'CONFIRMED',
+      confirmedBy: 'owner-1',
+    });
+  });
+
+  it('commits meeting notifications and terminal workflow state in one transaction', async () => {
+    repositories.SalesMeeting.findOne.mockResolvedValue({
+      ...meeting,
+      summaryId: 'summary-1',
+      notificationSentAt: null,
+    });
+    repositories.WorkflowRun.findOne.mockResolvedValue({
+      ...workflowRun,
+      status: WorkflowStatus.RUNNING,
+      outputPayload: {},
+    });
+    repositories.ConversationSummary.findOne.mockResolvedValue({
+      id: 'summary-1',
+      meetingId: 'meeting-1',
+      workflowRunId: 'run-1',
+    });
+    repositories.Notification.find.mockResolvedValue([]);
+
+    const dto: NotifyMeetingDto = {
+      meetingId: 'meeting-1',
+      workflowRunId: 'run-1',
+      summaryId: 'summary-1',
+      attendeeIds: ['attendee-1'],
+      idempotencyKey: 'run-1',
+    };
+    const result = await service.notify(dto);
+
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(repositories.Notification.save).toHaveBeenCalledTimes(2);
+    expect(repositories.SalesMeeting.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'COMPLETED',
+        notificationSentAt: expect.any(Date),
+      }),
+    );
+    expect(repositories.WorkflowRun.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: WorkflowStatus.SUCCESS,
+        finishedAt: expect.any(Date),
+      }),
+    );
+    expect(result).toMatchObject({
+      success: true,
+      meetingId: 'meeting-1',
+      summaryId: 'summary-1',
+      notifiedUserIds: ['owner-1', 'attendee-1'],
+      reused: false,
+    });
+  });
+
+
+  it('creates the meeting and its n8n dispatch intent in the same transaction', async () => {
+    repositories.WorkflowRun.findOne.mockResolvedValue(null);
+    repositories.Lead.findOne.mockResolvedValue({
+      id: 'lead-1',
+      ownerId: 'owner-1',
+    });
+    repositories.User.find.mockResolvedValue([]);
+
+    const dto: StartSalesMeetingDto = {
+      leadId: 'lead-1',
+      attendeeIds: [],
+      transcript:
+        'The customer reviewed the enterprise proposal and agreed to the next delivery steps.',
+      sourceType: 'MEETING_TRANSCRIPT',
+    };
+    const actor: AuthenticatedUser = {
+      id: 'owner-1',
+      name: 'Owner',
+      email: 'owner@example.com',
+      role: UserRole.SALES,
+      status: UserStatus.ACTIVE,
+      lastLoginAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const result = await service.request(dto, actor, 'meeting-key-0001');
+
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(repositories.WorkflowRun.save).toHaveBeenCalled();
+    expect(repositories.SalesMeeting.save).toHaveBeenCalled();
+    expect(dispatcher.enqueue).toHaveBeenCalledWith(
+      manager,
+      'N8N_WF11_WEBHOOK_URL',
+      'internal/t12-wf11-sales-meeting',
+      expect.objectContaining({
+        meetingId: 'meeting-1',
+        workflowRunId: 'run-1',
+        requestedBy: 'owner-1',
+      }),
+    );
+    expect(result).toMatchObject({
+      workflowRunId: 'run-1',
+      meetingId: 'meeting-1',
+      status: WorkflowStatus.PENDING,
+      reused: false,
+    });
+  });
+
 });

@@ -3,7 +3,6 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -128,61 +127,84 @@ export class NextBestActionsService {
     return { customer };
   }
 
-  async request(dto: StartNextBestActionDto, actor: AuthenticatedUser, rawIdempotencyKey?: string) {
+  async request(
+    dto: StartNextBestActionDto,
+    actor: AuthenticatedUser,
+    rawIdempotencyKey?: string,
+  ) {
     const clientKey = this.assertIdempotencyKey(rawIdempotencyKey);
     await this.assertEntityAccess(dto, actor);
     const idempotencyKey = 'WF10:' + actor.id + ':' + clientKey;
     const inputPayload = { entityType: dto.entityType, entityId: dto.entityId };
     const reuseExisting = (existing: WorkflowRun) => {
-      if (existing.workflowName !== WF10_NAME) throw new ConflictException('Idempotency key is already used by another workflow');
-      if (!hasSamePayload(existing.inputPayload, inputPayload)) throw new ConflictException('Idempotency key was already used with a different workflow payload');
-      return { workflowRunId: existing.id, status: existing.status, reused: true };
+      if (existing.workflowName !== WF10_NAME) {
+        throw new ConflictException(
+          'Idempotency key is already used by another workflow',
+        );
+      }
+      if (!hasSamePayload(existing.inputPayload, inputPayload)) {
+        throw new ConflictException(
+          'Idempotency key was already used with a different workflow payload',
+        );
+      }
+      return {
+        workflowRunId: existing.id,
+        status: existing.status,
+        reused: true,
+      };
     };
-    const existing = await this.workflowRuns.findOne({ where: { idempotencyKey } });
-    if (existing) return reuseExisting(existing);
-    const run = this.workflowRuns.create({
-      workflowName: WF10_NAME, leadId: dto.entityType === 'Lead' ? dto.entityId : null,
-      customerId: dto.entityType === 'Customer' ? dto.entityId : null, triggeredByUserId: actor.id,
-      idempotencyKey, status: WorkflowStatus.PENDING, inputPayload, outputPayload: null,
-      errorMessage: null, startedAt: new Date(), finishedAt: null,
+
+    const existing = await this.workflowRuns.findOne({
+      where: { idempotencyKey },
     });
-    let saved: WorkflowRun;
-    try { saved = await this.workflowRuns.save(run); }
-    catch (error) {
-      if (!isPostgresUniqueViolation(error)) throw error;
-      const concurrent = await this.workflowRuns.findOne({ where: { idempotencyKey } });
-      if (!concurrent) throw error;
-      return reuseExisting(concurrent);
-    }
+    if (existing) return reuseExisting(existing);
+
     try {
-      await this.dispatcher.dispatch('N8N_WF10_WEBHOOK_URL', 'internal/t12-wf10-next-best-action', { entityType: dto.entityType, entityId: dto.entityId, workflowRunId: saved.id, requestedBy: actor.id, requestedAt: new Date().toISOString() });
-      // The n8n callback may complete before the webhook HTTP response returns.
-      // Never overwrite a terminal callback state with RUNNING.
-      await this.workflowRuns.update(
-        { id: saved.id, status: WorkflowStatus.PENDING },
-        { status: WorkflowStatus.RUNNING },
-      );
-      const latest = await this.workflowRuns.findOne({ where: { id: saved.id } });
+      const saved = await this.dataSource.transaction(async (manager) => {
+        const runRepository = manager.getRepository(WorkflowRun);
+        const run = await runRepository.save(
+          runRepository.create({
+            workflowName: WF10_NAME,
+            leadId: dto.entityType === 'Lead' ? dto.entityId : null,
+            customerId: dto.entityType === 'Customer' ? dto.entityId : null,
+            triggeredByUserId: actor.id,
+            idempotencyKey,
+            status: WorkflowStatus.PENDING,
+            inputPayload,
+            outputPayload: null,
+            errorMessage: null,
+            startedAt: new Date(),
+            finishedAt: null,
+          }),
+        );
+
+        await this.dispatcher.enqueue(
+          manager,
+          'N8N_WF10_WEBHOOK_URL',
+          'internal/t12-wf10-next-best-action',
+          {
+            entityType: dto.entityType,
+            entityId: dto.entityId,
+            workflowRunId: run.id,
+            requestedBy: actor.id,
+            requestedAt: new Date().toISOString(),
+          },
+        );
+        return run;
+      });
+
       return {
         workflowRunId: saved.id,
-        status: latest?.status ?? WorkflowStatus.RUNNING,
+        status: saved.status,
         reused: false,
       };
     } catch (error) {
-      await this.workflowRuns.update(
-        { id: saved.id, status: In([WorkflowStatus.PENDING, WorkflowStatus.RUNNING]) },
-        {
-          status: WorkflowStatus.FAILED,
-          finishedAt: new Date(),
-          errorMessage: error instanceof Error ? error.message.slice(0, 1000) : 'n8n dispatch failed',
-        },
-      );
-      const latest = await this.workflowRuns.findOne({ where: { id: saved.id } });
-      // A callback may have succeeded even when the HTTP acknowledgement was lost.
-      if (latest && [WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL].includes(latest.status)) {
-        return { workflowRunId: saved.id, status: latest.status, reused: false };
-      }
-      throw error instanceof ServiceUnavailableException ? error : new ServiceUnavailableException('Could not dispatch Next Best Action workflow');
+      if (!isPostgresUniqueViolation(error)) throw error;
+      const concurrent = await this.workflowRuns.findOne({
+        where: { idempotencyKey },
+      });
+      if (!concurrent) throw error;
+      return reuseExisting(concurrent);
     }
   }
 
@@ -436,90 +458,132 @@ export class NextBestActionsService {
   }
 
   async saveRecommendation(dto: NextBestActionCallbackDto) {
-    const run = await this.getScopedRun(
+    await this.getScopedRun(
       dto.entityType,
       dto.entityId,
       dto.workflowRunId,
       true,
     );
-    const existing = await this.recommendations.findOne({
-      where: { workflowRunId: run.id },
-    });
-    if (existing)
-      return {
-        id: existing.id,
-        workflowRunId: run.id,
-        status: existing.status,
-        reused: true,
-      };
-    if (
-      ![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status)
-    ) {
-      throw new ConflictException(
-        'Cannot persist a recommendation for a terminal WorkflowRun',
-      );
-    }
+
     const canonicalRecommendations: NextBestActionCallbackDto['recommendations'] =
       [];
     for (const recommendation of dto.recommendations) {
-      // DTO actionCode is intentionally a string; find() keeps the allowlist comparison type-safe.
       const policy = ALLOWED_ACTIONS.find(
         (item) => item.actionCode === recommendation.actionCode,
       );
-      if (!policy)
+      if (!policy) {
         throw new BadRequestException(
           `Action '${recommendation.actionCode}' is not allowed`,
         );
+      }
       if (recommendation.evidenceIds.length > 0) {
         const validIds = await this.getValidEvidenceIds(
           dto.entityType,
           dto.entityId,
           recommendation.evidenceIds,
         );
-        if (validIds.size !== recommendation.evidenceIds.length)
+        if (validIds.size !== recommendation.evidenceIds.length) {
           throw new BadRequestException(
             'Recommendation contains evidence outside the authorized entity context',
           );
+        }
       }
-      // Never trust the model to downgrade a risky action's approval requirement.
       canonicalRecommendations.push({
         ...recommendation,
         requiresApproval:
           policy.requiresApproval || recommendation.confidence < 0.7,
       });
     }
+
     const requiresHumanApproval = canonicalRecommendations.some(
       (item) => item.requiresApproval,
     );
-    const saved = await this.recommendations.save(
-      this.recommendations.create({
-        workflowRunId: run.id,
-        entityType: dto.entityType,
-        entityId: dto.entityId,
-        recommendations: canonicalRecommendations as unknown as Array<
-          Record<string, unknown>
-        >,
+    const canonicalPayload = canonicalRecommendations as unknown as Array<
+      Record<string, unknown>
+    >;
+
+    return this.dataSource.transaction(async (manager) => {
+      const runRepository = manager.getRepository(WorkflowRun);
+      const recommendationRepository = manager.getRepository(
+        NextBestActionRecommendation,
+      );
+      const run = await runRepository.findOne({
+        where: {
+          id: dto.workflowRunId,
+          workflowName: WF10_NAME,
+          ...(dto.entityType === 'Lead'
+            ? { leadId: dto.entityId }
+            : { customerId: dto.entityId }),
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!run) {
+        throw new NotFoundException(
+          'Next Best Action WorkflowRun not found for this entity',
+        );
+      }
+
+      const existing = await recommendationRepository.findOne({
+        where: { workflowRunId: run.id },
+      });
+      if (existing) {
+        if (
+          existing.entityType !== dto.entityType ||
+          existing.entityId !== dto.entityId ||
+          !hasSamePayload(existing.recommendations, canonicalPayload)
+        ) {
+          throw new ConflictException(
+            'WorkflowRun already has a different Next Best Action recommendation',
+          );
+        }
+        return {
+          id: existing.id,
+          recommendationId: existing.id,
+          workflowRunId: run.id,
+          status: existing.status,
+          requiresHumanApproval: existing.requiresHumanApproval,
+          reused: true,
+        };
+      }
+
+      if (
+        ![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status)
+      ) {
+        throw new ConflictException(
+          'Cannot persist a recommendation for a terminal WorkflowRun',
+        );
+      }
+
+      const saved = await recommendationRepository.save(
+        recommendationRepository.create({
+          workflowRunId: run.id,
+          entityType: dto.entityType,
+          entityId: dto.entityId,
+          recommendations: canonicalPayload,
+          requiresHumanApproval,
+          status: requiresHumanApproval ? 'PENDING_APPROVAL' : 'RECOMMENDED',
+          reviewTaskId: null,
+        }),
+      );
+      run.status = WorkflowStatus.SUCCESS;
+      run.finishedAt = new Date();
+      run.outputPayload = {
+        ...(run.outputPayload ?? {}),
+        recommendationId: saved.id,
+        recommendationCount: canonicalRecommendations.length,
         requiresHumanApproval,
-        status: requiresHumanApproval ? 'PENDING_APPROVAL' : 'RECOMMENDED',
-        reviewTaskId: null,
-      }),
-    );
-    run.status = WorkflowStatus.SUCCESS;
-    run.finishedAt = new Date();
-    run.outputPayload = {
-      recommendationId: saved.id,
-      recommendationCount: dto.recommendations.length,
-      requiresHumanApproval,
-    };
-    await this.workflowRuns.save(run);
-    return {
-      id: saved.id,
-      recommendationId: saved.id,
-      workflowRunId: run.id,
-      status: saved.status,
-      requiresHumanApproval,
-      reused: false,
-    };
+      };
+      await runRepository.save(run);
+
+      return {
+        id: saved.id,
+        recommendationId: saved.id,
+        workflowRunId: run.id,
+        status: saved.status,
+        requiresHumanApproval,
+        reused: false,
+      };
+    });
   }
 
   async getRecommendation(recommendationId: string, actor: AuthenticatedUser) {

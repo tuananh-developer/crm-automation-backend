@@ -35,6 +35,8 @@ import { InternalConversationSummariesController } from './internal-conversation
 import { QuotesController } from './quotes.controller.js';
 import { InternalQuotesController } from './internal-quotes.controller.js';
 import { InternalCatalogController } from './internal-catalog.controller.js';
+import { InternalWorkflowExecutionClaimsController } from './internal-workflow-execution-claims.controller.js';
+import { WorkflowExecutionClaimsService } from './workflow-execution-claims.service.js';
 
 const ENTITIES = [
   WorkflowRun,
@@ -71,6 +73,7 @@ const ENTITIES = [
     QuotesController,
     InternalQuotesController,
     InternalCatalogController,
+    InternalWorkflowExecutionClaimsController,
   ],
   providers: [
     N8nAuthGuard,
@@ -78,6 +81,7 @@ const ENTITIES = [
     NextBestActionsService,
     SalesMeetingsService,
     QuotesService,
+    WorkflowExecutionClaimsService,
   ],
   exports: [
     NextBestActionsService,

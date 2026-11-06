@@ -221,6 +221,31 @@ describe('AuthService', () => {
       expect((result.user as any).passwordHash).toBeUndefined();
     });
 
+    it('reports the configured JWT expiry in seconds when environment value is a string', async () => {
+      (usersRepository.findOne as jest.Mock).mockResolvedValue({ ...mockUser });
+      (usersRepository.save as jest.Mock).mockImplementation((u) =>
+        Promise.resolve(u),
+      );
+      (configService.get as jest.Mock).mockImplementation((key: string) => {
+        if (key === 'JWT_EXPIRES_IN_SECONDS') return '3600';
+        if (key === 'JWT_SECRET') return 'test-secret';
+        return undefined;
+      });
+      jest
+        .spyOn(bcrypt, 'compare')
+        .mockImplementation(() => Promise.resolve(true) as any);
+
+      const result = await service.login({
+        email: 'sales@crm.local',
+        password: 'Password123!',
+      });
+
+      expect(result.expiresIn).toBe(3600);
+      expect(jwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({ sub: mockUser.id }),
+      );
+    });
+
     it('throws UnauthorizedException when email does not exist', async () => {
       (usersRepository.findOne as jest.Mock).mockResolvedValue(null);
 
