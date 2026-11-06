@@ -1,6 +1,7 @@
 import {
   BadGatewayException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   InternalServerErrorException,
   NotFoundException,
@@ -10,8 +11,8 @@ import { CustomersService } from './customers.service.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { Customer360Status } from './dto/customer-360-callback.dto.js';
-import type { Repository } from 'typeorm';
-import type { Customer } from './entities/customer.entity.js';
+import type { DataSource, Repository } from 'typeorm';
+import { Customer } from './entities/customer.entity.js';
 import type { CustomerSegment } from './entities/customer-segment.entity.js';
 import type { Segment } from './entities/segment.entity.js';
 import type { Lead } from '../leads/entities/lead.entity.js';
@@ -19,7 +20,7 @@ import type { Interaction } from '../leads/entities/interaction.entity.js';
 import type { LeadQualification } from '../lead-intelligence/entities/lead-qualification.entity.js';
 import type { LeadEnrichment } from '../lead-intelligence/entities/lead-enrichment.entity.js';
 import type { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
-import type { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import type { LeadFollowUpEnrollment } from '../follow-up/entities/lead-follow-up-enrollment.entity.js';
 import type { FollowUpExecution } from '../follow-up/entities/follow-up-execution.entity.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
@@ -414,43 +415,6 @@ describe('CustomersService', () => {
     });
   });
 
-  describe('getCustomerInteractions and getCustomerFeedback', () => {
-    it('retrieves customer feedback safely or returns empty array when query succeeds', async () => {
-      (customersRepository.findOne as jest.Mock).mockResolvedValue({
-        ...mockCustomer,
-        convertedLeads: [],
-      });
-      (customersRepository.query as jest.Mock).mockResolvedValue([
-        { id: 'fb-1', rating: 5, comments: 'Great experience' },
-      ]);
-
-      const result = await service.getCustomerFeedback(
-        'customer-1',
-        mockSalesUser,
-      );
-
-      expect(result).toHaveLength(1);
-      expect(result[0].id).toBe('fb-1');
-    });
-
-    it('returns empty array when feedback query encounters database error', async () => {
-      (customersRepository.findOne as jest.Mock).mockResolvedValue({
-        ...mockCustomer,
-        convertedLeads: [],
-      });
-      (customersRepository.query as jest.Mock).mockRejectedValue(
-        new Error('relation "customer_feedback" does not exist'),
-      );
-
-      const result = await service.getCustomerFeedback(
-        'customer-1',
-        mockSalesUser,
-      );
-
-      expect(result).toEqual([]);
-    });
-  });
-
   describe('triggerCustomer360', () => {
     it('creates WorkflowRun with triggeredByUserId from authenticated user and dispatches webhook', async () => {
       (customersRepository.findOne as jest.Mock).mockResolvedValue(
@@ -675,6 +639,256 @@ describe('CustomersService', () => {
       expect(result.success).toBe(false);
       expect(mockRun.status).toBe(WorkflowStatus.FAILED);
       expect(mockRun.errorMessage).toBe('Gemini AI rate limit exceeded');
+    });
+
+    it('processes callback transition from RUNNING status to SUCCESS', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockRun: any = {
+        id: 'run-running',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.RUNNING,
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(mockRun);
+      (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
+
+      const result = await service.handleCustomer360Callback({
+        customerId: 'customer-1',
+        workflowRunId: 'run-running',
+        status: Customer360Status.SUCCESS,
+        summary: 'Running to success profile',
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockRun.status).toBe(WorkflowStatus.SUCCESS);
+      expect(mockRun.outputPayload.summary).toBe('Running to success profile');
+    });
+
+    it('locks row with pessimistic_write and queries within transaction when dataSource is provided', async () => {
+      const mockRun: any = {
+        id: 'run-locked',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.PENDING,
+      };
+      const mockRunsRepo = {
+        findOne: jest.fn().mockResolvedValue(mockRun),
+        save: jest.fn().mockResolvedValue(mockRun),
+      };
+      const mockCustRepo = {
+        findOne: jest.fn().mockResolvedValue(mockCustomer),
+      };
+      const mockDataSource = {
+        transaction: jest
+          .fn()
+          .mockImplementation(async (cb: (manager: any) => Promise<any>) => {
+            return cb({
+              getRepository: (entity: any) => {
+                if (entity === Customer) return mockCustRepo;
+                return mockRunsRepo;
+              },
+            });
+          }),
+      };
+
+      const txService = new CustomersService(
+        customersRepository as Repository<Customer>,
+        customerSegmentsRepository as Repository<CustomerSegment>,
+        segmentsRepository as Repository<Segment>,
+        leadsRepository as Repository<Lead>,
+        interactionsRepository as Repository<Interaction>,
+        qualificationsRepository as Repository<LeadQualification>,
+        enrichmentsRepository as Repository<LeadEnrichment>,
+        scoresRepository as Repository<LeadScore>,
+        workflowRunsRepository as Repository<WorkflowRun>,
+        enrollmentsRepository as Repository<LeadFollowUpEnrollment>,
+        executionsRepository as Repository<FollowUpExecution>,
+        configService as ConfigService,
+        mockDataSource as unknown as DataSource,
+      );
+
+      const result = await txService.handleCustomer360Callback({
+        customerId: 'customer-1',
+        workflowRunId: 'run-locked',
+        status: Customer360Status.SUCCESS,
+        summary: 'Transaction locked summary',
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockDataSource.transaction).toHaveBeenCalled();
+      expect(mockRunsRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 'run-locked' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(mockRunsRepo.save).toHaveBeenCalled();
+    });
+
+    it('returns idempotent response for duplicate SUCCESS callback with matching payload', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockCompletedRun: any = {
+        id: 'run-success',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.SUCCESS,
+        outputPayload: {
+          summary: 'Original executive summary',
+        },
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCompletedRun,
+      );
+
+      const result = await service.handleCustomer360Callback({
+        customerId: 'customer-1',
+        workflowRunId: 'run-success',
+        status: Customer360Status.SUCCESS,
+        summary: 'Original executive summary',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.workflowRunId).toBe('run-success');
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('throws ConflictException when duplicate SUCCESS callback arrives with conflicting summary payload', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockCompletedRun: any = {
+        id: 'run-success-conflict',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.SUCCESS,
+        outputPayload: {
+          summary: 'Original executive summary',
+        },
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCompletedRun,
+      );
+
+      await expect(
+        service.handleCustomer360Callback({
+          customerId: 'customer-1',
+          workflowRunId: 'run-success-conflict',
+          status: Customer360Status.SUCCESS,
+          summary: 'Conflicting new executive summary',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('returns idempotent response for duplicate FAILED callback with matching error message', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockFailedRun: any = {
+        id: 'run-failed-dup',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Initial provider failure',
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
+        mockFailedRun,
+      );
+
+      const result = await service.handleCustomer360Callback({
+        customerId: 'customer-1',
+        workflowRunId: 'run-failed-dup',
+        status: Customer360Status.FAILED,
+        errorMessage: 'Initial provider failure',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.workflowRunId).toBe('run-failed-dup');
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('throws ConflictException when duplicate FAILED callback arrives with conflicting error message', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockFailedRun: any = {
+        id: 'run-failed-err-conflict',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Initial provider failure',
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
+        mockFailedRun,
+      );
+
+      await expect(
+        service.handleCustomer360Callback({
+          customerId: 'customer-1',
+          workflowRunId: 'run-failed-err-conflict',
+          status: Customer360Status.FAILED,
+          errorMessage: 'Completely different error reason',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('throws ConflictException (409) when late FAILED callback arrives for an already SUCCESS run', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockCompletedRun: any = {
+        id: 'run-already-success',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.SUCCESS,
+        outputPayload: {
+          summary: 'Original executive summary',
+        },
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCompletedRun,
+      );
+
+      await expect(
+        service.handleCustomer360Callback({
+          customerId: 'customer-1',
+          workflowRunId: 'run-already-success',
+          status: Customer360Status.FAILED,
+          errorMessage: 'Late timeout or error',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(mockCompletedRun.status).toBe(WorkflowStatus.SUCCESS);
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('throws ConflictException (409) when late SUCCESS callback arrives for an already FAILED run', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockFailedRun: any = {
+        id: 'run-already-failed',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Timeout error',
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
+        mockFailedRun,
+      );
+
+      await expect(
+        service.handleCustomer360Callback({
+          customerId: 'customer-1',
+          workflowRunId: 'run-already-failed',
+          status: Customer360Status.SUCCESS,
+          summary: 'Late success summary',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(mockFailedRun.status).toBe(WorkflowStatus.FAILED);
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
     });
   });
 });

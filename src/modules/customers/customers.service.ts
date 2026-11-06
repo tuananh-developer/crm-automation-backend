@@ -1,15 +1,17 @@
 import {
   BadGatewayException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
 import { Segment } from './entities/segment.entity.js';
@@ -76,6 +78,9 @@ export class CustomersService {
     private readonly executionsRepository: Repository<FollowUpExecution>,
 
     private readonly configService: ConfigService,
+
+    @Optional()
+    private readonly dataSource?: DataSource,
   ) {}
 
   async findAll(
@@ -551,35 +556,6 @@ export class CustomersService {
   }
 
   /**
-   * Retrieves feedback history for a customer (for n8n Node 8).
-   */
-  async getCustomerFeedback(
-    customerId: string,
-    user?: AuthenticatedUser,
-  ): Promise<any[]> {
-    const customer = await this.customersRepository.findOne({
-      where: { id: customerId },
-      relations: { convertedLeads: true },
-    });
-    if (!customer) {
-      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
-    }
-    this.checkCustomerAccess(customer, user);
-
-    try {
-      const feedback: unknown = await this.customersRepository.query(
-        `SELECT * FROM customer_feedback WHERE customer_id = $1 ORDER BY created_at DESC`,
-        [customerId],
-      );
-      return Array.isArray(feedback)
-        ? (feedback as Record<string, unknown>[])
-        : [];
-    } catch {
-      return [];
-    }
-  }
-
-  /**
    * Initiates AI Customer 360 analysis workflow (T12-WF05).
    * Creates a correlated WorkflowRun and dispatches an authenticated internal webhook to n8n.
    * Enforces object-level authorization and binds triggeredByUserId to authenticated caller.
@@ -687,83 +663,156 @@ export class CustomersService {
   /**
    * Receives AI Customer 360 callback from n8n (T12-WF05).
    * Validates correlation between workflowRunId, customerId, and workflowName.
-   * Rejects untrusted/unknown runs and accurately reports workflow outcome.
+   * Locks WorkflowRun in transaction to prevent out-of-order terminal state transitions.
+   * Only allows transitions from active states (PENDING/RUNNING).
+   * Returns idempotent response for duplicate matching callbacks, and 409 ConflictException for conflicting ones.
    */
   async handleCustomer360Callback(
     dto: Customer360CallbackDto,
   ): Promise<Customer360CallbackResponseDto> {
-    const customer = await this.customersRepository.findOne({
-      where: { id: dto.customerId },
-    });
+    const processCallback = async (repos: {
+      workflowRunsRepo: Repository<WorkflowRun>;
+      customersRepo: Repository<Customer>;
+    }) => {
+      const customer = await repos.customersRepo.findOne({
+        where: { id: dto.customerId },
+      });
 
-    if (!customer) {
-      throw new NotFoundException(
-        `Customer with ID '${dto.customerId}' not found`,
+      if (!customer) {
+        throw new NotFoundException(
+          `Customer with ID '${dto.customerId}' not found`,
+        );
+      }
+
+      const workflowRun = await repos.workflowRunsRepo.findOne({
+        where: { id: dto.workflowRunId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!workflowRun) {
+        throw new NotFoundException(
+          `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+        );
+      }
+
+      if (workflowRun.customerId !== customer.id) {
+        throw new BadRequestException(
+          `WorkflowRun '${workflowRun.id}' belongs to customer '${workflowRun.customerId}', not '${customer.id}'`,
+        );
+      }
+
+      if (workflowRun.workflowName !== 't12-wf05-customer-360') {
+        throw new BadRequestException(
+          `WorkflowRun '${workflowRun.id}' is associated with workflow '${workflowRun.workflowName}', not 't12-wf05-customer-360'`,
+        );
+      }
+
+      const isSuccess = dto.status === Customer360Status.SUCCESS;
+      const targetStatus = isSuccess
+        ? WorkflowStatus.SUCCESS
+        : WorkflowStatus.FAILED;
+
+      const isActive =
+        workflowRun.status === WorkflowStatus.PENDING ||
+        workflowRun.status === WorkflowStatus.RUNNING;
+
+      if (!isActive) {
+        // Run has already concluded in a terminal state
+        if (workflowRun.status !== targetStatus) {
+          throw new ConflictException(
+            `Conflict: WorkflowRun '${workflowRun.id}' is already in terminal state '${workflowRun.status}', cannot transition to '${targetStatus}'`,
+          );
+        }
+
+        const existingPayload = workflowRun.outputPayload as Record<
+          string,
+          unknown
+        > | null;
+        if (isSuccess) {
+          if (
+            dto.summary &&
+            existingPayload?.summary &&
+            dto.summary !== existingPayload.summary
+          ) {
+            throw new ConflictException(
+              `Conflict: WorkflowRun '${workflowRun.id}' already completed with a conflicting summary payload`,
+            );
+          }
+        } else {
+          if (
+            dto.errorMessage &&
+            workflowRun.errorMessage &&
+            dto.errorMessage !== workflowRun.errorMessage
+          ) {
+            throw new ConflictException(
+              `Conflict: WorkflowRun '${workflowRun.id}' already failed with a conflicting error message`,
+            );
+          }
+        }
+
+        this.logger.warn(
+          `Idempotent duplicate Customer 360 callback detected for workflowRunId=${workflowRun.id}`,
+        );
+        return {
+          success: isSuccess,
+          customerId: customer.id,
+          workflowRunId: workflowRun.id,
+        };
+      }
+
+      // Transition from active state to terminal state
+      workflowRun.status = targetStatus;
+      workflowRun.finishedAt = new Date();
+      workflowRun.errorMessage = dto.errorMessage ?? null;
+      workflowRun.outputPayload = {
+        summary: dto.summary ?? null,
+        keyStrengths: dto.keyStrengths || [],
+        potentialRisks: dto.potentialRisks || [],
+        growthOpportunities: dto.growthOpportunities || [],
+        recommendedNextAction: dto.recommendedNextAction ?? null,
+        sourceCoverage: dto.sourceCoverage || {
+          crmProfile: 'AVAILABLE',
+          interactions: 'EMPTY',
+          leadIntelligence: 'EMPTY',
+          followUps: 'EMPTY',
+          segments: 'EMPTY',
+          customerIssues: 'NOT_CONNECTED',
+          customerFeedback: 'NOT_CONNECTED',
+        },
+        rawAIOutput: dto.rawAIOutput ?? null,
+        modelInfo: {
+          provider: 'google',
+          model:
+            this.configService.get<string>('GEMINI_MODEL') ||
+            'gemini-3.5-flash-lite',
+        },
+        evaluatedAt: new Date().toISOString(),
+      };
+
+      await repos.workflowRunsRepo.save(workflowRun);
+      this.logger.log(
+        `Updated WorkflowRun ${workflowRun.id} status=${workflowRun.status} for Customer 360 of customer ${customer.id}`,
       );
-    }
 
-    const workflowRun = await this.workflowRunsRepository.findOne({
-      where: { id: dto.workflowRunId },
-    });
-
-    if (!workflowRun) {
-      throw new NotFoundException(
-        `WorkflowRun with ID '${dto.workflowRunId}' not found`,
-      );
-    }
-
-    if (workflowRun.customerId !== customer.id) {
-      throw new BadRequestException(
-        `WorkflowRun '${workflowRun.id}' belongs to customer '${workflowRun.customerId}', not '${customer.id}'`,
-      );
-    }
-
-    if (workflowRun.workflowName !== 't12-wf05-customer-360') {
-      throw new BadRequestException(
-        `WorkflowRun '${workflowRun.id}' is associated with workflow '${workflowRun.workflowName}', not 't12-wf05-customer-360'`,
-      );
-    }
-
-    const isSuccess = dto.status === Customer360Status.SUCCESS;
-    workflowRun.status = isSuccess
-      ? WorkflowStatus.SUCCESS
-      : WorkflowStatus.FAILED;
-    workflowRun.finishedAt = new Date();
-    workflowRun.errorMessage = dto.errorMessage ?? null;
-    workflowRun.outputPayload = {
-      summary: dto.summary ?? null,
-      keyStrengths: dto.keyStrengths || [],
-      potentialRisks: dto.potentialRisks || [],
-      growthOpportunities: dto.growthOpportunities || [],
-      recommendedNextAction: dto.recommendedNextAction ?? null,
-      sourceCoverage: dto.sourceCoverage || {
-        crmProfile: 'AVAILABLE',
-        interactions: 'EMPTY',
-        leadIntelligence: 'EMPTY',
-        followUps: 'EMPTY',
-        segments: 'EMPTY',
-        customerIssues: 'NOT_CONNECTED',
-        customerFeedback: 'NOT_CONNECTED',
-      },
-      rawAIOutput: dto.rawAIOutput ?? null,
-      modelInfo: {
-        provider: 'google',
-        model:
-          this.configService.get<string>('GEMINI_MODEL') ||
-          'gemini-3.5-flash-lite',
-      },
-      evaluatedAt: new Date().toISOString(),
+      return {
+        success: isSuccess,
+        customerId: customer.id,
+        workflowRunId: workflowRun.id,
+      };
     };
 
-    await this.workflowRunsRepository.save(workflowRun);
-    this.logger.log(
-      `Updated WorkflowRun ${workflowRun.id} status=${workflowRun.status} for Customer 360 of customer ${customer.id}`,
-    );
+    if (this.dataSource) {
+      return await this.dataSource.transaction(async (manager) => {
+        return processCallback({
+          workflowRunsRepo: manager.getRepository(WorkflowRun),
+          customersRepo: manager.getRepository(Customer),
+        });
+      });
+    }
 
-    return {
-      success: isSuccess,
-      customerId: customer.id,
-      workflowRunId: workflowRun.id,
-    };
+    return await processCallback({
+      workflowRunsRepo: this.workflowRunsRepository,
+      customersRepo: this.customersRepository,
+    });
   }
 }

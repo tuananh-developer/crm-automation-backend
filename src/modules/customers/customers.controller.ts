@@ -142,17 +142,6 @@ export class CustomersController {
     return this.customersService.getCustomerSegments(id, user);
   }
 
-  @Get(':id/feedback')
-  @UseGuards(JwtOrN8nAuthGuard)
-  @ApiOperation({ summary: 'Get customer feedback history for Customer 360' })
-  @ApiParam({ name: 'id', description: 'UUID of the customer' })
-  getCustomerFeedback(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user?: AuthenticatedUser,
-  ) {
-    return this.customersService.getCustomerFeedback(id, user);
-  }
-
   @Post(':id/360/trigger')
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @HttpCode(HttpStatus.ACCEPTED)
@@ -211,6 +200,11 @@ export class CustomersController {
   @ApiResponse({
     status: 404,
     description: 'Customer or workflow run not found.',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Conflict: WorkflowRun already in terminal state or conflicting callback payload.',
   })
   handleCustomer360Callback(
     @Body() dto: Customer360CallbackDto,
