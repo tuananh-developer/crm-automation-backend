@@ -116,6 +116,12 @@ cp .env.example .env
 > [!NOTE]
 > Mở file `.env` và tùy chỉnh các tham số cần thiết (các giá trị mặc định trong `.env.example` đã được cấu hình sẵn sàng để kết nối trực tiếp với cụm Docker local).
 
+#### PostgreSQL TLS configuration
+
+Both the NestJS runtime connection and the TypeORM migration CLI use the same PostgreSQL SSL configuration helper. SSL-related query parameters in `DATABASE_URL` (`ssl`, `sslmode`, `sslrootcert`, `sslcert`, and `sslkey`) are extracted before the URL is passed to node-postgres, preventing them from replacing the explicit TLS options. Other query parameters, such as `application_name` and `channel_binding`, are preserved.
+
+When TLS is enabled, certificate-chain and hostname verification remain enabled. `sslrootcert`, `sslcert`, and `sslkey` may contain file paths; alternatively, `DB_SSL_CA` accepts PEM-encoded CA certificate content. Set `DB_SSL=true` for a custom database host that requires TLS but does not advertise it through the URL.
+
 ### Bước 4: Chạy Migration & Nạp dữ liệu mẫu
 ```bash
 # 1. Áp dụng toàn bộ migrations vào cơ sở dữ liệu

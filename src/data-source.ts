@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
+import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
 import { InitialSchema1727866977000 } from './database/migrations/1727866977000-InitialSchema.js';
 import { AddEnrollmentActiveUniqueIndex1728400000000 } from './database/migrations/1728400000000-AddEnrollmentActiveUniqueIndex.js';
 import { AddOutboxEventsTable1729000000000 } from './database/migrations/1729000000000-AddOutboxEventsTable.js';
@@ -9,25 +10,25 @@ import { AddT12WorkflowDomains1793476800000 } from './database/migrations/179347
 
 const isProduction = process.env.NODE_ENV === 'production';
 const dbUrl = process.env.DATABASE_URL;
-const useSsl =
-  process.env.DB_SSL === 'true' ||
-  isProduction ||
-  Boolean(
-    dbUrl &&
-    (dbUrl.includes('sslmode=require') ||
-      dbUrl.includes('supabase') ||
-      dbUrl.includes('neon.tech') ||
-      dbUrl.includes('render.com')),
-  );
-
 const sslCa = process.env.DB_SSL_CA?.split(String.raw`\n`).join('\n');
-const sslConfig = useSsl ? { rejectUnauthorized: true, ...(sslCa ? { ca: sslCa } : {}) } : false;
+const forceSsl = process.env.DB_SSL === 'true' || isProduction;
+const remoteConnection = dbUrl
+  ? resolvePostgresConnectionOptions(dbUrl, {
+      forceSsl,
+      ca: sslCa,
+    })
+  : undefined;
+const sslConfig =
+  remoteConnection?.ssl ??
+  (forceSsl
+    ? { rejectUnauthorized: true, ...(sslCa ? { ca: sslCa } : {}) }
+    : false);
 
 export const AppDataSource = new DataSource(
   dbUrl
     ? {
         type: 'postgres',
-        url: dbUrl,
+        url: remoteConnection?.url,
         ssl: sslConfig,
         synchronize: false,
         logging: !isProduction,
