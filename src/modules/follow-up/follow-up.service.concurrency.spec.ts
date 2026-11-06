@@ -13,7 +13,7 @@ import { N8nClientService } from '../../infrastructure/n8n/n8n-client.service.js
 import type { N8nFollowUpResponse } from './interfaces/follow-up-execution.interface.js';
 
 type RepositoryMock = {
-  findOne: jest.Mock;
+  findOne?: jest.Mock;
   find?: jest.Mock;
   findAndCount?: jest.Mock;
   create?: jest.Mock;
