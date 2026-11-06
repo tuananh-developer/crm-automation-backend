@@ -13,6 +13,7 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  ServiceUnavailableException,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -255,9 +256,15 @@ export class InternalN8nController {
     description: 'Unauthorized n8n webhook request.',
   })
   @ApiResponse({ status: 404, description: 'WorkflowRun not found.' })
+  @ApiResponse({
+    status: 503,
+    description: 'Data cleaning callback service is temporarily unavailable.',
+  })
   async handleDataCleaningCallback(@Body() dto: DataCleaningCallbackDto) {
     if (!this.dataCleaningService) {
-      throw new Error('DataCleaningService is not available');
+      throw new ServiceUnavailableException(
+        'Data cleaning callback service is temporarily unavailable',
+      );
     }
     return this.dataCleaningService.handleCallback(dto);
   }
