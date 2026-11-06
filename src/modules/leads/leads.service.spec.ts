@@ -488,6 +488,10 @@ describe('LeadsService', () => {
 
       const result = await service.convert('lead-123', adminActor);
 
+      expect(leadsRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'lead-123' },
+        lock: { mode: 'pessimistic_write' },
+      });
       expect(customersRepository.find).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { email: 'john.doe@example.com' },

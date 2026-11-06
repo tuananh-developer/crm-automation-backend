@@ -112,7 +112,13 @@
       "node_modules/(?!(@nestjs)/)"
     ],
     "collectCoverageFrom": [
-      "**/*.(t|j)s"
+      "**/*.(t|j)s",
+      "!**/*.spec.ts",
+      "!**/*.e2e-spec.ts",
+      "!**/*.module.ts",
+      "!**/index.ts",
+      "!**/main.ts",
+      "!**/data-source.ts"
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"

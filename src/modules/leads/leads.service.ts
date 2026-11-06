@@ -359,7 +359,13 @@ export class LeadsService {
       const customerRepository = manager.getRepository(Customer);
       const auditLogRepository = manager.getRepository(AuditLog);
 
-      const lead = await leadRepository.findOne({ where: { id } });
+      // Lock the Lead row before checking its conversion state. The email advisory
+      // lock prevents duplicate Customers, but without this row lock two requests
+      // for the same Lead can both read QUALIFIED and write duplicate audit rows.
+      const lead = await leadRepository.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
       if (!lead) {
         throw new NotFoundException(`Lead with ID '${id}' not found`);
       }

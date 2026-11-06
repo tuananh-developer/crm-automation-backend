@@ -421,6 +421,19 @@ describe('LeadIntelligenceService', () => {
       expect(workflowRunsRepo.create).not.toHaveBeenCalled();
     });
 
+    it('should hide an unassigned Lead from Sales users', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockLead,
+        ownerId: null,
+      });
+
+      await expect(
+        service.triggerQualification('lead-123', undefined, actor),
+      ).rejects.toThrow(NotFoundException);
+      expect(workflowRunsRepo.create).not.toHaveBeenCalled();
+      expect(workflowRunsRepo.save).not.toHaveBeenCalled();
+    });
+
     it('should set status to QUALIFYING, create WorkflowRun, and publish event', async () => {
       (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
       (leadsRepo.save as jest.Mock).mockImplementation((l) =>
@@ -895,6 +908,19 @@ describe('LeadIntelligenceService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
+    it('should hide an unassigned Lead from Sales users', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockLead,
+        ownerId: null,
+      });
+
+      await expect(
+        service.triggerScoring('lead-123', undefined, actor),
+      ).rejects.toThrow(NotFoundException);
+      expect(workflowRunsRepo.create).not.toHaveBeenCalled();
+      expect(scoresRepo.create).not.toHaveBeenCalled();
+    });
+
     it('should aggregate context, create WorkflowRun, and publish event', async () => {
       (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
       (qualificationsRepo.findOne as jest.Mock).mockResolvedValue(
@@ -1202,6 +1228,19 @@ describe('LeadIntelligenceService', () => {
       await expect(
         service.triggerEnrichment('invalid-id', undefined, actor),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should hide an unassigned Lead from Sales users', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockLead,
+        ownerId: null,
+      });
+
+      await expect(
+        service.triggerEnrichment('lead-123', undefined, actor),
+      ).rejects.toThrow(NotFoundException);
+      expect(workflowRunsRepo.create).not.toHaveBeenCalled();
+      expect(enrichmentsRepo.create).not.toHaveBeenCalled();
     });
 
     it('should create WorkflowRun, create pending LeadEnrichment, and publish event with default provider', async () => {
