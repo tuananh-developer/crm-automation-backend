@@ -61,9 +61,39 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
 
   afterAll(async () => {
     if (sourceId) {
+      const rows = (await dataSource.query(
+        'SELECT id, converted_customer_id FROM leads WHERE source_id = $1;',
+        [sourceId],
+      )) as Array<{ id: string; converted_customer_id: string | null }>;
+      const leadIds = rows.map((row) => row.id);
+      const customerIds = [
+        ...new Set(
+          rows.flatMap((row) =>
+            row.converted_customer_id ? [row.converted_customer_id] : [],
+          ),
+        ),
+      ];
+
+      if (leadIds.length > 0) {
+        await dataSource.query(
+          "DELETE FROM audit_logs WHERE entity_type = 'Lead' AND entity_id = ANY($1::uuid[]);",
+          [leadIds],
+        );
+      }
+      if (customerIds.length > 0) {
+        await dataSource.query(
+          "DELETE FROM audit_logs WHERE entity_type = 'Customer' AND entity_id = ANY($1::uuid[]);",
+          [customerIds],
+        );
+      }
       await dataSource.query('DELETE FROM leads WHERE source_id = $1;', [
         sourceId,
       ]);
+      if (customerIds.length > 0) {
+        await dataSource.query('DELETE FROM customers WHERE id = ANY($1::uuid[]);', [
+          customerIds,
+        ]);
+      }
       await dataSource.query('DELETE FROM lead_sources WHERE id = $1;', [
         sourceId,
       ]);
@@ -139,5 +169,43 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
 
     // At least one request beyond the limit (10/min) must receive 429
     expect(statuses).toContain(429);
+  });
+
+  it('6. should serialize concurrent conversions and write one Customer and one AuditLog', async () => {
+    if (!createdLeadId) {
+      throw new Error('The Lead fixture must be created before conversion');
+    }
+
+    await dataSource.query(
+      "UPDATE leads SET status = 'QUALIFIED' WHERE id = $1;",
+      [createdLeadId],
+    );
+
+    const responses = await Promise.all([
+      api.post(`/api/v1/leads/${createdLeadId}/convert`).send({}),
+      api.post(`/api/v1/leads/${createdLeadId}/convert`).send({}),
+    ]);
+
+    expect(responses.filter((response) => response.status === 201)).toHaveLength(1);
+    expect(responses.filter((response) => response.status === 409)).toHaveLength(1);
+
+    const [lead] = await dataSource.query(
+      'SELECT status, converted_customer_id FROM leads WHERE id = $1;',
+      [createdLeadId],
+    );
+    expect(lead.status).toBe('CONVERTED');
+    expect(lead.converted_customer_id).toBeTruthy();
+
+    const [customerCount] = await dataSource.query(
+      'SELECT COUNT(*)::int AS count FROM customers WHERE LOWER(email) = LOWER($1);',
+      [testEmail],
+    );
+    expect(Number(customerCount.count)).toBe(1);
+
+    const [auditCount] = await dataSource.query(
+      "SELECT COUNT(*)::int AS count FROM audit_logs WHERE entity_type = 'Lead' AND entity_id = $1 AND action = 'LEAD_CONVERTED';",
+      [createdLeadId],
+    );
+    expect(Number(auditCount.count)).toBe(1);
   });
 });
