@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from '@nestjs/common';
 import { InternalN8nController } from './internal-n8n.controller.js';
 import type { LeadIntelligenceService } from './lead-intelligence.service.js';
 import type { DataCleaningService } from '../data-cleaning/data-cleaning.service.js';
@@ -252,7 +253,7 @@ describe('InternalN8nController', () => {
       });
     });
 
-    it('should throw Error if DataCleaningService is not injected', async () => {
+    it('should throw ServiceUnavailableException if DataCleaningService is not injected', async () => {
       const standaloneController = new InternalN8nController(
         leadIntelligenceService as LeadIntelligenceService,
         undefined,
@@ -274,7 +275,7 @@ describe('InternalN8nController', () => {
 
       await expect(
         standaloneController.handleDataCleaningCallback(dto),
-      ).rejects.toThrow('DataCleaningService is not available');
+      ).rejects.toThrow(ServiceUnavailableException);
     });
   });
 });
