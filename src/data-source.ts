@@ -2,6 +2,9 @@ import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import { InitialSchema1727866977000 } from './database/migrations/1727866977000-InitialSchema.js';
 import { AddEnrollmentActiveUniqueIndex1728400000000 } from './database/migrations/1728400000000-AddEnrollmentActiveUniqueIndex.js';
+import { AddOutboxEventsTable1729000000000 } from './database/migrations/1729000000000-AddOutboxEventsTable.js';
+import { AddOutboxProcessingLease1793476900000 } from './database/migrations/1793476900000-AddOutboxProcessingLease.js';
+import { AddT12WorkflowDomains1793476800000 } from './database/migrations/1793476800000-AddT12WorkflowDomains.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const dbUrl = process.env.DATABASE_URL;
@@ -16,7 +19,8 @@ const useSsl =
       dbUrl.includes('render.com')),
   );
 
-const sslConfig = useSsl ? { rejectUnauthorized: false } : false;
+const sslCa = process.env.DB_SSL_CA?.split(String.raw`\n`).join('\n');
+const sslConfig = useSsl ? { rejectUnauthorized: true, ...(sslCa ? { ca: sslCa } : {}) } : false;
 
 export const AppDataSource = new DataSource(
   dbUrl
@@ -30,6 +34,9 @@ export const AppDataSource = new DataSource(
         migrations: [
           InitialSchema1727866977000,
           AddEnrollmentActiveUniqueIndex1728400000000,
+          AddOutboxEventsTable1729000000000,
+          AddT12WorkflowDomains1793476800000,
+          AddOutboxProcessingLease1793476900000,
         ],
         migrationsTableName: 'typeorm_migrations',
       }
@@ -47,6 +54,9 @@ export const AppDataSource = new DataSource(
         migrations: [
           InitialSchema1727866977000,
           AddEnrollmentActiveUniqueIndex1728400000000,
+          AddOutboxEventsTable1729000000000,
+          AddT12WorkflowDomains1793476800000,
+          AddOutboxProcessingLease1793476900000,
         ],
         migrationsTableName: 'typeorm_migrations',
       },

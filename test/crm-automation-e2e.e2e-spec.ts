@@ -11,6 +11,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
 
   // Shared state across the 9 use cases
   let testUserId: string;
+  let accessToken: string;
   let sourceId: string;
   let leadId: string;
   let customerId: string;
@@ -23,6 +24,15 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   const N8N_KEY = 'e2e-test-n8n-secret-key';
   const timestamp = Date.now();
   const testEmail = `enterprise.lead.${timestamp}@innovate-tech.io`;
+
+  const api = {
+    get: (path: string) =>
+      request(app.getHttpServer()).get(path).set('Authorization', `Bearer ${accessToken}`),
+    post: (path: string) =>
+      request(app.getHttpServer()).post(path).set('Authorization', `Bearer ${accessToken}`),
+    patch: (path: string) =>
+      request(app.getHttpServer()).patch(path).set('Authorization', `Bearer ${accessToken}`),
+  };
 
   beforeAll(async () => {
     process.env.N8N_API_KEY = N8N_KEY;
@@ -45,17 +55,24 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
 
     dataSource = app.get(DataSource);
 
-    // Get an active sales user from seeded data
-    const users = await dataSource.query(
-      `SELECT id FROM users WHERE role = 'SALES' AND status = 'ACTIVE' LIMIT 1;`,
-    );
-    testUserId = users[0]?.id;
+    const registration = await request(app.getHttpServer())
+      .post('/api/v1/auth/register')
+      .send({
+        name: 'CRM E2E Sales',
+        email: `crm.e2e.${timestamp}@example.test`,
+        password: 'E2eStrongPassword123!',
+      });
+    expect(registration.status).toBe(201);
+    accessToken = registration.body.accessToken;
+    testUserId = registration.body.user.id;
 
-    // Get or create lead source
     const sources = await dataSource.query(
-      `SELECT id FROM lead_sources WHERE is_active = true LIMIT 1;`,
+      `INSERT INTO lead_sources (name, description, is_active)
+       VALUES ($1, $2, true)
+       RETURNING id;`,
+      [`CRM E2E Source ${timestamp}`, 'Source created by the E2E database fixture'],
     );
-    sourceId = sources[0]?.id;
+    sourceId = sources[0].id;
   });
 
   afterAll(async () => {
@@ -131,7 +148,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // UC01: Create Lead
   // ─────────────────────────────────────────────────────────────────────────
   it('UC01: should create a new Lead via POST /api/v1/leads', async () => {
-    const res = await request(app.getHttpServer()).post('/api/v1/leads').send({
+    const res = await api.post('/api/v1/leads').send({
       firstName: 'Katherine',
       lastName: 'Johnson',
       email: testEmail,
@@ -154,10 +171,17 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // UC02: AI Lead Qualification
   // ─────────────────────────────────────────────────────────────────────────
   it('UC02: should qualify Lead via POST /api/v1/lead-intelligence/qualification/callback', async () => {
+    const trigger = await api
+      .post(`/api/v1/lead-intelligence/qualify/${leadId}`)
+      .send({});
+    expect(trigger.status).toBe(202);
+
     const res = await request(app.getHttpServer())
-      .post('/api/v1/lead-intelligence/qualification/callback')
+      .post('/api/v1/internal/n8n/lead-qualification/callback')
+      .set('x-n8n-api-key', N8N_KEY)
       .send({
         leadId,
+        workflowRunId: trigger.body.workflowRunId,
         status: 'QUALIFIED',
         confidence: 0.96,
         intent: 'High purchase intent for enterprise platform',
@@ -167,7 +191,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     expect([200, 201]).toContain(res.status);
 
     // Verify lead status transitioned to QUALIFIED
-    const check = await request(app.getHttpServer()).get(
+    const check = await api.get(
       `/api/v1/leads/${leadId}`,
     );
     expect(check.status).toBe(200);
@@ -178,13 +202,19 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // UC03: AI Lead Enrichment
   // ─────────────────────────────────────────────────────────────────────────
   it('UC03: should enrich Lead profile via POST /api/v1/enrichment/callback', async () => {
+    const trigger = await api
+      .post(`/api/v1/lead-intelligence/enrich/${leadId}`)
+      .send({ provider: 'mock' });
+    expect(trigger.status).toBe(202);
+
     const res = await request(app.getHttpServer())
-      .post('/api/v1/enrichment/callback')
+      .post('/api/v1/internal/n8n/lead-enrichment/callback')
       .set('x-n8n-api-key', N8N_KEY)
       .send({
         leadId,
+        workflowRunId: trigger.body.workflowRunId,
         status: 'SUCCESS',
-        provider: 'clearbit',
+        provider: 'mock',
         companyName: 'InnovateTech Systems Global',
         companyWebsite: 'https://innovatetech.io',
         companyIndustry: 'Cloud Infrastructure',
@@ -201,11 +231,17 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // UC04: AI Lead Scoring
   // ─────────────────────────────────────────────────────────────────────────
   it('UC04: should calculate & record Lead score via POST /api/v1/scoring/callback', async () => {
+    const trigger = await api
+      .post(`/api/v1/scoring/score/${leadId}`)
+      .send({});
+    expect(trigger.status).toBe(202);
+
     const res = await request(app.getHttpServer())
-      .post('/api/v1/scoring/callback')
+      .post('/api/v1/internal/n8n/lead-scoring/callback')
       .set('x-n8n-api-key', N8N_KEY)
       .send({
         leadId,
+        workflowRunId: trigger.body.workflowRunId,
         status: 'SUCCESS',
         score: 92,
         label: 'HOT',
@@ -225,20 +261,19 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // ─────────────────────────────────────────────────────────────────────────
   it('UC05: should create Follow-up Sequence and enroll the qualified Lead', async () => {
     // 1. Create sequence
-    const seqRes = await request(app.getHttpServer())
+    const seqRes = await api
       .post('/api/v1/follow-up/sequences')
       .send({
         name: `Cadence E2E Integration ${timestamp}`,
         description: 'Automated outreach cadence for qualified leads',
         isActive: true,
-        createdBy: testUserId,
       });
 
     expect([200, 201]).toContain(seqRes.status);
     sequenceId = seqRes.body.id;
 
     // 2. Add step to sequence
-    const stepRes = await request(app.getHttpServer())
+    const stepRes = await api
       .post(`/api/v1/follow-up/sequences/${sequenceId}/steps`)
       .send({
         stepOrder: 1,
@@ -254,11 +289,10 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     stepId = stepRes.body.id;
 
     // 3. Enroll lead
-    const enrollRes = await request(app.getHttpServer())
+    const enrollRes = await api
       .post(`/api/v1/follow-up/sequences/${sequenceId}/enroll`)
       .send({
         leadId,
-        assignedBy: testUserId,
       });
 
     expect([200, 201]).toContain(enrollRes.status);
@@ -271,7 +305,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // UC06: Execute Follow-up
   // ─────────────────────────────────────────────────────────────────────────
   it('UC06: should record Follow-up step execution via POST /api/v1/follow-ups/executions', async () => {
-    const res = await request(app.getHttpServer())
+    const res = await api
       .post('/api/v1/follow-ups/executions')
       .send({
         enrollmentId,
@@ -286,7 +320,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // ─────────────────────────────────────────────────────────────────────────
   it('UC07: should create, assign, and resolve a Human Review task', async () => {
     // 1. Create review task
-    const createRes = await request(app.getHttpServer())
+    const createRes = await api
       .post('/api/v1/review-tasks')
       .send({
         leadId,
@@ -297,7 +331,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     reviewTaskId = createRes.body.id;
 
     // 2. Assign reviewer
-    const assignRes = await request(app.getHttpServer())
+    const assignRes = await api
       .patch(`/api/v1/review-tasks/${reviewTaskId}/assign`)
       .send({
         reviewerId: testUserId,
@@ -306,7 +340,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     expect([200, 201]).toContain(assignRes.status);
 
     // 3. Start review
-    const startRes = await request(app.getHttpServer()).patch(
+    const startRes = await api.patch(
       `/api/v1/review-tasks/${reviewTaskId}/start`,
     );
 
@@ -314,7 +348,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     expect(startRes.body.status).toBe('IN_REVIEW');
 
     // 4. Resolve review with APPROVE
-    const resolveRes = await request(app.getHttpServer())
+    const resolveRes = await api
       .patch(`/api/v1/review-tasks/${reviewTaskId}/resolve`)
       .send({
         decision: 'APPROVE',
@@ -329,18 +363,16 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // UC08: Convert Lead to Customer
   // ─────────────────────────────────────────────────────────────────────────
   it('UC08: should convert qualified Lead into Customer via POST /api/v1/leads/:id/convert', async () => {
-    const res = await request(app.getHttpServer())
+    const res = await api
       .post(`/api/v1/leads/${leadId}/convert`)
-      .send({
-        userId: testUserId,
-      });
+      .send({});
 
     expect([200, 201]).toContain(res.status);
     expect(res.body.customer.id).toBeDefined();
     customerId = res.body.customer.id;
 
     // Verify lead status updated to CONVERTED
-    const leadCheck = await request(app.getHttpServer()).get(
+    const leadCheck = await api.get(
       `/api/v1/leads/${leadId}`,
     );
     expect(leadCheck.body.status).toBe('CONVERTED');
@@ -351,10 +383,9 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // ─────────────────────────────────────────────────────────────────────────
   it('UC09: should create Segment and evaluate Customer assignment', async () => {
     // 1. Create segment
-    const segRes = await request(app.getHttpServer())
+    const segRes = await api
       .post('/api/v1/segments')
       .send({
-        createdBy: testUserId,
         name: `Enterprise VIP Segment ${timestamp}`,
         description: 'High ARR and verified enterprise customers',
         criteria: {
@@ -376,7 +407,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     segmentId = segRes.body.id;
 
     // 2. Evaluate customer into segment
-    const evalRes = await request(app.getHttpServer())
+    const evalRes = await api
       .post(`/api/v1/segments/${segmentId}/evaluate`)
       .send({
         customerId,

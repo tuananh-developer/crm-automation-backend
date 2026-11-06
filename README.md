@@ -26,7 +26,9 @@
 - **Workflow & AI Engine**: [n8n](https://n8n.io/) tích hợp Google Gemini AI 1.5 Pro.
 - **Bảo mật & Phân quyền**: JWT Token, Passport JWT Strategy, Bcrypt Password Hashing, RBAC Role Guards (`ADMIN`, `SALES`).
 - **Tài liệu API**: [Swagger OpenAPI](https://swagger.io/) (`/api/docs`).
-- **Kiểm thử**: Jest (Node ESM VM modules) với 24 Test Suites (243/243 Unit Tests Pass) và 15 End-to-End Integration Tests.
+- **Kiểm thử**: Jest (Node ESM VM modules); unit specs nằm trong `src/`, E2E specs dùng cấu hình `test/jest-e2e.json`. Trạng thái pass phải được xác nhận bằng lần chạy hiện tại, không suy ra từ số lượng test cũ.
+
+User management routes are protected by JWT and Admin role checks. Sales assignment pickers use the limited `GET /api/v1/users/assignees` response; Admin account changes are audited. Public registration always receives the Sales role.
 
 ---
 

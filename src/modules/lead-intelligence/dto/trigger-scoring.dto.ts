@@ -1,7 +1,2 @@
-import { IsOptional, IsUUID } from 'class-validator';
-
-export class TriggerScoringDto {
-  @IsOptional()
-  @IsUUID()
-  userId?: string;
-}
+/** Scoring requests use the authenticated actor from the JWT. */
+export class TriggerScoringDto {}
