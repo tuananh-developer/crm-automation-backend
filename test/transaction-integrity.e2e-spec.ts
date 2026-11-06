@@ -126,6 +126,10 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
         [createdLeadIds],
       );
       await dataSource.query(
+        "DELETE FROM audit_logs WHERE entity_type = 'ReviewTask' AND entity_id IN (SELECT id FROM review_tasks WHERE lead_id = ANY($1::uuid[]));",
+        [createdLeadIds],
+      );
+      await dataSource.query(
         'DELETE FROM review_tasks WHERE lead_id = ANY($1::uuid[]);',
         [createdLeadIds],
       );
