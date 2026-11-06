@@ -812,6 +812,79 @@ describe('LeadIntelligenceService', () => {
       expect(reviewTasksRepo.create).not.toHaveBeenCalled();
       expect(notificationsRepo.create).not.toHaveBeenCalled();
     });
+
+    it('locks the Lead row before checking for a pending review across workflow runs', async () => {
+      const pendingTask: ReviewTask = {
+        id: 'pending-task-for-lead',
+        leadId: 'lead-123',
+        workflowRunId: 'another-workflow-run',
+        assignedTo: 'user-owner-123',
+        status: ReviewStatus.PENDING,
+        reason: 'Existing pending review',
+        decision: null,
+        reviewComment: null,
+        createdAt: new Date(),
+        startedAt: null,
+        resolvedAt: null,
+      };
+
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockLead,
+        status: LeadStatus.QUALIFYING,
+      });
+      (qualificationsRepo.create as jest.Mock).mockReturnValue(mockQualification);
+      (qualificationsRepo.save as jest.Mock).mockResolvedValue(mockQualification);
+      (workflowRunsRepo.save as jest.Mock).mockImplementation((run) =>
+        Promise.resolve(run),
+      );
+      (reviewTasksRepo.findOne as jest.Mock).mockResolvedValue(pendingTask);
+      (leadsRepo.save as jest.Mock).mockImplementation((lead) =>
+        Promise.resolve(lead),
+      );
+
+      const repositories: Record<string, unknown> = {
+        Lead: leadsRepo,
+        LeadQualification: qualificationsRepo,
+        WorkflowRun: workflowRunsRepo,
+        ReviewTask: reviewTasksRepo,
+        Notification: notificationsRepo,
+      };
+      const manager = {
+        getRepository: jest.fn((entity: { name: string }) => repositories[entity.name]),
+      };
+      const transactionalDataSource = {
+        transaction: jest.fn((callback: (value: typeof manager) => Promise<unknown>) =>
+          callback(manager),
+        ),
+      };
+      const transactionalService = new LeadIntelligenceService(
+        qualificationsRepo as Repository<LeadQualification>,
+        leadsRepo as Repository<Lead>,
+        workflowRunsRepo as Repository<WorkflowRun>,
+        reviewTasksRepo as Repository<ReviewTask>,
+        notificationsRepo as Repository<Notification>,
+        rabbitmqService as RabbitMQService,
+        scoresRepo as Repository<LeadScore>,
+        interactionsRepo as Repository<Interaction>,
+        enrichmentsRepo as Repository<LeadEnrichment>,
+        transactionalDataSource as unknown as DataSource,
+      );
+
+      const result = await transactionalService.handleQualificationCallback({
+        leadId: 'lead-123',
+        workflowRunId: 'wf-run-123',
+        status: QualificationStatus.NEEDS_REVIEW,
+        confidence: 0.6,
+      });
+
+      expect(leadsRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 'lead-123' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(result.reviewTaskId).toBe(pendingTask.id);
+      expect(reviewTasksRepo.create).not.toHaveBeenCalled();
+      expect(notificationsRepo.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('triggerScoring', () => {
