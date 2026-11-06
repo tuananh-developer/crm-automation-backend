@@ -580,7 +580,7 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     await dataSource.query(`
       CREATE FUNCTION ${functionName}() RETURNS trigger
       LANGUAGE plpgsql
-      AS $
+      AS $useraudit$
       BEGIN
         IF NEW.entity_type = 'User'
           AND NEW.entity_id = '${userId}'::uuid
@@ -590,7 +590,7 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
         END IF;
         RETURN NEW;
       END;
-      $;
+      $useraudit$;
     `);
     await dataSource.query(`
       CREATE TRIGGER ${triggerName}
