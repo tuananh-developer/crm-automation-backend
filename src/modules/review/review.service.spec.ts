@@ -162,6 +162,7 @@ describe('ReviewService', () => {
     leadRepository = {
       findOne: jest.fn(),
       save: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
     userRepository = {
@@ -579,7 +580,11 @@ describe('ReviewService', () => {
       expect(result.resolvedAt).toBeInstanceOf(Date);
       expect(result.reviewComment).toBe('Approved');
       expect(auditLogRepository.save).toHaveBeenCalled();
-      expect(leadRepository.save).toHaveBeenCalled();
+      expect(leadRepository.update).toHaveBeenCalledWith(
+        { id: 'lead-123' },
+        { status: LeadStatus.QUALIFIED },
+      );
+      expect(leadRepository.save).not.toHaveBeenCalled();
     });
 
     it('should resolve with REJECT decision', async () => {
@@ -592,8 +597,9 @@ describe('ReviewService', () => {
 
       expect(result.status).toBe(ReviewStatus.RESOLVED);
       expect(result.decision).toBe(ReviewDecision.REJECT);
-      expect(leadRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ status: LeadStatus.LOST }),
+      expect(leadRepository.update).toHaveBeenCalledWith(
+        { id: 'lead-123' },
+        { status: LeadStatus.LOST },
       );
     });
 
@@ -608,8 +614,9 @@ describe('ReviewService', () => {
       expect(result.status).toBe(ReviewStatus.RESOLVED);
       expect(result.decision).toBe(ReviewDecision.MODIFY);
       expect(result.reviewComment).toBe('Modified');
-      expect(leadRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ status: LeadStatus.QUALIFYING }),
+      expect(leadRepository.update).toHaveBeenCalledWith(
+        { id: 'lead-123' },
+        { status: LeadStatus.QUALIFYING },
       );
     });
 
@@ -711,8 +718,9 @@ describe('ReviewService', () => {
 
       await service.resolve('review-task-123', dto, actor);
 
-      expect(leadRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ status: LeadStatus.QUALIFIED }),
+      expect(leadRepository.update).toHaveBeenCalledWith(
+        { id: 'lead-123' },
+        { status: LeadStatus.QUALIFIED },
       );
     });
 
@@ -724,8 +732,9 @@ describe('ReviewService', () => {
 
       await service.resolve('review-task-123', dto, actor);
 
-      expect(leadRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ status: LeadStatus.LOST }),
+      expect(leadRepository.update).toHaveBeenCalledWith(
+        { id: 'lead-123' },
+        { status: LeadStatus.LOST },
       );
     });
 
@@ -737,8 +746,9 @@ describe('ReviewService', () => {
 
       await service.resolve('review-task-123', dto, actor);
 
-      expect(leadRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ status: LeadStatus.QUALIFYING }),
+      expect(leadRepository.update).toHaveBeenCalledWith(
+        { id: 'lead-123' },
+        { status: LeadStatus.QUALIFYING },
       );
     });
   });
