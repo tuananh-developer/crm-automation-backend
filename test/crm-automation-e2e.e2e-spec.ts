@@ -432,9 +432,12 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
 
     // Step 1 succeeded in the previous UC06 test, so step 2 is pending.
     const pausedDelivery = holdNextDelivery();
+    // Supertest requests are lazy until a then/catch/end handler is attached.
+    // Start the HTTP call before waiting for the mocked provider to signal entry.
     const pausedRequest = api
       .post('/api/v1/follow-ups/executions')
-      .send({ enrollmentId, stepId: secondStepId });
+      .send({ enrollmentId, stepId: secondStepId })
+      .then((response) => response);
 
     await pausedDelivery.started;
     const pauseResponse = await api
@@ -488,7 +491,8 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     const cancelledDelivery = holdNextDelivery();
     const cancelledRequest = api
       .post('/api/v1/follow-ups/executions')
-      .send({ enrollmentId, stepId: fourthStepId });
+      .send({ enrollmentId, stepId: fourthStepId })
+      .then((response) => response);
 
     await cancelledDelivery.started;
     const cancelResponse = await api
