@@ -5,6 +5,7 @@ import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module.js';
 import { N8nClientService } from '../src/infrastructure/n8n/n8n-client.service.js';
 import { DataSource } from 'typeorm';
+import { FollowUpService } from '../src/modules/follow-up/follow-up.service.js';
 
 describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   let app: INestApplication<App>;
@@ -20,6 +21,8 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   let stepId: string;
   let enrollmentId: string;
   let concurrencyEnrollmentId: string;
+  let staleRecoveryEnrollmentId: string;
+  let staleRecoveryExecutionId: string;
   let reviewTaskId: string;
   let segmentId: string;
 
@@ -116,6 +119,16 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
         await dataSource.query(
           `DELETE FROM lead_follow_up_enrollments WHERE id = $1;`,
           [concurrencyEnrollmentId],
+        );
+      }
+      if (staleRecoveryEnrollmentId) {
+        await dataSource.query(
+          `DELETE FROM follow_up_executions WHERE enrollment_id = $1;`,
+          [staleRecoveryEnrollmentId],
+        );
+        await dataSource.query(
+          `DELETE FROM lead_follow_up_enrollments WHERE id = $1;`,
+          [staleRecoveryEnrollmentId],
         );
       }
       if (sequenceId) {
@@ -448,6 +461,58 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
       [concurrencyEnrollmentId, nextStepId],
     );
     expect(nextExecution.status).toBe('PENDING');
+  });
+
+  it('UC06 concurrency: two stale-recovery workers retry an execution only once', async () => {
+    const enrollmentResponse = await api
+      .post(`/api/v1/follow-up/sequences/${sequenceId}/enroll`)
+      .send({ leadId });
+
+    expect([200, 201]).toContain(enrollmentResponse.status);
+    staleRecoveryEnrollmentId = enrollmentResponse.body.enrollment.id;
+
+    const [pendingExecution] = await dataSource.query(
+      `SELECT id
+       FROM follow_up_executions
+       WHERE enrollment_id = $1 AND step_id = $2
+       ORDER BY created_at ASC
+       LIMIT 1;`,
+      [staleRecoveryEnrollmentId, stepId],
+    );
+    staleRecoveryExecutionId = pendingExecution.id;
+    await dataSource.query(
+      `UPDATE follow_up_executions
+       SET status = 'RUNNING',
+           started_at = NOW() - INTERVAL '10 minutes',
+           scheduled_at = NOW() - INTERVAL '10 minutes'
+       WHERE id = $1;`,
+      [staleRecoveryExecutionId],
+    );
+
+    const followUpService = app.get(FollowUpService);
+    await Promise.all([
+      followUpService.handleStaleRunningExecutions(),
+      followUpService.handleStaleRunningExecutions(),
+    ]);
+
+    const [execution] = await dataSource.query(
+      `SELECT status, retry_count
+       FROM follow_up_executions
+       WHERE id = $1;`,
+      [staleRecoveryExecutionId],
+    );
+    expect(execution.status).toBe('RETRYING');
+    expect(Number(execution.retry_count)).toBe(1);
+
+    const [audit] = await dataSource.query(
+      `SELECT COUNT(*)::int AS count
+       FROM audit_logs
+       WHERE entity_type = 'FollowUpExecution'
+         AND entity_id = $1
+         AND action = 'FOLLOW_UP_FAILED';`,
+      [staleRecoveryExecutionId],
+    );
+    expect(audit.count).toBe(1);
   });
 
   // ───────────────────────────────────────────────────────────────────────────
