@@ -61,10 +61,10 @@ describe('LeadsController (e2e) - Integration & Concurrency Tests', () => {
 
   afterAll(async () => {
     if (sourceId) {
-      const rows = (await dataSource.query(
+      const rows = await dataSource.query(
         'SELECT id, converted_customer_id FROM leads WHERE source_id = $1;',
         [sourceId],
-      )) as Array<{ id: string; converted_customer_id: string | null }>;
+      );
       const leadIds = rows.map((row) => row.id);
       const customerIds = [
         ...new Set(
