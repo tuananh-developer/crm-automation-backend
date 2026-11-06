@@ -80,7 +80,7 @@ describe('FollowUpService lifecycle concurrency', () => {
   beforeEach(() => {
     enrollmentRepository = {
       findOne: jest.fn(),
-      save: jest.fn(async (entity) => entity),
+      save: jest.fn((entity) => Promise.resolve(entity)),
     };
     executionRepository = {
       find: jest.fn(),
@@ -107,7 +107,7 @@ describe('FollowUpService lifecycle concurrency', () => {
       query: jest.fn().mockResolvedValue([]),
     };
     dataSource = {
-      transaction: jest.fn(async (callback) =>
+      transaction: jest.fn((callback) =>
         callback(manager as unknown as EntityManager),
       ),
     };
