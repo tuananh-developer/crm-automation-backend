@@ -263,7 +263,6 @@ export class FollowUpService {
 
       return this.handleFailure(
         execution,
-        enrollment,
         step,
         errorMessage,
         response as Record<string, unknown> | null,
@@ -825,6 +824,7 @@ export class FollowUpService {
       currentExecution.providerMessageId = response.providerMessageId ?? null;
       currentExecution.responsePayload = response as Record<string, unknown>;
       currentExecution.errorMessage = null;
+      const previousEnrollmentStatus = enrollment.status;
       const savedExecution = await executionsRepository.save(currentExecution);
 
       let nextStep: FollowUpStep | null = null;
@@ -882,7 +882,7 @@ export class FollowUpService {
           entityId: savedExecution.id,
           oldValue: {
             status: ExecutionStatus.RUNNING,
-            enrollmentStatus: enrollment.status,
+            enrollmentStatus: previousEnrollmentStatus,
           },
           newValue: {
             status: savedExecution.status,
