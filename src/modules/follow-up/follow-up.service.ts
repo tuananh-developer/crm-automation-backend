@@ -750,6 +750,17 @@ export class FollowUpService {
       enrollment.cancelledAt = new Date();
       enrollment.cancellationReason = dto.reason ?? null;
       const savedEnrollment = await enrollmentsRepository.save(enrollment);
+      await manager.getRepository(FollowUpExecution).update(
+        {
+          enrollmentId: enrollment.id,
+          status: In([ExecutionStatus.PENDING, ExecutionStatus.RETRYING]),
+        },
+        {
+          status: ExecutionStatus.SKIPPED,
+          completedAt: new Date(),
+          errorMessage: 'Enrollment cancelled before execution started',
+        },
+      );
 
       await auditLogRepository.save(
         auditLogRepository.create({
