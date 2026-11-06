@@ -318,9 +318,8 @@ describe('FollowUpService', () => {
       const enrollment = buildEnrollment({ lead: buildLead() });
       const nextStep = buildStep({ id: 'step-2', stepOrder: 2 });
       (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(enrollment);
-      (stepsRepository.findOne as jest.Mock)
-        .mockResolvedValueOnce(buildStep())
-        .mockResolvedValueOnce(nextStep);
+      // The enclosing describe already queues the initial enrollment step.
+      (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(nextStep);
       (executionsRepository.findOne as jest.Mock).mockResolvedValue(null);
       (n8nClientService.triggerWebhook as jest.Mock).mockImplementation(
         async () => {
@@ -487,8 +486,10 @@ describe('FollowUpService', () => {
       expect(result.message).toContain('Retry 1/2');
 
       expect(persistedStatuses).toContain(ExecutionStatus.RUNNING);
-      expect(persistedStatuses).toContain(ExecutionStatus.FAILED);
+      // FAILED is an intermediate state within the transaction. When retry is
+      // scheduled, only the final RETRYING state is committed to PostgreSQL.
       expect(persistedStatuses).toContain(ExecutionStatus.RETRYING);
+      expect(persistedStatuses).not.toContain(ExecutionStatus.FAILED);
       expect(result.execution.scheduledAt).toBeInstanceOf(Date);
 
       expect(auditLogRepository.save).toHaveBeenCalledWith(
