@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ObserveModule } from './observe.js';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -31,6 +32,11 @@ import { T12WorkflowsModule } from './modules/t12-workflows/t12-workflows.module
         '.env.local',
         '.env',
       ],
+    }),
+    ObserveModule.forRoot({
+      appKey: process.env.OBSERVE_APP_KEY,
+      appSecret: process.env.OBSERVE_APP_SECRET,
+      serviceId: 'crm-automation-backend',
     }),
     ScheduleModule.forRoot(),
     RabbitMQModule,
