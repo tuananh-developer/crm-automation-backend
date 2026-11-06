@@ -147,6 +147,43 @@ describe('FollowUpService lifecycle concurrency', () => {
     expect(enrollmentRepository.save).not.toHaveBeenCalled();
   });
 
+  it('does not dispatch when the enrollment was paused before execution acquired its lock', async () => {
+    const lead = {
+      id: 'lead-1',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: '+84900000000',
+      companyName: 'Analytical Engines',
+      companyWebsite: null,
+      jobTitle: null,
+      companySize: null,
+      industry: null,
+      status: 'QUALIFIED',
+      sourceId: 'source-1',
+      ownerId: null,
+      convertedCustomerId: null,
+      convertedBy: null,
+      convertedAt: null,
+      notes: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as Lead;
+    const existing = Object.assign(makeEnrollment(), { lead });
+    enrollmentRepository.findOne
+      ?.mockResolvedValueOnce(existing)
+      .mockResolvedValueOnce(
+        makeEnrollment({ status: EnrollmentStatus.PAUSED }),
+      );
+    stepRepository.findOne?.mockResolvedValue(makeStep({ id: 'step-1' }));
+
+    await expect(
+      service.execute({ enrollmentId: 'enrollment-1' }),
+    ).rejects.toThrow('cannot execute steps');
+
+    expect(executionRepository.create).not.toHaveBeenCalled();
+  });
+
   it('keeps a cancelled enrollment cancelled when an in-flight delivery completes', async () => {
     const execution = makeExecution();
     enrollmentRepository.findOne?.mockResolvedValue(
