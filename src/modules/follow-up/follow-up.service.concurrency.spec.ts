@@ -12,14 +12,23 @@ import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import { N8nClientService } from '../../infrastructure/n8n/n8n-client.service.js';
 import type { N8nFollowUpResponse } from './interfaces/follow-up-execution.interface.js';
 
+type RepositoryMock = {
+  findOne: jest.Mock;
+  find?: jest.Mock;
+  findAndCount?: jest.Mock;
+  create?: jest.Mock;
+  save?: jest.Mock;
+  update?: jest.Mock;
+};
+
 describe('FollowUpService lifecycle concurrency', () => {
   let service: FollowUpService;
-  let enrollmentRepository: jest.Mocked<Partial<Repository<LeadFollowUpEnrollment>>>;
-  let executionRepository: jest.Mocked<Partial<Repository<FollowUpExecution>>>;
-  let stepRepository: jest.Mocked<Partial<Repository<FollowUpStep>>>;
-  let auditRepository: jest.Mocked<Partial<Repository<AuditLog>>>;
+  let enrollmentRepository: RepositoryMock;
+  let executionRepository: RepositoryMock;
+  let stepRepository: RepositoryMock;
+  let auditRepository: RepositoryMock;
   let manager: { getRepository: jest.Mock; query: jest.Mock };
-  let dataSource: jest.Mocked<Partial<DataSource>>;
+  let dataSource: { transaction: jest.Mock };
 
   const makeEnrollment = (
     overrides: Partial<LeadFollowUpEnrollment> = {},
@@ -114,14 +123,14 @@ describe('FollowUpService lifecycle concurrency', () => {
     };
 
     service = new FollowUpService(
-      enrollmentRepository as Repository<LeadFollowUpEnrollment>,
+      enrollmentRepository as unknown as Repository<LeadFollowUpEnrollment>,
       {} as Repository<FollowUpSequence>,
-      stepRepository as Repository<FollowUpStep>,
-      executionRepository as Repository<FollowUpExecution>,
+      stepRepository as unknown as Repository<FollowUpStep>,
+      executionRepository as unknown as Repository<FollowUpExecution>,
       {} as Repository<Lead>,
       {} as Repository<Customer>,
-      auditRepository as Repository<AuditLog>,
-      dataSource as DataSource,
+      auditRepository as unknown as Repository<AuditLog>,
+      dataSource as unknown as DataSource,
       {} as N8nClientService,
       { get: jest.fn() } as unknown as ConfigService,
     );
