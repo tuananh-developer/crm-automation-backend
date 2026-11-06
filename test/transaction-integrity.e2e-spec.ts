@@ -9,7 +9,7 @@ import { Quote } from '../src/modules/t12-workflows/entities/quote.entity.js';
 import { QuoteApproval } from '../src/modules/t12-workflows/entities/quote-approval.entity.js';
 import { WF12_NAME } from '../src/modules/t12-workflows/quotes.service.js';
 import { WorkflowStatus } from '../src/modules/workflow/enums/workflow.enum.js';
-import type { WorkflowRun } from '../src/modules/workflow/entities/workflow-run.entity.js';
+import { WorkflowRun } from '../src/modules/workflow/entities/workflow-run.entity.js';
 
 describe('Critical transaction integrity (PostgreSQL E2E)', () => {
   let app: INestApplication<App>;
@@ -418,7 +418,7 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
 
   it('enforces Admin-only quote approval and persists approve/reject decisions', async () => {
     const createPendingQuote = async (title: string) => {
-      const run = await dataSource.getRepository<WorkflowRun>('WorkflowRun').save({
+      const run = await dataSource.getRepository(WorkflowRun).save({
         workflowName: WF12_NAME,
         n8nExecutionId: null,
         leadId: null,
