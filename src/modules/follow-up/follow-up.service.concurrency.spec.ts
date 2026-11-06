@@ -86,14 +86,14 @@ describe('FollowUpService lifecycle concurrency', () => {
       find: jest.fn(),
       findOne: jest.fn(),
       create: jest.fn((entity) => ({ id: 'next-execution', ...entity })),
-      save: jest.fn(async (entity) => entity),
+      save: jest.fn((entity) => Promise.resolve(entity)),
     };
     stepRepository = {
       findOne: jest.fn(),
     };
     auditRepository = {
       create: jest.fn((entity) => entity),
-      save: jest.fn(async (entity) => entity),
+      save: jest.fn((entity) => Promise.resolve(entity)),
     };
 
     const repositories = new Map<unknown, unknown>([
