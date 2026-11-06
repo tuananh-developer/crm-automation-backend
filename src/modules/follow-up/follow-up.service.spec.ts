@@ -33,6 +33,7 @@ describe('FollowUpService', () => {
   let auditLogRepository: jest.Mocked<Partial<Repository<AuditLog>>>;
   let n8nClientService: jest.Mocked<Partial<N8nClientService>>;
   let configService: jest.Mocked<Partial<ConfigService>>;
+  let persistedExecution: FollowUpExecution | null;
 
   const env: Record<string, number | string> = {
     FOLLOW_UP_MAX_RETRIES: 2,
@@ -104,6 +105,7 @@ describe('FollowUpService', () => {
   const dto = { enrollmentId: 'enrollment-1' };
 
   beforeEach(() => {
+    persistedExecution = null;
     enrollmentsRepository = {
       findOne: jest.fn(),
       save: jest.fn(),
@@ -125,6 +127,7 @@ describe('FollowUpService', () => {
       save: jest.fn(),
       find: jest.fn(),
       findAndCount: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
     };
 
     leadsRepository = {
@@ -156,10 +159,29 @@ describe('FollowUpService', () => {
       (enrollment: LeadFollowUpEnrollment) => Promise.resolve(enrollment),
     );
 
+    (executionsRepository.save as jest.Mock).mockImplementation(
+      (execution: FollowUpExecution) => Promise.resolve(execution),
+    );
+
+    const executionTransactionRepository = {
+      ...executionsRepository,
+      findOne: jest.fn((options: { lock?: unknown }) =>
+        options?.lock
+          ? Promise.resolve(persistedExecution)
+          : (executionsRepository.findOne as jest.Mock)(),
+      ),
+      save: jest.fn(async (execution: FollowUpExecution) => {
+        const saved = await (executionsRepository.save as jest.Mock)(execution);
+        persistedExecution = saved as FollowUpExecution;
+        return saved;
+      }),
+      update: executionsRepository.update,
+    };
+
     const transactionManager = {
       getRepository: jest.fn((entity: unknown) => {
         if (entity === FollowUpExecution) {
-          return executionsRepository;
+          return executionTransactionRepository;
         }
         if (entity === LeadFollowUpEnrollment) {
           return enrollmentsRepository;
@@ -289,6 +311,67 @@ describe('FollowUpService', () => {
           providerMessageId: 'provider-msg-1',
           responsePayload: expect.objectContaining({ success: true }),
         }),
+      );
+    });
+
+    it('should preserve PAUSED when an in-flight delivery succeeds', async () => {
+      const enrollment = buildEnrollment({ lead: buildLead() });
+      const nextStep = buildStep({ id: 'step-2', stepOrder: 2 });
+      (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(enrollment);
+      (stepsRepository.findOne as jest.Mock)
+        .mockResolvedValueOnce(buildStep())
+        .mockResolvedValueOnce(nextStep);
+      (executionsRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (n8nClientService.triggerWebhook as jest.Mock).mockImplementation(
+        async () => {
+          await service.pauseEnrollment('enrollment-1', { reason: 'operator pause' });
+          return {
+            success: true,
+            providerMessageId: 'provider-msg-1',
+          };
+        },
+      );
+
+      const result = await service.execute(dto);
+
+      expect(result.status).toBe(ExecutionStatus.SUCCESS);
+      expect(enrollment.status).toBe(EnrollmentStatus.PAUSED);
+      expect(enrollment.currentStepId).toBe('step-2');
+      expect(executionsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enrollmentId: 'enrollment-1',
+          stepId: 'step-2',
+          status: ExecutionStatus.PENDING,
+        }),
+      );
+    });
+
+    it('should not schedule another step when an in-flight delivery succeeds after cancellation', async () => {
+      const enrollment = buildEnrollment({ lead: buildLead() });
+      (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(enrollment);
+      (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(buildStep());
+      (executionsRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (n8nClientService.triggerWebhook as jest.Mock).mockImplementation(
+        async () => {
+          await service.cancelEnrollment('enrollment-1', { reason: 'customer opted out' });
+          return {
+            success: true,
+            providerMessageId: 'provider-msg-1',
+          };
+        },
+      );
+
+      const result = await service.execute(dto);
+
+      expect(result.status).toBe(ExecutionStatus.SUCCESS);
+      expect(enrollment.status).toBe(EnrollmentStatus.CANCELLED);
+      expect(executionsRepository.create).toHaveBeenCalledTimes(1);
+      expect(executionsRepository.update).toHaveBeenCalledWith(
+        {
+          enrollmentId: 'enrollment-1',
+          status: expect.anything(),
+        },
+        expect.objectContaining({ status: ExecutionStatus.SKIPPED }),
       );
     });
 
@@ -682,6 +765,40 @@ describe('FollowUpService', () => {
   });
 
   describe('handleStaleRunningExecutions', () => {
+    it('should recheck locked state and schedule only one retry for a stale RUNNING execution', async () => {
+      const staleExecution = {
+        id: 'execution-stale',
+        enrollmentId: 'enrollment-1',
+        stepId: 'step-1',
+        status: ExecutionStatus.RUNNING,
+        retryCount: 0,
+        startedAt: new Date(Date.now() - 10 * 60_000),
+        completedAt: null,
+        errorMessage: null,
+      } as FollowUpExecution;
+      persistedExecution = staleExecution;
+      (executionsRepository.find as jest.Mock).mockResolvedValue([staleExecution]);
+      (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(
+        buildEnrollment(),
+      );
+      (stepsRepository.findOne as jest.Mock).mockResolvedValue(buildStep());
+
+      await service.handleStaleRunningExecutions();
+
+      expect(persistedExecution?.status).toBe(ExecutionStatus.RETRYING);
+      expect(persistedExecution?.retryCount).toBe(1);
+      expect(persistedExecution?.startedAt).toBeNull();
+      expect(auditLogRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'FOLLOW_UP_FAILED',
+          metadata: expect.objectContaining({
+            staleTimeout: true,
+            retryScheduled: true,
+          }),
+        }),
+      );
+    });
+
     it('should query stale RUNNING executions older than timeout threshold', async () => {
       (executionsRepository.find as jest.Mock).mockResolvedValue([]);
 
@@ -692,7 +809,9 @@ describe('FollowUpService', () => {
           where: expect.objectContaining({
             status: ExecutionStatus.RUNNING,
           }),
-          relations: { enrollment: { lead: true } },
+          select: { id: true, enrollmentId: true },
+          order: { startedAt: 'ASC' },
+          take: 50,
         }),
       );
     });
