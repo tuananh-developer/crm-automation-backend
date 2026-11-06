@@ -48,14 +48,19 @@ import { T12WorkflowsModule } from './modules/t12-workflows/t12-workflows.module
             config.get<string>('DB_SSL') === 'true' ||
             isProd ||
             Boolean(
-              dbUrl.includes('sslmode=require') ||
+              dbUrl.includes('sslmode=verify-full') ||
               dbUrl.includes('supabase') ||
               dbUrl.includes('neon.tech') ||
               dbUrl.includes('render.com'),
             );
 
-          const sslCa = config.get<string>('DB_SSL_CA')?.split(String.raw`\n`).join('\n');
-          const sslConfig = useSsl ? { rejectUnauthorized: true, ...(sslCa ? { ca: sslCa } : {}) } : false;
+          const sslCa = config
+            .get<string>('DB_SSL_CA')
+            ?.split(String.raw`\n`)
+            .join('\n');
+          const sslConfig = useSsl
+            ? { rejectUnauthorized: true, ...(sslCa ? { ca: sslCa } : {}) }
+            : false;
 
           return {
             type: 'postgres',

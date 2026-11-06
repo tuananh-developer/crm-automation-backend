@@ -1,6 +1,10 @@
 import { DataSource, Repository } from 'typeorm';
 import { OutboxPublisher } from './outbox-publisher.service.js';
-import { OutboxEvent, OutboxEventStatus, OutboxTransport } from './entities/outbox-event.entity.js';
+import {
+  OutboxEvent,
+  OutboxEventStatus,
+  OutboxTransport,
+} from './entities/outbox-event.entity.js';
 import { ConfigService } from '@nestjs/config';
 import { RabbitMQService } from './rabbitmq.service.js';
 import { WorkflowRun } from '../../modules/workflow/entities/workflow-run.entity.js';
@@ -12,7 +16,11 @@ describe('OutboxPublisher', () => {
     eventType: 'lead.created',
     exchange: 'crm.events',
     routingKey: 'lead.created',
-    payload: { eventId: 'event-1', eventType: 'lead.created', data: { leadId: 'lead-1' } },
+    payload: {
+      eventId: 'event-1',
+      eventType: 'lead.created',
+      data: { leadId: 'lead-1' },
+    },
     attempts: 1,
     lockToken: 'lock-1',
     transport: OutboxTransport.RABBITMQ,
@@ -31,15 +39,17 @@ describe('OutboxPublisher', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
     manager = {
-      query: jest.fn().mockResolvedValue([{ ...event }]),
+      query: jest.fn().mockResolvedValue([[{ ...event }], 1]),
       getRepository: jest.fn().mockReturnValue(repository),
     };
     dataSource = {
       isInitialized: true,
-      transaction: jest.fn().mockImplementation(
-        (callback: (value: typeof manager) => Promise<unknown>) =>
-          callback(manager),
-      ),
+      transaction: jest
+        .fn()
+        .mockImplementation(
+          (callback: (value: typeof manager) => Promise<unknown>) =>
+            callback(manager),
+        ),
       getRepository: jest.fn().mockReturnValue(repository),
     };
     rabbitmq = {
@@ -50,6 +60,15 @@ describe('OutboxPublisher', () => {
       rabbitmq as RabbitMQService,
       { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService,
     );
+  });
+
+  it('does not process events when the outbox claim returns no rows', async () => {
+    manager.query.mockResolvedValueOnce([[], 0]);
+
+    await publisher.publishPendingEvents();
+
+    expect(rabbitmq.publishOutboxEvent).not.toHaveBeenCalled();
+    expect(repository.update).not.toHaveBeenCalled();
   });
 
   it('claims pending events and marks them published after broker confirmation', async () => {
@@ -81,7 +100,9 @@ describe('OutboxPublisher', () => {
       payload: { workflowRunId, entityType: 'Lead', entityId: 'lead-1' },
     };
     manager.query.mockResolvedValueOnce([httpEvent]);
-    const workflowRepository = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
+    const workflowRepository = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
     manager.getRepository.mockImplementation((entity: unknown) =>
       entity === WorkflowRun ? workflowRepository : repository,
     );
@@ -141,8 +162,12 @@ describe('OutboxPublisher', () => {
     expect(update.status).toBe(OutboxEventStatus.PENDING);
     expect(update.lastError).toBe('broker unavailable');
     expect(update.nextAttemptAt).toBeInstanceOf(Date);
-    expect(update.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(before + 60_000);
-    expect(update.nextAttemptAt.getTime()).toBeLessThanOrEqual(Date.now() + 60_000);
+    expect(update.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(
+      before + 60_000,
+    );
+    expect(update.nextAttemptAt.getTime()).toBeLessThanOrEqual(
+      Date.now() + 60_000,
+    );
   });
 
   it('moves an event to terminal failure after the retry limit', async () => {
@@ -177,7 +202,10 @@ describe('OutboxPublisher', () => {
   it('does not start a second poll while the previous batch is still processing', async () => {
     let releasePublish!: () => void;
     (rabbitmq.publishOutboxEvent as jest.Mock).mockImplementation(
-      () => new Promise<void>((resolve) => { releasePublish = resolve; }),
+      () =>
+        new Promise<void>((resolve) => {
+          releasePublish = resolve;
+        }),
     );
 
     const firstPoll = publisher.publishPendingEvents();

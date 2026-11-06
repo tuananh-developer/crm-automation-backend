@@ -50,9 +50,19 @@ export class OutboxPublisher {
         'FROM candidates WHERE event.id = candidates.id',
         'RETURNING event.id, event.event_type AS "eventType", event.exchange, event.routing_key AS "routingKey", event.transport, event.destination, event.destination_path AS "destinationPath", event.payload, event.attempts, event.lock_token AS "lockToken"',
       ].join(' ');
-      const events = await this.dataSource.transaction((manager) =>
-        manager.query<ClaimedEvent[]>(sql, [25]),
+      const queryResult: unknown = await this.dataSource.transaction(
+        (manager) => manager.query(sql, [25]),
       );
+
+      if (!Array.isArray(queryResult)) {
+        throw new Error('Unexpected PostgreSQL outbox claim result');
+      }
+
+      // TypeORM PostgreSQL UPDATE returns [rows, affectedCount].
+      // SELECT-style results are returned directly as rows.
+      const events: ClaimedEvent[] = Array.isArray(queryResult[0])
+        ? (queryResult[0] as ClaimedEvent[])
+        : (queryResult as ClaimedEvent[]);
       const outcomes = await Promise.allSettled(
         events.map((event) => this.publishOne(event)),
       );
@@ -86,28 +96,28 @@ export class OutboxPublisher {
       // Commit the delivery acknowledgement and WorkflowRun transition
       // together. A stale worker cannot acknowledge a lease it no longer owns.
       await this.dataSource.transaction(async (manager) => {
-        const acknowledged = await manager
-          .getRepository(OutboxEvent)
-          .update(
-            { id: event.id, lockToken: event.lockToken },
-            {
-              status: OutboxEventStatus.PUBLISHED,
-              publishedAt: new Date(),
-              lockedUntil: null,
-              lockToken: null,
-              nextAttemptAt: null,
-              lastError: null,
-            },
-          );
+        const acknowledged = await manager.getRepository(OutboxEvent).update(
+          { id: event.id, lockToken: event.lockToken },
+          {
+            status: OutboxEventStatus.PUBLISHED,
+            publishedAt: new Date(),
+            lockedUntil: null,
+            lockToken: null,
+            nextAttemptAt: null,
+            lastError: null,
+          },
+        );
         if ((acknowledged.affected ?? 0) !== 1) return;
 
         if (event.transport === OutboxTransport.HTTP) {
           const workflowRunId = event.payload.workflowRunId;
           if (typeof workflowRunId === 'string') {
-            await manager.getRepository(WorkflowRun).update(
-              { id: workflowRunId, status: WorkflowStatus.PENDING },
-              { status: WorkflowStatus.RUNNING },
-            );
+            await manager
+              .getRepository(WorkflowRun)
+              .update(
+                { id: workflowRunId, status: WorkflowStatus.PENDING },
+                { status: WorkflowStatus.RUNNING },
+              );
           }
         }
       });
@@ -123,7 +133,9 @@ export class OutboxPublisher {
         const updated = await manager.getRepository(OutboxEvent).update(
           { id: event.id, lockToken: event.lockToken },
           {
-            status: terminal ? OutboxEventStatus.FAILED : OutboxEventStatus.PENDING,
+            status: terminal
+              ? OutboxEventStatus.FAILED
+              : OutboxEventStatus.PENDING,
             lastError: message.slice(0, 4000),
             nextAttemptAt: terminal ? null : new Date(Date.now() + delay),
             lockedUntil: null,
