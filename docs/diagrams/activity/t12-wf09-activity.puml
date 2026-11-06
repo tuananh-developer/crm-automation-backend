@@ -1,0 +1,17 @@
+@startuml
+title T12-WF09 — AI CRM Conversation Summarizer
+start
+:01 | Webhook Trigger\nreceive an authenticated internal dispatch from NestJS after transcript source/access validation.;
+:02 | Code: Validate Transcript\nvalidate source ID, type and maximum input length.;
+:03 | Code: Normalize and Redact Transcript\nremove/mask unnecessary sensitive information before any AI request;
+:04 | HTTP Request: Save Redacted Transcript\npersist the redacted source in a dedicated ConversationTranscript entity via NestJS;
+:05 | HTTP Request: Get CRM Context\nfetch linked Lead/Customer and available recent interactions;
+:06 | Code: Build Summary Context\nprepare concise context and source provenance for the model;
+:07 | HTTP Request: Gemini Summarizer\nproduce structured summary, intent, sentiment and proposed action items;
+:08 | Code: Parse and Validate Summary/Actions\nreject malformed output and mark unsupported or low-confidence items;
+:09 | HTTP Request: Save Conversation Summary\npersist a dedicated ConversationSummary linked to ConversationTranscript;
+:10 | HTTP Request: Save Conversation Action Items\npersist proposed actions in a dedicated ConversationActionItem entity with pending/review state as required;
+:11 | HTTP Request: Notify Owner\nrequest in-app notification through NestJS.;
+:12 | Code: Build Final Summary\nreturn result IDs and final status.;
+stop
+@enduml

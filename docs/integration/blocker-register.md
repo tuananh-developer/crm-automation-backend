@@ -139,7 +139,7 @@
 | GET /api/v1/segments | WF07 | IMPLEMENTED_UNVERIFIED |
 | GET /api/v1/segments/:id | WF07 | IMPLEMENTED_UNVERIFIED |
 | POST /api/v1/segments/:id/evaluate | WF07 | IMPLEMENTED_UNVERIFIED |
-| POST /api/v1/segments/evaluate-all | WF07 | IMPLEMENTED_UNVERIFIED |
+| POST /api/v1/segments/:segmentId/evaluate-all | WF07 | IMPLEMENTED_UNVERIFIED |
 | GET /api/v1/segments/:id/customers | WF07 | IMPLEMENTED_UNVERIFIED |
 | GET/POST /api/v1/review-tasks | WF07 (indirect) | IMPLEMENTED_UNVERIFIED |
 | GET/POST /api/v1/follow-ups/executions | WF04 | IMPLEMENTED_UNVERIFIED |

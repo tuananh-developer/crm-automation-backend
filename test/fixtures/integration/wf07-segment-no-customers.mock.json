@@ -1,0 +1,17 @@
+{
+  "_mock": true,
+  "_scenario": "Test B: Segment has no customers",
+  "endpoint": "GET /api/v1/segments/:id/customers",
+  "response": {
+    "data": [],
+    "meta": { "page": 1, "limit": 1000, "total": 0, "totalPages": 0 }
+  },
+  "evaluationResponse": {
+    "status": "COMPLETED",
+    "total": 0,
+    "processed": 0,
+    "matched": 0,
+    "message": "Evaluated 0 customer(s)"
+  },
+  "expectedBehavior": "No membership created. Statistics show total=0. No anomaly (threshold TBD)."
+}

@@ -59,7 +59,7 @@
 |---|-----------|-------|----------|----------|
 | 1 | Get active segments | GET /segments | 200, segment list | High |
 | 2 | Evaluate single segment | POST /segments/:id/evaluate | 200, assignment result | High |
-| 3 | Evaluate all segments | POST /segments/evaluate-all | 200, bulk result | High |
+| 3 | Evaluate all segments | POST /segments/:segmentId/evaluate-all | 200, bulk result | High |
 | 4 | Get segment customers | GET /segments/:id/customers | 200, customer list | High |
 | 5 | Segment not found | Non-existent UUID | 404 | Medium |
 | 6 | Invalid segment criteria | Malformed criteria | 400 | Medium |

@@ -1,0 +1,66 @@
+@startuml
+title T12-WF12 — AI Quote & Proposal Agent (Sequence)
+autonumber
+actor "Sales User/UI" as UI
+participant "NestJS Quote Request API" as API
+participant "n8n WF12\nQuote & Proposal" as N8N
+database "PostgreSQL" as DB
+participant "Product/Pricing Catalog" as CATALOG
+participant "Gemini API" as AI
+participant "NestJS Review Module" as APPROVAL
+
+UI -> API: POST quote/proposal draft request
+API -> API: Authenticate Sales role and authorize customer/lead access
+API -> DB: Create WorkflowRun/request record
+DB --> API: workflowRunId
+API --> UI: 202 Accepted + workflowRunId
+API -> N8N: POST protected internal webhook with scoped requirements/run ID
+activate N8N
+N8N -> N8N: Validate customer ID, requirements and item list
+N8N -> API: GET customer context
+API -> DB: Read customer record
+DB --> API: Customer context
+API --> N8N: Customer context
+N8N -> API: GET catalog/pricing data
+API -> CATALOG: Resolve available catalog (real or explicitly marked demo)
+CATALOG --> API: Known product IDs and authoritative prices, or demo data marker
+API --> N8N: Catalog and provenance
+N8N -> N8N: Map requested items to known catalog identifiers
+N8N -> AI: Draft non-authoritative proposal wording/structure
+AI --> N8N: Proposal draft text + referenced items
+N8N -> N8N: Validate returned IDs/quantities; reject invented items
+N8N -> API: POST price-validation request
+API -> API: Calculate totals/tax/discount constraints deterministically
+API --> N8N: Authoritative calculated totals and approval requirements
+N8N -> N8N: Mark draft/approval state
+N8N -> API: Save quote/proposal draft
+API -> DB: Persist draft with catalog version and price snapshot
+DB --> API: quoteId
+API --> N8N: quoteId
+alt Approval required
+  N8N -> APPROVAL: Create/ensure ReviewTask for quoteId
+  APPROVAL -> DB: Persist approval task idempotently with quote target reference
+  DB --> APPROVAL: Task ID
+  APPROVAL --> N8N: Pending approval
+else No approval needed for draft
+  N8N -> N8N: Keep as draft until explicitly approved for customer delivery
+end
+N8N -> API: Record workflow status/output
+API -> DB: Update WorkflowRun
+DB --> API: Status
+API --> N8N: Saved status
+deactivate N8N
+UI -> API: GET quote/proposal result by workflowRunId
+API -> DB: Read quote/run/approval state
+DB --> API: Draft and approval status
+API --> UI: Draft, quoteId, price provenance and approval status
+note over API,N8N
+The browser reaches NestJS first. The internal n8n webhook is authenticated and not
+exposed as a public client endpoint. Pricing and approval policy remain backend-owned.
+ReviewTask references quotes through its validated polymorphic target fields.
+end note
+
+note over APPROVAL,DB
+ReviewTask links to a quote by setting `target_entity_type=Quote` and `target_entity_id` to the quote UUID. NestJS validates the target type against the allowlist, confirms the quote exists, and enforces authorization, approval policy, idempotency and audit.
+end note
+@enduml

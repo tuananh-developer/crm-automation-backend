@@ -1,0 +1,19 @@
+@startuml
+title T12-WF06 — AI Churn Monitoring Agent
+start
+:01 | Schedule Trigger\nrun on a configurable daily schedule.;
+:02 | HTTP Request: Get Customer Cohort\nfetch active customers through NestJS.;
+:03 | Split Out: Customer Items\nprocess customers individually or in bounded batches.;
+:04 | HTTP Request: Get Customer Profile\nretrieve authoritative customer/account details.;
+:05 | HTTP Request: Get Engagement History\nobtain available interaction recency and trend signals.;
+:06 | HTTP Request: Get Follow-up/Feedback/Issue History\nfetch only available follow-up outcomes, feedback and customer issues.;
+:07 | Code: Normalize Feature Snapshot\nnormalize evidence and data coverage; do not calculate the official churn score in n8n.;
+:08 | HTTP Request: Evaluate Backend Churn Policy\nNestJS calculates the deterministic canonical risk score/level and persists a CustomerChurnAssessment history record.;
+:09 | HTTP Request: AI Risk Explanation\nrequest an evidence-grounded explanation using the backend score; AI does not set the official score.;
+:10 | HTTP Request: Save Validated Explanation\nsubmit structured explanation to NestJS, which validates and stores it against the assessment.;
+if (11 | High risk and sufficient evidence?) then (yes)
+  :12 | HTTP Request: Ensure CustomerTask\nask NestJS to create/reuse an idempotent CustomerTask linked to the high-risk assessment.;
+else (no)
+endif
+stop
+@enduml

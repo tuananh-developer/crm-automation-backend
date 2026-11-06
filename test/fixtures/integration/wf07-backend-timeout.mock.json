@@ -1,0 +1,7 @@
+{
+  "_mock": true,
+  "_scenario": "Test E: Backend timeout or HTTP error",
+  "endpoint": "POST /api/v1/segments/:id/evaluate-all",
+  "error": { "code": "ETIMEDOUT", "message": "Request timed out after 60000ms" },
+  "expectedBehavior": "Error branch activated. Segment error recorded. Other segments continue if design allows. No false success."
+}

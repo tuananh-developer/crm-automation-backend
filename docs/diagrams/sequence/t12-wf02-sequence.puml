@@ -1,0 +1,42 @@
+@startuml
+title T12-WF02 — AI Lead Enrichment Agent (Sequence)
+autonumber
+participant "RabbitMQ" as MQ
+participant "n8n WF02\nEnrichment" as N8N
+participant "NestJS Backend" as API
+database "PostgreSQL" as DB
+participant "Mock Enrichment Adapter" as MOCK
+
+MQ -> N8N: lead.enrichment.requested(eventId, leadId)
+activate N8N
+N8N -> N8N: Validate event and request IDs
+N8N -> API: GET lead
+API -> DB: Read authoritative lead data
+DB --> API: Lead record
+API --> N8N: Lead data
+N8N -> N8N: Extract and normalize website/email domain
+N8N -> MOCK: Lookup fixture by domain
+MOCK --> N8N: Deterministic mock fields + providerMode=MOCK
+N8N -> N8N: Normalize fields and validate completeness/provenance
+alt All required fields available
+N8N -> API: POST enrichment callback(status=SUCCESS, providerMode=MOCK)
+else Some fields unavailable
+N8N -> API: POST enrichment callback(status=PARTIAL, missingFields, providerMode=MOCK)
+else Adapter/processing failure
+N8N -> API: POST enrichment callback(status=FAILED, errorCode, providerMode=MOCK)
+end
+API -> DB: Persist enrichment result idempotently
+DB --> API: Persisted status/result ID
+API --> N8N: Callback accepted
+opt PARTIAL or FAILED and owner notification is enabled
+N8N -> API: Request backend notification
+API -> DB: Record notification/audit status
+API --> N8N: Notification request result
+end
+N8N -> N8N: Build summary with MOCK provenance and correlation IDs
+deactivate N8N
+note over MOCK,N8N
+Mock data must be visibly labelled as demo/mock. No live provider
+or external credentials are assumed in this baseline.
+end note
+@enduml

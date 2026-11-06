@@ -1,0 +1,71 @@
+@startuml
+title T12-WF08 — AI CRM Data Cleaning Agent (Sequence)
+autonumber
+actor "Authorized User / UI" as USER
+participant "NestJS Data Cleaning API" as API
+participant "RabbitMQ" as MQ
+participant "n8n WF08\nData Cleaning" as N8N
+database "PostgreSQL" as DB
+participant "Gemini API" as AI
+participant "NestJS Review Module" as REVIEW
+participant "NestJS Notification Service" as NOTIFY
+
+USER -> API: POST /api/v1/data-cleaning/scans
+API -> DB: Create WorkflowRun + audit record
+DB --> API: workflowRunId and scan state
+API -> MQ: Publish data.cleaning.requested with workflowRunId/scope/filter (target delivery reliability to verify)
+API --> USER: 202 Accepted + workflowRunId
+MQ -> N8N: Deliver data.cleaning.requested event
+activate N8N
+N8N -> N8N: Validate eventId, workflowRunId, scope/filter and correlation
+N8N -> API: GET scan/run context
+API -> DB: Read WorkflowRun and stored scan request
+DB --> API: Scan context
+API --> N8N: Authorized scope/filter and run status
+N8N -> API: Fetch bounded Lead batch
+API -> DB: Read Lead records
+DB --> API: Lead batch
+API --> N8N: Batch + pagination metadata
+N8N -> N8N: Normalize permitted fields; detect deterministic issues/duplicate candidates
+N8N -> AI: Request suggestions only for ambiguous findings
+AI --> N8N: Proposed correction suggestions
+N8N -> N8N: Validate finding schema, field allowlist and proposed safety flags
+N8N -> API: Submit cleaning findings callback (authenticated canonical API)
+API -> API: Revalidate actor, allowed fields, current values and safety/approval policy
+API -> DB: Persist findings and determine review requirement
+alt Ambiguous, unsafe, or human approval required
+  API -> REVIEW: Create/ensure one ReviewTask idempotently
+  REVIEW -> DB: Persist ReviewTask and audit record
+  DB --> REVIEW: Existing or new ReviewTask ID
+  REVIEW --> API: ReviewTask reference
+else Safe finding can remain a preview
+  API -> API: Record preview-only status; do not mutate Lead
+end
+API --> N8N: Finding IDs/status and optional ReviewTask reference
+opt ReviewTask created and notification enabled
+  N8N -> API: Request reviewer notification
+  API -> NOTIFY: Send in-app notification; do not create another task
+  NOTIFY -> DB: Persist notification/audit status
+  DB --> NOTIFY: Notification result
+  NOTIFY --> API: Notification result
+  API --> N8N: Notification accepted/status
+end
+N8N -> N8N: Build scan summary and correlation IDs
+N8N -> API: Record run completion/result
+API -> DB: Update WorkflowRun status/output
+DB --> API: Updated run
+API --> N8N: Persisted result
+USER -> API: GET /api/v1/data-cleaning/scans/:workflowRunId
+API -> DB: Read final scan status, findings and summary
+DB --> API: Scan result
+API --> USER: Final scan status and report
+deactivate N8N
+note over API,MQ
+NestJS authorizes the scan request, creates the WorkflowRun and publishes data.cleaning.requested to n8n.data-cleaning.q. Use publisher confirmation or an outbox/recovery pattern, acknowledgements, bounded retries and DLQ. The exact scan/run context is returned through the canonical NestJS API.
+end note
+note over API,REVIEW
+Only the NestJS Review Module creates/ensures ReviewTask. The n8n callback
+cannot apply data. A separate protected backend apply operation revalidates
+approval, actor permissions, scanned values and safety policy before mutation.
+end note
+@enduml

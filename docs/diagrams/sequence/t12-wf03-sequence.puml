@@ -1,0 +1,47 @@
+@startuml
+title T12-WF03 — AI Lead Scoring Agent (Sequence)
+autonumber
+participant "RabbitMQ" as MQ
+participant "n8n WF03\nLead Scoring" as N8N
+participant "NestJS Backend" as API
+database "PostgreSQL" as DB
+participant "Scoring Policy Service\ninside NestJS" as POLICY
+
+MQ -> N8N: lead.scoring.requested(eventId, leadId)
+activate N8N
+N8N -> N8N: Validate event, correlation and idempotency IDs
+N8N -> API: GET lead profile
+API -> DB: Read lead
+DB --> API: Lead data
+API --> N8N: Lead profile
+N8N -> API: GET latest qualification
+API -> DB: Read qualification history
+DB --> API: Latest qualification or empty result
+API --> N8N: Qualification
+N8N -> API: GET latest enrichment and interactions
+API -> DB: Read enrichment + interaction signals
+DB --> API: Available signals
+API --> N8N: Context (missing sources explicit)
+N8N -> N8N: Aggregate deterministic scoring features
+N8N -> API: POST scoring evaluation request
+API -> POLICY: Evaluate features using versioned policy
+POLICY --> API: Canonical score, label, policyVersion
+API --> N8N: Canonical score response
+N8N -> N8N: Validate score bounds, label and policy version
+N8N -> API: POST score callback
+API -> DB: Persist score history idempotently
+DB --> API: Score record ID
+API --> N8N: Persisted result
+alt Lead crosses agreed high-priority threshold
+N8N -> API: Request next-action suggestion/notification
+API -> DB: Persist suggestion or notification audit
+API --> N8N: Accepted
+else Normal priority
+N8N -> N8N: Finalize scoring output without hot-lead notification
+end
+deactivate N8N
+note over N8N,POLICY
+NestJS owns the canonical score and threshold policy. n8n must not
+independently calculate a conflicting official score.
+end note
+@enduml

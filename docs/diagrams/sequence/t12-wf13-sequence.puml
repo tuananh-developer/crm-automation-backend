@@ -1,0 +1,54 @@
+@startuml
+title T12-WF13 — AI Renewal Management Agent (Sequence)
+autonumber
+participant "Schedule Trigger" as SCHED
+participant "n8n WF13\nRenewal Management" as N8N
+participant "NestJS Backend" as API
+database "PostgreSQL" as DB
+participant "Gemini API" as AI
+participant "Communication API" as COMM
+participant "NestJS Review Module" as APPROVAL
+
+SCHED -> N8N: Daily renewal scan
+activate N8N
+N8N -> API: GET contracts due in renewal window
+API -> DB: Query eligible CustomerContract records
+DB --> API: Contract IDs and renewal dates
+API --> N8N: Due contracts
+loop For each contract
+N8N -> API: GET contract/customer/status details
+API -> DB: Read contract and customer
+DB --> API: Current status and source dates
+API --> N8N: Contract context
+N8N -> N8N: Calculate urgency from actual renewal dates
+N8N -> AI: Draft renewal recommendation and message
+AI --> N8N: Draft/recommendation
+N8N -> N8N: Validate customer, contract and dates against source
+N8N -> API: Save renewal draft only
+API -> DB: Persist draft and source provenance
+DB --> API: Draft ID
+API --> N8N: Draft saved
+alt Approved template + consent + policy permit automatic sending
+N8N -> COMM: Request approved message send via NestJS
+COMM -> COMM: Verify permissions, consent and idempotency
+COMM --> N8N: Sent / failed result
+else Human approval required or auto-send not allowed
+N8N -> APPROVAL: Create/ensure one pending approval task
+APPROVAL -> DB: Persist task idempotently with draft/contract reference
+DB --> APPROVAL: Task ID (existing or newly created)
+APPROVAL --> N8N: Pending approval; no message sent
+end
+N8N -> API: Record RenewalAttempt status
+API -> DB: Persist attempt/status idempotently
+DB --> API: Attempt ID
+API --> N8N: Attempt recorded
+end
+deactivate N8N
+note over N8N,COMM
+n8n does not send SMTP directly. NestJS owns contract data, renewal state, approval/consent policy and communication delivery; the scheduled workflow calls the canonical APIs.
+end note
+
+note over APPROVAL,DB
+ReviewTask supports a non-Lead target through `target_entity_type` and `target_entity_id`. For renewal approval, set the target type to `CustomerContract` and the target ID to the contract UUID; NestJS validates the allowlisted type, record existence, authorization, policy, idempotency and audit.
+end note
+@enduml

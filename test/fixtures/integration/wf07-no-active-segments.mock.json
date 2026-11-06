@@ -1,0 +1,10 @@
+{
+  "_mock": true,
+  "_scenario": "Test A: No active segments",
+  "endpoint": "GET /api/v1/segments?isActive=true",
+  "response": {
+    "data": [],
+    "meta": { "page": 1, "limit": 100, "total": 0, "totalPages": 0 }
+  },
+  "expectedBehavior": "Workflow ends successfully. No evaluation, AI, or notification called."
+}

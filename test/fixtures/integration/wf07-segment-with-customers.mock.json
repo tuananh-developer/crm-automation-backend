@@ -1,0 +1,14 @@
+{
+  "_mock": true,
+  "_scenario": "Test C: Segment has customers",
+  "endpoint": "POST /api/v1/segments/:id/evaluate-all",
+  "request": { "assignmentType": "RULE" },
+  "response": {
+    "status": "COMPLETED",
+    "total": 50,
+    "processed": 50,
+    "matched": 12,
+    "message": "Evaluated 50 customer(s)"
+  },
+  "expectedBehavior": "Workflow sends correct request. Membership output matches backend Rule Engine result exactly."
+}

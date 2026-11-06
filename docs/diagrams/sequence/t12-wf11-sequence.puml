@@ -1,0 +1,57 @@
+@startuml
+title T12-WF11 — AI Sales Meeting Agent (Sequence)
+autonumber
+actor "Sales UI / Meeting Source" as UI
+participant "NestJS Meeting Ingestion API" as API
+participant "n8n WF11\nSales Meeting" as N8N
+database "PostgreSQL" as DB
+participant "Gemini API" as AI
+participant "NestJS Notification Service" as NOTIFY
+
+UI -> API: Submit meeting transcript/reference + attendees
+API -> API: Authenticate requester/source and authorize attendee/CRM scope
+API -> DB: Create WorkflowRun and store only authorized source reference
+DB --> API: workflowRunId
+API --> UI: 202 Accepted + workflowRunId
+API -> N8N: POST protected internal webhook with scoped meeting request
+activate N8N
+N8N -> N8N: Validate meeting ID, transcript and attendee refs
+N8N -> N8N: Normalize and redact transcript before AI use
+N8N -> API: Save redacted meeting transcript
+API -> DB: Insert transcript entity
+DB --> API: transcriptId
+API --> N8N: transcriptId
+N8N -> API: GET attendee Lead/Customer/account context
+API -> DB: Read referenced CRM records
+DB --> API: Available attendee context
+API --> N8N: CRM context + provenance
+N8N -> N8N: Build meeting-analysis input
+N8N -> AI: Analyze summary, decisions, risks and action items
+AI --> N8N: Structured meeting output
+N8N -> N8N: Parse/validate schema and flag unsupported commitments
+N8N -> API: Save meeting summary linked to transcript
+API -> DB: Insert summary entity
+DB --> API: summaryId
+API --> N8N: summaryId
+N8N -> API: Save action items as unconfirmed/pending
+API -> DB: Insert meeting action item entities
+DB --> API: Action item IDs
+API --> N8N: Saved references
+N8N -> API: Request owner/attendee notification
+API -> NOTIFY: Send in-app notification / approved communication request
+NOTIFY --> API: Notification status
+API --> N8N: Notification status
+N8N -> API: Record final workflow result/output
+API -> DB: Update WorkflowRun
+DB --> API: Workflow status
+API --> N8N: Saved status
+deactivate N8N
+UI -> API: GET meeting report by workflowRunId
+API -> DB: Read meeting/transcript/summary/action refs
+DB --> API: Report references
+API --> UI: Meeting report and record references
+note over API,N8N
+The browser/source enters through NestJS. n8n receives only an authenticated internal
+request and redacts the transcript before any AI provider call.
+end note
+@enduml

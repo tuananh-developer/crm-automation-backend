@@ -1,0 +1,19 @@
+@startuml
+title T12-WF03 — AI Lead Scoring Agent
+start
+:01 | RabbitMQ Trigger\nconsume scoring requests.;
+:02 | Code: Validate Event\nvalidate lead ID and idempotency/correlation fields.;
+:03 | HTTP Request: Get Lead\nfetch lead profile.;
+:04 | HTTP Request: Get Latest Qualification\nfetch the latest qualification result.;
+:05 | HTTP Request: Get Latest Enrichment\nfetch latest enrichment or a documented empty state.;
+:06 | HTTP Request: Get Interactions\nfetch activity/engagement signals.;
+:07 | Code: Aggregate Features\nbuild deterministic scoring features with documented weights.;
+:08 | HTTP Request: Evaluate Backend Scoring Policy\nsubmit features to the single authoritative backend scoring policy and receive canonical score and label;
+:09 | Code: Validate Canonical Score\nvalidate returned score bounds, label, policy version and response schema without recalculating business rules;
+:10 | HTTP Request: Scoring Callback\npersist the validated canonical scoring result/history through the NestJS scoring callback defined in `07_API_CONTRACT.md`;
+if (11 | Hot lead?) then (yes)
+  :12 | HTTP Request: Backend Next-Action/Notification\nnotify or create a suggestion through the canonical backend API; do not send email directly from n8n.;
+else (no)
+endif
+stop
+@enduml

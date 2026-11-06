@@ -1,0 +1,7 @@
+{
+  "_mock": true,
+  "_scenario": "Test H: No anomaly",
+  "inputStatistics": { "total": 50, "processed": 50, "matched": 12, "unmatched": 38, "matchRate": "24.00%" },
+  "anomalyRule": "UNAPPROVED — placeholder: matched === 0",
+  "expectedBehavior": "Anomaly condition not met. Notification node NOT called."
+}

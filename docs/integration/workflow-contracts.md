@@ -139,7 +139,7 @@
 | 1 | GET | `/api/v1/segments` | IMPLEMENTED_UNVERIFIED | List active segments |
 | 2 | GET | `/api/v1/segments/:segmentId` | IMPLEMENTED_UNVERIFIED | Segment detail |
 | 3 | POST | `/api/v1/segments/:segmentId/evaluate` | IMPLEMENTED_UNVERIFIED | Evaluate one segment via backend Rule Engine |
-| 4 | POST | `/api/v1/segments/evaluate-all` | IMPLEMENTED_UNVERIFIED | Evaluate all eligible active segments |
+| 4 | POST | `/api/v1/segments/:segmentId/evaluate-all` | IMPLEMENTED_UNVERIFIED | Evaluate all eligible active segments |
 | 5 | GET | `/api/v1/segments/:segmentId/customers` | IMPLEMENTED_UNVERIFIED | List membership and summary |
 | 6 | POST | `/api/v1/segments/:segmentId/evaluate` (reused) | IMPLEMENTED_UNVERIFIED | Called per segment in loop |
 
@@ -270,7 +270,7 @@
 | GET `/api/v1/segments` | IMPLEMENTED_UNVERIFIED |
 | GET `/api/v1/segments/:segmentId` | IMPLEMENTED_UNVERIFIED |
 | POST `/api/v1/segments/:segmentId/evaluate` | IMPLEMENTED_UNVERIFIED |
-| POST `/api/v1/segments/evaluate-all` | IMPLEMENTED_UNVERIFIED |
+| POST `/api/v1/segments/:segmentId/evaluate-all` | IMPLEMENTED_UNVERIFIED |
 | GET `/api/v1/segments/:segmentId/customers` | IMPLEMENTED_UNVERIFIED |
 
 ### WF13 (Renewal Management)

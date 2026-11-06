@@ -16,6 +16,8 @@ import {
   QueryCustomerTaskDto,
 } from './dto/index.js';
 import { CustomerResponseDto } from './dto/customer-response.dto.js';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
+import { UseGuards } from '@nestjs/common';
 import { ApiPaginatedResponse } from '../../common/index.js';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
 import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
@@ -49,6 +51,7 @@ export class CustomersController {
     return this.customersService.findOne(id);
   }
 
+  @UseGuards(N8nAuthGuard)
   @Get(':customerId/churn-assessments')
   @ApiOperation({ summary: 'Get churn assessments for a customer' })
   async findChurnAssessments(
@@ -57,6 +60,7 @@ export class CustomersController {
     return this.customersService.findChurnAssessments(customerId);
   }
 
+  @UseGuards(N8nAuthGuard)
   @Post(':customerId/churn-assessments')
   @ApiOperation({ summary: 'Create a churn assessment for a customer' })
   async createChurnAssessment(
@@ -78,14 +82,14 @@ export class CustomersController {
 
 @Controller('customer-tasks')
 @ApiTags('Customer Tasks')
+@UseGuards(N8nAuthGuard)
 export class CustomerTasksController {
   constructor(private readonly customersService: CustomersService) {}
 
   @Get()
   @ApiOperation({ summary: 'List customer tasks' })
   findAll(@Query() query: QueryCustomerTaskDto): Promise<CustomerTask[]> {
-    void query;
-    return this.customersService.findCustomerTasks();
+    return this.customersService.findCustomerTasks(query);
   }
 
   @Post()

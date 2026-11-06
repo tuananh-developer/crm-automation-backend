@@ -1,0 +1,7 @@
+{
+  "_mock": true,
+  "_scenario": "Test I: Notification API not exists",
+  "endpoint": "POST /api/v1/notifications (internal create)",
+  "status": "NOT_IMPLEMENTED",
+  "expectedBehavior": "Workflow reports BLOCKED. No fake success. No direct DB write."
+}

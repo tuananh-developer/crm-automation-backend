@@ -41,7 +41,7 @@
 | WF07 | Get Active Segments | GET | `/api/v1/segments` | QuerySegmentDto | PaginatedResponseDto<SegmentResponseDto> | JWT | 401, 403 | `segments.controller.ts` | IMPLEMENTED_UNVERIFIED |
 | WF07 | Get Segment Detail | GET | `/api/v1/segments/:segmentId` | Path param UUID | SegmentResponseDto | JWT | 404 | `segments.controller.ts` | IMPLEMENTED_UNVERIFIED |
 | WF07 | Evaluate Segment | POST | `/api/v1/segments/:segmentId/evaluate` | EvaluateSegmentDto | EvaluateSegmentResponseDto | JWT | 400, 404 | `segments.controller.ts` | IMPLEMENTED_UNVERIFIED |
-| WF07 | Evaluate All Segments | POST | `/api/v1/segments/evaluate-all` | EvaluateSegmentBulkDto | EvaluateSegmentBulkResponseDto | JWT | 400 | `segments.controller.ts` | IMPLEMENTED_UNVERIFIED |
+| WF07 | Evaluate All Segments | POST | `/api/v1/segments/:segmentId/evaluate-all` | EvaluateSegmentBulkDto | EvaluateSegmentBulkResponseDto | JWT | 400 | `segments.controller.ts` | IMPLEMENTED_UNVERIFIED |
 | WF07 | Get Segment Customers | GET | `/api/v1/segments/:segmentId/customers` | Path param UUID + Query | PaginatedResponseDto<CustomerResponseDto> | JWT | 404 | `segments.controller.ts` | IMPLEMENTED_UNVERIFIED |
 | WF07 | Save Workflow Summary | (none) | (no endpoint found) | N/A | N/A | N/A | N/A | NOT FOUND | NOT_IMPLEMENTED |
 

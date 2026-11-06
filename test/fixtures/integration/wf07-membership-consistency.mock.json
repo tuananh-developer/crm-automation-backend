@@ -1,0 +1,12 @@
+{
+  "_mock": true,
+  "_scenario": "Test D: Membership consistency",
+  "evaluationResponse": {
+    "status": "COMPLETED",
+    "total": 10,
+    "processed": 10,
+    "matched": 3,
+    "message": "Evaluated 10 customer(s)"
+  },
+  "assertion": "matched=3 must equal number of CustomerSegment records with assignmentType=RULE for this segment. No node in workflow recalculates matched."
+}

@@ -19,7 +19,7 @@
 | 11 | WF07 | Get Active Segments | GET `/api/v1/segments` | Yes (code) | No | No | Backend | Verify + test | TBD |
 | 12 | WF07 | Get Segment Detail | GET `/api/v1/segments/:segmentId` | Yes (code) | No | No | Backend | Verify + test | TBD |
 | 13 | WF07 | Evaluate Segment | POST `/api/v1/segments/:segmentId/evaluate` | Yes (code) | No | No | Backend | Verify + test | TBD |
-| 14 | WF07 | Evaluate All Segments | POST `/api/v1/segments/evaluate-all` | Yes (code) | No | No | Backend | Verify + test | TBD |
+| 14 | WF07 | Evaluate All Segments | POST `/api/v1/segments/:segmentId/evaluate-all` | Yes (code) | No | No | Backend | Verify + test | TBD |
 | 15 | WF07 | Get Segment Customers | GET `/api/v1/segments/:segmentId/customers` | Yes (code) | No | No | Backend | Verify + test | TBD |
 | 16 | WF07 | Save Workflow Summary | (no endpoint found) | No | No | No | Backend | Confirm endpoint or reuse WorkflowRun | TBD |
 | 17 | WF13 | Get Due Contracts | GET `/api/v1/customer-contracts/due-for-renewal` | No | No | No | Backend | Implement | TBD |

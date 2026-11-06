@@ -1,0 +1,17 @@
+@startuml
+title T12-WF11 — AI Sales Meeting Agent
+start
+:01 | Webhook Trigger\nreceive an authenticated internal dispatch from NestJS after requester/source checks.;
+:02 | Code: Validate Meeting Input\nvalidate meeting ID, transcript and attendee references.;
+:03 | Code: Normalize and Redact Transcript\nminimize personal data and mask sensitive fields before the AI call;
+:04 | HTTP Request: Save Redacted Meeting Transcript\npersist transcript in a dedicated transcript entity via NestJS;
+:05 | HTTP Request: Get CRM Attendee Context\nretrieve related Leads/Customers and account context;
+:06 | Code: Build Meeting Prompt\nprepare meeting purpose and CRM context;
+:07 | HTTP Request: Gemini Meeting Analysis\nreturn structured summary, decisions, risks and action items;
+:08 | Code: Parse and Validate Meeting Output\nvalidate summary/action-item schema and mark unsupported fields as uncertain;
+:09 | HTTP Request: Save Meeting Summary\npersist a dedicated meeting summary linked to the transcript, not only generic Interaction;
+:10 | HTTP Request: Save Meeting Action Items\npersist proposed actions separately with pending confirmation/review state;
+:11 | HTTP Request: Notify Owner/Attendees\nuse backend notification/communication APIs.;
+:12 | Code: Finalize Meeting Report\nreturn summary and created record references.;
+stop
+@enduml

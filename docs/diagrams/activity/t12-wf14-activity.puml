@@ -1,0 +1,19 @@
+@startuml
+title T12-WF14 — AI Customer Feedback Agent
+start
+:01 | Webhook Trigger\nreceive a protected internal dispatch from NestJS after source validation, rate limiting, authorization/scope checks and WorkflowRun correlation.;
+:02 | Code: Validate Feedback Input\nvalidate customer reference, channel and text.;
+:03 | Code: Normalize/Redact Feedback\nvalidate redaction metadata from NestJS and normalize only the safe feedback text; reject unredacted payloads.;
+:04 | HTTP Request: Get Customer Context\nfetch customer and recent interaction history.;
+:05 | HTTP Request: Gemini Feedback Classification\nclassify sentiment, category and urgency.;
+:06 | Code: Validate Classification\nenforce schema and confidence constraints.;
+:07 | Code: Determine Priority/SLA\nmap categories/severity to documented handling policy.;
+:08 | HTTP Request: Save Customer Feedback\npersist a dedicated CustomerFeedback record in PostgreSQL through the canonical NestJS feedback API with validation, provenance and audit;
+if (09 | Escalation required?) then (yes)
+:10 | HTTP Request: Ensure CustomerTask\nrequest a deduplicated operational task linked to the feedback record; keep it distinct from approval-only ReviewTask;
+else (no)
+endif
+:11 | HTTP Request: Backend Acknowledge/Notify\nask NestJS to send an acknowledgment or owner notification.;
+:12 | HTTP Request: Feedback Callback/Log\nrecord completion status through an idempotent backend API.;
+stop
+@enduml

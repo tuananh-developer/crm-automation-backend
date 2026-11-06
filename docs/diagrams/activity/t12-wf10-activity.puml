@@ -1,0 +1,19 @@
+@startuml
+title T12-WF10 — AI Next Best Action Agent
+start
+:01 | Webhook Trigger\nreceive an authenticated internal dispatch from NestJS after entity-level access checks.;
+:02 | Code: Validate Entity Reference\nvalidate entity type and ID.;
+:03 | HTTP Request: Get Entity Profile\nfetch customer/lead profile.;
+:04 | HTTP Request: Get Qualification/Score\nretrieve latest eligible qualification and score, if applicable.;
+:05 | HTTP Request: Get Interaction History\nretrieve recent engagement.;
+:06 | HTTP Request: Get Follow-up/Segment Context\nobtain sequence state and segment membership.;
+:07 | Code: Generate Candidate Actions\ncreate a bounded candidate set using explicit business rules.;
+:08 | HTTP Request: AI Rank/Explain Actions\nrank only the allowed candidates and explain why.;
+:09 | Code: Validate Action\nenforce action allowlist, evidence references and confidence thresholds.;
+:10 | HTTP Request: Save Recommendation\npersist recommendation in a backend workflow/result record.;
+if (11 | Human approval required?) then (yes)
+:12 | HTTP Request: Request Backend Review/Notification\nask NestJS to create or ensure an approval task idempotently, never execute a high-impact action automatically in this workflow;
+else (no)
+endif
+stop
+@enduml

@@ -1,0 +1,52 @@
+@startuml
+title T12-WF01 — AI CRM Lead Qualification Agent (Sequence)
+autonumber
+participant "RabbitMQ" as MQ
+participant "n8n WF01\nQualification" as N8N
+participant "NestJS Backend" as API
+database "PostgreSQL" as DB
+participant "Gemini API" as AI
+participant "NestJS Review Module" as REVIEW
+participant "NestJS Notification Service" as NOTIFY
+
+MQ -> N8N: lead.qualification.requested(eventId, leadId)
+activate N8N
+N8N -> N8N: Validate event and idempotency key
+alt Invalid event or already processed
+N8N --> MQ: Reject/acknowledge according to consumer policy
+N8N -> N8N: End as ignored/duplicate
+else Valid new event
+N8N -> API: GET lead details
+API -> DB: Read lead
+DB --> API: Lead profile
+API --> N8N: Lead data
+N8N -> API: GET interaction context
+API -> DB: Read recent interactions
+DB --> API: Interaction signals
+API --> N8N: Context
+N8N -> N8N: Normalize qualification input
+N8N -> AI: Request structured qualification
+AI --> N8N: intent, rationale, confidence
+N8N -> N8N: Parse and validate output
+N8N -> API: POST qualification callback (authenticated canonical API)
+API -> API: Re-apply authoritative policy
+API -> DB: Persist qualification result idempotently
+alt confidence <= 0.80 or other review-required condition
+API -> REVIEW: Create/ensure ReviewTask idempotently
+REVIEW -> DB: Persist ReviewTask if missing
+DB --> REVIEW: ReviewTask ID/status
+REVIEW --> API: Canonical task reference
+API --> N8N: Review required + task reference
+N8N -> API: Request idempotent reviewer notification
+API -> NOTIFY: Notify assigned reviewer
+NOTIFY --> API: Notification result
+else confidence > 0.80 and no mandatory review condition
+API --> N8N: Qualification result accepted
+end
+N8N -> N8N: Build final execution result with correlation IDs
+end
+deactivate N8N
+note over N8N,API
+All API operations shown in this sequence are canonical requirements. NestJS controllers, DTOs, guards, persistence and tests must implement these contracts.
+end note
+@enduml

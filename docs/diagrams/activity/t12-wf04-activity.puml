@@ -1,0 +1,19 @@
+@startuml
+title T12-WF04 — AI CRM Follow-up Agent
+start
+:01 | RabbitMQ Trigger\nconsume one lead.follow_up.triggered event with required executionId target field; keep this as the single primary trigger for that execution, not a parallel webhook.;
+:02 | Code: Validate Execution Request\nvalidate execution, enrollment, step, channel and correlation IDs.;
+:03 | HTTP Request: Get Follow-up Context\nfetch the enrollment, Lead and step from NestJS.;
+:04 | Code: Check Eligibility\nverify active enrollment, due time, next step and duplicate-execution safeguards.;
+:05 | Code: Render Message Payload\nprepare recipient, subject and content from approved templates.;
+:06 | HTTP Request: Backend Send Message\ncall the NestJS Communication API; actual email/provider delivery stays in backend.;
+:07 | Code: Normalize Delivery Result\nclassify the result as SUCCESS, RETRYABLE_FAILURE or PERMANENT_FAILURE.;
+:08 | HTTP Request: Execution Callback\nrecord the normalized delivery result through the authenticated backend callback.;
+:09 | Code: Prepare Execution Outcome\nretain the canonical delivery status and correlation/idempotency keys for the next decision.;
+if (10 | Delivery succeeded?) then (yes)
+  :11 | HTTP Request: Backend Advance/Complete\nadvance the step or complete the enrollment transactionally after confirmed delivery.;
+else (no)
+  :12 | HTTP Request: Backend Handle Delivery Failure\nbackend applies bounded retry for retryable errors or records terminal failure; never advance a failed delivery.;
+endif
+stop
+@enduml

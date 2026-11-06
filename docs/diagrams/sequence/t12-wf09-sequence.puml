@@ -1,0 +1,57 @@
+@startuml
+title T12-WF09 — AI CRM Conversation Summarizer (Sequence)
+autonumber
+actor "CRM UI / Ingestion Source" as UI
+participant "NestJS Conversation Ingestion API" as API
+participant "n8n WF09\nConversation Summarizer" as N8N
+database "PostgreSQL" as DB
+participant "Gemini API" as AI
+participant "NestJS Notification Service" as NOTIFY
+
+UI -> API: Submit transcript/reference with source context
+API -> API: Authenticate requester; authorize source/customer scope; validate/rate-limit request
+API -> DB: Create WorkflowRun with transcript/source reference
+DB --> API: workflowRunId
+API --> UI: 202 Accepted + workflowRunId
+API -> N8N: POST protected internal webhook with scoped request/reference
+activate N8N
+N8N -> N8N: Validate source ID/type/length and correlation
+N8N -> N8N: Fetch permitted transcript/reference and redact sensitive data before AI
+N8N -> API: Save redacted transcript
+API -> DB: Insert ConversationTranscript (redacted content only)
+DB --> API: transcriptId
+API --> N8N: transcriptId
+N8N -> API: GET linked Lead/Customer and recent CRM context
+API -> DB: Read profile and Interaction history
+DB --> API: Available CRM context
+API --> N8N: Context + source provenance
+N8N -> N8N: Build prompt from redacted transcript/context
+N8N -> AI: Request summary, intent, sentiment and proposed action items
+AI --> N8N: Structured summary/actions
+N8N -> N8N: Validate schema, evidence and uncertain statements
+N8N -> API: Save ConversationSummary linked to transcriptId
+API -> DB: Insert summary record
+DB --> API: summaryId
+API --> N8N: summaryId
+N8N -> API: Save ConversationActionItem records (pending/review state)
+API -> DB: Insert action item rows
+DB --> API: Action item IDs
+API --> N8N: Saved action items
+N8N -> API: Request owner in-app notification
+API -> NOTIFY: Notify owner with summary/action references
+NOTIFY --> API: Notification status
+API --> N8N: Notification status
+N8N -> API: Record final workflow status/output
+API -> DB: Update WorkflowRun/audit result
+DB --> API: Saved status
+API --> N8N: Accepted
+deactivate N8N
+UI -> API: GET summary/action results by workflowRunId
+API -> DB: Read transcript/summary/action item records
+DB --> API: Result references
+API --> UI: Summary IDs, action IDs and run status
+note over API,N8N
+The browser/source does not call n8n directly. NestJS authenticates the request and
+passes a scoped service-to-service request. Redaction must occur before the first AI call.
+end note
+@enduml

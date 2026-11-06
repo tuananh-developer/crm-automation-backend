@@ -282,13 +282,25 @@ export class CustomersService {
     }
   }
 
-  async findCustomerTasks(): Promise<CustomerTask[]> {
+  async findCustomerTasks(query?: {
+    customerId?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<CustomerTask[]> {
     if (!this.customerTasksRepository) {
       return [];
     }
 
+    const where: Record<string, unknown> = {};
+    if (query?.customerId) where.customerId = query.customerId;
+    if (query?.status) where.status = query.status;
+
     return this.customerTasksRepository.find({
+      where,
       order: { createdAt: 'DESC' },
+      take: query?.limit ?? 50,
+      skip: ((query?.page ?? 1) - 1) * (query?.limit ?? 50),
     });
   }
 

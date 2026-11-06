@@ -1,0 +1,19 @@
+@startuml
+title T12-WF15 — AI Account Management Agent
+start
+:01 | Schedule Trigger\nrun a configurable weekly strategic-account review.;
+:02 | HTTP Request: Get Strategic Accounts\nfetch Customer records explicitly marked STRATEGIC by an authorized Sales/Admin user, do not infer from missing revenue/contract data.;
+:03 | Split Out: Account Items\nprocess accounts individually or in bounded batches.;
+:04 | HTTP Request: Get Account Profile\nfetch authoritative customer/account attributes.;
+:05 | HTTP Request: Get Interaction Metrics\nretrieve recent interactions and engagement history available in CRM.;
+:06 | HTTP Request: Get Issues/Feedback/Follow-ups\nfetch available customer issues, feedback and pending commitments, disclose missing sources.;
+:07 | HTTP Request: Calculate Account Health\nbackend applies the versioned deterministic policy: engagement 30%, feedback 25%, open issues 25%, follow-up completion 20%, return INSUFFICIENT_DATA when evidence is inadequate.;
+:08 | HTTP Request: AI Account Review\nexplain risks and opportunities from supplied evidence/score, AI does not calculate the official health score.;
+:09 | Code: Validate Recommendations\nrequire evidence references, allowed action categories and explicit handling of INSUFFICIENT_DATA.;
+:10 | HTTP Request: Save Account Snapshot\npersist health result and AI explanation through NestJS.;
+if (11 | Critical risk or opportunity?) then (yes)
+  :12 | HTTP Request: Ensure CustomerTask / Notify Owner\nrequest an idempotent CustomerTask and notification; email delivery stays in NestJS.;
+else (no)
+endif
+stop
+@enduml

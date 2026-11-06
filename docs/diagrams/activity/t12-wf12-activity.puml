@@ -1,0 +1,19 @@
+@startuml
+title T12-WF12 — AI Quote & Proposal Agent
+start
+:01 | Webhook Trigger\nreceive an authenticated internal dispatch from NestJS after Sales authorization.;
+:02 | Code: Validate Requirements\nvalidate customer ID, requirements and requested items.;
+:03 | HTTP Request: Get Customer Context\nretrieve customer details from NestJS.;
+:04 | HTTP Request: Get Product/Pricing Catalog\nread configured backend catalog, if absent use clearly labelled demo/mock catalog, never invent product prices;
+:05 | Code: Normalize Requirements\nmap requested items to known catalog identifiers.;
+:06 | HTTP Request: Gemini Proposal Draft\ndraft explanatory text and proposal structure, not authoritative monetary calculations.;
+:07 | Code: Parse Line Items\nvalidate item IDs, quantities and required fields.;
+:08 | HTTP Request: Backend Pricing Validation\nNestJS deterministically calculates totals/taxes/discount constraints, AI output is never the source of official pricing;
+:09 | Code: Determine Approval Requirement\napply documented discount/amount/business approval thresholds.;
+:10 | HTTP Request: Save Draft\npersist quote/proposal in draft state through backend, do not send to the customer before required approval;
+if (11 | Approval required?) then (yes)
+  :12 | HTTP Request: Create Approval Task\nask NestJS to create/reuse a ReviewTask linked through target_entity_type=Quote and target_entity_id; validate the target, never send an unapproved quote.;
+else (no)
+endif
+stop
+@enduml

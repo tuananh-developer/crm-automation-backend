@@ -1,0 +1,19 @@
+@startuml
+title T12-WF13 — AI Renewal Management Agent
+start
+:01 | Schedule Trigger\ndaily renewal scan.;
+:02 | HTTP Request: Get Contracts Due\nretrieve eligible contracts whose renewal dates fall inside the configured renewal window through the canonical NestJS API.;
+:03 | Split Out: Contract Items\nprocess each contract separately.;
+:04 | HTTP Request: Get Contract/Customer Details\nverify contract status and customer context from authoritative data.;
+:05 | Code: Calculate Renewal Urgency\ncalculate days until renewal using stored dates.;
+:06 | HTTP Request: AI Renewal Recommendation\nprepare a recommendation and draft message, not an automatic send decision.;
+:07 | Code: Validate Draft\nverify customer, contract and dates against source data.;
+:08 | HTTP Request: Save Renewal Draft\npersist the draft and its provenance through NestJS; do not send to the customer yet.;
+if (09 | Auto-send explicitly allowed?) then (yes)
+  :10 | HTTP Request: Backend Send Message\ncall the NestJS Communication API only when policy, approved template, consent and required approval permit it.;
+else (no)
+  :11 | HTTP Request: Create/Ensure Renewal Approval Task\nask NestJS to create/reuse an approval ReviewTask linked to the CustomerContract through the validated polymorphic target fields; retain draft and do not send without approval/consent.;
+endif
+:12 | HTTP Request: Record Renewal Attempt\npersist sent/failed/pending status through NestJS for idempotency and audit.;
+stop
+@enduml

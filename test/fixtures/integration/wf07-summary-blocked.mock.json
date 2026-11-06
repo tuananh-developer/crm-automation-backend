@@ -1,0 +1,7 @@
+{
+  "_mock": true,
+  "_scenario": "Test I: Summary API not exists",
+  "endpoint": "POST /api/v1/workflow-runs/:runId/callback (proposed)",
+  "status": "NOT_IMPLEMENTED",
+  "expectedBehavior": "Workflow reports BLOCKED. No fake success. No direct DB write."
+}

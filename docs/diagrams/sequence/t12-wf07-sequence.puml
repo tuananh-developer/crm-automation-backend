@@ -1,0 +1,49 @@
+@startuml
+title T12-WF07 — AI Customer Segmentation Agent (Sequence)
+autonumber
+participant "Schedule Trigger" as SCHED
+participant "n8n WF07\nSegmentation" as N8N
+participant "NestJS Backend" as API
+participant "Rule Engine\ninside NestJS" as RULE
+database "PostgreSQL" as DB
+participant "Gemini API" as AI
+
+SCHED -> N8N: Segment refresh schedule
+activate N8N
+N8N -> API: GET active segment definitions
+API -> DB: Read Segment records/rules
+DB --> API: Active segments
+API --> N8N: Segment definitions
+loop For each segment
+N8N -> API: GET eligible customer cohort/features
+API -> DB: Read customer data/features
+DB --> API: Cohort
+API --> N8N: Customer cohort
+N8N -> N8N: Validate/shape Rule Engine request only
+N8N -> API: POST evaluate segment
+API -> RULE: Evaluate using backend-owned rules
+RULE -> DB: Read needed features and update assignments transactionally
+DB --> RULE: Evaluation/assignment results
+RULE --> API: Counts and assignment summary
+API --> N8N: Segment evaluation result
+N8N -> N8N: Normalize stats for reporting (no membership rules here)
+end
+N8N -> AI: Generate evidence-based segment insights from backend results
+AI --> N8N: Summary/trend insights
+N8N -> N8N: Validate that insights stay within returned evidence
+N8N -> API: Save workflow execution summary
+API -> DB: Persist WorkflowRun/output summary
+DB --> API: Saved run ID
+API --> N8N: Saved summary
+opt Anomaly threshold exceeded
+N8N -> API: Request in-app notification/task
+API -> DB: Persist notification/audit
+DB --> API: Notification record
+API --> N8N: Accepted
+end
+deactivate N8N
+note over N8N,RULE
+n8n orchestrates the Rule Engine; it must not reimplement segment criteria
+or directly assign CustomerSegment memberships.
+end note
+@enduml

@@ -1,0 +1,56 @@
+@startuml
+title T12-WF04 — AI CRM Follow-up Agent (Sequence)
+autonumber
+participant "NestJS Scheduler/Domain Service" as SCHED
+participant "RabbitMQ" as MQ
+participant "n8n WF04\nFollow-up" as N8N
+participant "NestJS Backend" as API
+database "PostgreSQL" as DB
+participant "Communication API" as COMM
+participant "Email/Message Provider" as PROVIDER
+
+SCHED -> DB: Select due follow-up execution
+SCHED -> MQ: Publish lead.follow_up.triggered(eventId, executionId [required target field])
+MQ -> N8N: Deliver due execution event (target payload includes executionId)
+activate N8N
+N8N -> N8N: Validate event, IDs and idempotency key
+N8N -> API: GET enrollment/lead/step context
+API -> DB: Read execution state
+DB --> API: Enrollment, step, due time, status
+API --> N8N: Authoritative follow-up context
+N8N -> N8N: Check eligibility and render approved template
+alt Enrollment inactive, not due, or duplicate
+N8N -> API: Record ignored/not-eligible result
+API -> DB: Record idempotent outcome/audit
+API --> N8N: No send; execution closed or ignored
+else Eligible execution
+N8N -> COMM: POST send message request through NestJS
+COMM -> COMM: Validate permission, template and delivery idempotency
+COMM -> PROVIDER: Send email/message
+PROVIDER --> COMM: Delivered / retryable error / permanent error
+COMM --> N8N: Normalized delivery result
+N8N -> API: POST execution callback with result and correlation IDs
+API -> DB: Persist delivery status
+DB --> API: Status persisted
+API --> N8N: Callback accepted
+alt Delivery succeeded
+N8N -> API: Advance step or complete enrollment
+API -> DB: Update enrollment and next step transactionally
+DB --> API: Updated state
+API --> N8N: Advanced/completed
+else Retryable failure
+N8N -> API: Schedule idempotent retry
+API -> DB: Record retry attempt and next due time
+DB --> API: Retry scheduled
+API --> N8N: Retry scheduled; do not advance
+else Permanent failure
+N8N -> API: Record terminal failure / create owner task
+API -> DB: Persist terminal failure
+API --> N8N: Failed; do not advance
+end
+end
+deactivate N8N
+note over N8N,COMM
+n8n never sends SMTP directly. NestJS exposes and enforces the canonical operations shown in this sequence; the Communication API owns delivery and policy checks.
+end note
+@enduml

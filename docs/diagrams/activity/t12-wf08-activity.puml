@@ -1,0 +1,19 @@
+@startuml
+title T12-WF08 — AI CRM Data Cleaning Agent
+start
+:01 | RabbitMQ Trigger\nconsume data.cleaning.requested after NestJS creates the scan WorkflowRun.;
+:02 | Code: Validate Event\nvalidate workflowRunId, scope/filter, eventId and requester context.;
+:03 | HTTP Request: Load Scan Context\nload the scan run and authorized scope already created by NestJS; do not create a duplicate run.;
+:04 | HTTP Request: Fetch Lead Batch\nfetch a bounded batch of leads through the backend API.;
+:05 | Code: Normalize Values\ntrim whitespace and normalize permitted formats without mutating data.;
+:06 | Code: Detect Deterministic Issues\nfind missing/invalid fields using deterministic rules.;
+:07 | Code: Build Duplicate/AI Context\nidentify duplicate candidates and prepare only ambiguous cases for AI.;
+:08 | HTTP Request: Gemini Cleaning Suggestions\nrequest suggestions, not autonomous writes.;
+:09 | Code: Validate Findings and Safety Flags\nvalidate schema and allowed fields; backend independently revalidates scanned values, safeToApply and required approval.;
+:10 | HTTP Request: Cleaning Callback\npersist findings/report in NestJS only; this callback must not apply Lead field changes.;
+if (11 | Human review required?) then (yes)
+  :12 | HTTP Request: Backend Notify Reviewer\nrequest an idempotent notification; actual mutation occurs only through a protected backend operation after revalidation and required approval.;
+else (no)
+endif
+stop
+@enduml

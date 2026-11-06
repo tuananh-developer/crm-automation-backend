@@ -1,0 +1,19 @@
+@startuml
+title T12-WF02 — AI Lead Enrichment Agent
+start
+:01 | RabbitMQ Trigger\nconsume enrichment requests.;
+:02 | Code: Normalize Event\nparse payload and validate lead/request IDs.;
+:03 | HTTP Request: Get Lead\nobtain authoritative lead fields.;
+:04 | Code: Extract Domain\nnormalize email and website, identify free-email domains.;
+:05 | HTTP Request: Mock Enrichment Adapter\nuse deterministic fixture/mock data with providerMode=MOCK whenever a real enrichment provider is not configured; never present mock data as verified external facts;
+:06 | Code: Normalize Provider Result\nmap provider fields into the agreed schema.;
+:07 | Code: Validate Completeness\ndistinguish SUCCESS, PARTIAL and FAILED, never manufacture unknown data.;
+:08 | HTTP Request: Enrichment Callback\nreturn structured findings to NestJS.;
+if (09 | Partial or failed?) then (yes)
+  :10 | HTTP Request: Backend Notification\nnotify the owner through NestJS if configured.;
+else (no)
+endif
+:11 | Code: Build Run Summary\ninclude provider mode (real/mock), status and correlation IDs.;
+:12 | Code: Finalize Execution Output\nreturn a final structured output for n8n execution/logging.;
+stop
+@enduml

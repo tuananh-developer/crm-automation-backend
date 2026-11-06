@@ -21,7 +21,7 @@
 | GET /api/v1/segments | Listed | `segments.controller.ts` — `@Get()` | IMPLEMENTED_UNVERIFIED | Returns `PaginatedResponseDto<SegmentResponseDto>` |
 | GET /api/v1/segments/:segmentId | Listed | `segments.controller.ts` — `@Get(':id')` | IMPLEMENTED_UNVERIFIED | Returns `SegmentResponseDto` |
 | POST /api/v1/segments/:segmentId/evaluate | Listed | `segments.controller.ts` — `@Post(':id/evaluate')` | IMPLEMENTED_UNVERIFIED | Returns `EvaluateSegmentResponseDto` |
-| POST /api/v1/segments/evaluate-all | Listed | `segments.controller.ts` — `@Post('evaluate-all')` | IMPLEMENTED_UNVERIFIED | Returns `EvaluateSegmentBulkResponseDto` |
+| POST /api/v1/segments/:segmentId/evaluate-all | Listed | `segments.controller.ts` — `@Post('evaluate-all')` | IMPLEMENTED_UNVERIFIED | Returns `EvaluateSegmentBulkResponseDto` |
 | GET /api/v1/segments/:segmentId/customers | Listed | `segments.controller.ts` — `@Get(':id/customers')` | IMPLEMENTED_UNVERIFIED | Returns `PaginatedResponseDto<CustomerResponseDto>` |
 | GET /api/v1/customer-contracts/due-for-renewal | Listed | **NOT FOUND** | NOT_IMPLEMENTED | No controller/service/entity |
 | GET /api/v1/customer-contracts/:contractId | Listed | **NOT FOUND** | NOT_IMPLEMENTED | No controller/service/entity |

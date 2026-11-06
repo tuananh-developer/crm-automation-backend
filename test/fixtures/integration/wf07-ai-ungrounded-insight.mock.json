@@ -1,0 +1,10 @@
+{
+  "_mock": true,
+  "_scenario": "Test F: AI insight with ungrounded numbers",
+  "inputStatistics": { "total": 50, "processed": 50, "matched": 12, "unmatched": 38, "matchRate": "24.00%" },
+  "aiResponse": [
+    { "insight": "Match rate is high", "evidence": "matchRate=24.00%", "confidence": 0.9 },
+    { "insight": "Growth trend positive", "evidence": "growthRate=15%", "confidence": 0.8 }
+  ],
+  "expectedBehavior": "First insight accepted (evidence matches input). Second insight rejected (growthRate not in input). rejectedInsights=1."
+}
