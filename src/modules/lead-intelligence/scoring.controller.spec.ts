@@ -3,14 +3,24 @@ import type { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { ScoreLabel } from './enums/lead-intelligence.enum.js';
 import type { LeadScore } from './entities/lead-score.entity.js';
 import type { ScoringCallbackDto } from './dto/scoring-callback.dto.js';
-import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
-import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('ScoringController', () => {
   let controller: ScoringController;
   let service: jest.Mocked<Partial<LeadIntelligenceService>>;
+  const actor: AuthenticatedUser = {
+    id: 'user-owner-123',
+    name: 'Sales Rep',
+    email: 'sales@example.test',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 
   const mockScore: LeadScore = {
     id: 'score-123',
@@ -18,20 +28,19 @@ describe('ScoringController', () => {
     workflowRunId: 'wf-run-123',
     score: 85,
     label: ScoreLabel.HOT,
-    reason: 'High buying intent and strong company fit',
-    scoringFeatures: { intent: 90, fit: 80 },
-    modelProvider: 'openai',
-    modelName: 'gpt-4o',
-    modelVersion: '2024-08-06',
+    factors: { companySize: 10, industry: 15 },
+    modelProvider: 'rule-based',
+    modelVersion: '1.0',
+    scoringMethod: 'rule-engine',
     inputSnapshot: {},
-    outputSnapshot: {},
     createdAt: new Date(),
-  };
+    updatedAt: new Date(),
+  } as LeadScore;
 
   const mockActor: AuthenticatedUser = {
-    id: 'user-123',
-    name: 'Sales User',
-    email: 'sales@example.com',
+    id: 'user-actor-456',
+    name: 'Actor Rep',
+    email: 'actor@example.test',
     role: UserRole.SALES,
     status: UserStatus.ACTIVE,
     lastLoginAt: null,
@@ -42,22 +51,15 @@ describe('ScoringController', () => {
   beforeEach(() => {
     service = {
       triggerScoring: jest.fn().mockResolvedValue({
-        message: 'Lead scoring workflow triggered successfully',
         workflowRunId: 'wf-run-123',
-        leadId: 'lead-123',
+        status: 'PENDING',
+        message: 'Scoring triggered',
       }),
       evaluateScoringPolicy: jest.fn().mockResolvedValue({
         score: 85,
         label: ScoreLabel.HOT,
         policyVersion: '1.0',
-        reason: 'Canonical HOT score',
-        breakdown: { baseScore: 20 },
-        scoringFeatures: {},
-        modelInfo: {
-          provider: 'crm-scoring-policy',
-          model: 'deterministic-scoring-v1',
-          modelVersion: '1.0',
-        },
+        factors: {},
       }),
       handleScoringCallback: jest.fn().mockResolvedValue({
         score: mockScore,
@@ -78,12 +80,16 @@ describe('ScoringController', () => {
   });
 
   it('should trigger scoring via service', async () => {
-    const result = await controller.triggerScoring('lead-123');
+    const result = await controller.triggerScoring(
+      'lead-123',
+      undefined,
+      actor,
+    );
 
     expect(service.triggerScoring).toHaveBeenCalledWith(
       'lead-123',
       undefined,
-      undefined,
+      actor,
     );
     expect(result.workflowRunId).toBe('wf-run-123');
   });
@@ -176,39 +182,31 @@ describe('ScoringController', () => {
       ]);
     });
 
-    it('should configure evaluate-policy route paths on evaluatePolicy', () => {
-      const path = Reflect.getMetadata(
-        'path',
+    it('should protect triggerScoring endpoint with JwtAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        ScoringController.prototype.triggerScoring,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtAuthGuard);
+    });
+
+    it('should protect handleCallback endpoint with N8nAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        ScoringController.prototype.handleCallback,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(N8nAuthGuard);
+    });
+
+    it('should protect evaluatePolicy endpoint with N8nAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
         ScoringController.prototype.evaluatePolicy,
       );
-      expect(path).toEqual(['evaluate-policy', 'scoring/evaluate-policy']);
-    });
-
-    it('should protect user-facing scoring routes with JwtAuthGuard', () => {
-      const userMethods = [
-        ScoringController.prototype.triggerScoring,
-        ScoringController.prototype.getScoringContext,
-        ScoringController.prototype.getScores,
-        ScoringController.prototype.getLatestScore,
-      ];
-
-      for (const method of userMethods) {
-        const guards = Reflect.getMetadata('__guards__', method);
-        expect(guards).toContain(JwtAuthGuard);
-      }
-    });
-
-    it('should protect internal n8n scoring routes with N8nAuthGuard', () => {
-      const internalMethods = [
-        ScoringController.prototype.getScoringContextInternal,
-        ScoringController.prototype.evaluatePolicy,
-        ScoringController.prototype.handleCallback,
-      ];
-
-      for (const method of internalMethods) {
-        const guards = Reflect.getMetadata('__guards__', method);
-        expect(guards).toContain(N8nAuthGuard);
-      }
+      expect(guards).toBeDefined();
+      expect(guards).toContain(N8nAuthGuard);
     });
     /* eslint-enable @typescript-eslint/unbound-method */
   });

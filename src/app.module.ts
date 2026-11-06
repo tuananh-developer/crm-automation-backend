@@ -19,6 +19,8 @@ import { AuditModule } from './modules/audit/audit.module.js';
 import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module.js';
+import { T12WorkflowsModule } from './modules/t12-workflows/t12-workflows.module.js';
+import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
 
 @Module({
   imports: [
@@ -43,22 +45,19 @@ import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module
 
         // Connect to remote database (Neon / Supabase) if in production or DATABASE_URL provided without USE_LOCAL_DB
         if (!useLocalDb && dbUrl) {
-          const useSsl =
-            config.get<string>('DB_SSL') === 'true' ||
-            isProd ||
-            Boolean(
-              dbUrl.includes('sslmode=require') ||
-              dbUrl.includes('supabase') ||
-              dbUrl.includes('neon.tech') ||
-              dbUrl.includes('render.com'),
-            );
-
-          const sslConfig = useSsl ? { rejectUnauthorized: false } : false;
+          const sslCa = config
+            .get<string>('DB_SSL_CA')
+            ?.split(String.raw`\n`)
+            .join('\n');
+          const connection = resolvePostgresConnectionOptions(dbUrl, {
+            forceSsl: config.get<string>('DB_SSL') === 'true' || isProd,
+            ca: sslCa,
+          });
 
           return {
             type: 'postgres',
-            url: dbUrl,
-            ssl: sslConfig,
+            url: connection.url,
+            ssl: connection.ssl,
             autoLoadEntities: true,
             synchronize: false,
           };
@@ -110,6 +109,7 @@ import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module
     AuditModule,
     AuthModule,
     DataCleaningModule,
+    T12WorkflowsModule,
     ThrottlerModule.forRoot([
       {
         name: 'default',

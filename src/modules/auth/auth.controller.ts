@@ -7,6 +7,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiBearerAuth,
   ApiConflictResponse,
@@ -50,6 +51,7 @@ export class AuthController {
 
   @Public()
   @Post('login')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Đăng nhập vào hệ thống',

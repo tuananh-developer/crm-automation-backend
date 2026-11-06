@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   Optional,
@@ -15,6 +16,10 @@ import {
 } from './dto/index.js';
 import { NotificationSeverity } from './enums/notification.enum.js';
 import type { CreateNotificationInput } from './interfaces/index.js';
+import {
+  hasSamePayload,
+  isPostgresUniqueViolation,
+} from '../../common/utils/idempotency.util.js';
 
 export type { CreateNotificationInput };
 
@@ -76,7 +81,7 @@ export class NotificationsService {
     return result.affected ?? 0;
   }
 
-  /** Used by other modules (UC04, UC06, UC07) to raise an in-app notification. */
+  /** Used by other modules (UC06, UC07) to raise an in-app notification. */
   async create(input: CreateNotificationInput): Promise<Notification> {
     let targetUserId = input.userId;
 
@@ -95,19 +100,65 @@ export class NotificationsService {
       );
     }
 
-    return this.notificationRepository.save(
-      this.notificationRepository.create({
-        userId: targetUserId,
-        type: input.type,
-        title: input.title,
-        content: input.content ?? input.message ?? null,
-        severity: input.severity ?? NotificationSeverity.INFO,
-        leadId: input.leadId ?? null,
-        customerId: input.customerId ?? null,
-        reviewTaskId: input.reviewTaskId ?? null,
-        isRead: false,
-        readAt: null,
-      }),
-    );
+    const payload = {
+      userId: targetUserId,
+      type: input.type,
+      title: input.title,
+      content: input.content ?? input.message ?? null,
+      leadId: input.leadId ?? null,
+      customerId: input.customerId ?? null,
+      reviewTaskId: input.reviewTaskId ?? null,
+      severity: input.severity ?? NotificationSeverity.INFO,
+    };
+
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    const findExisting = () =>
+      idempotencyKey
+        ? this.notificationRepository.findOne({ where: { idempotencyKey } })
+        : Promise.resolve(null);
+
+    const reuseExisting = (existing: Notification) => {
+      const existingPayload = {
+        userId: existing.userId,
+        type: existing.type,
+        title: existing.title,
+        content: existing.content,
+        leadId: existing.leadId,
+        customerId: existing.customerId,
+        reviewTaskId: existing.reviewTaskId,
+        severity: existing.severity ?? NotificationSeverity.INFO,
+      };
+      if (!hasSamePayload(existingPayload, payload)) {
+        throw new ConflictException(
+          'Idempotency key was already used with a different notification payload',
+        );
+      }
+      return existing;
+    };
+
+    const existing = await findExisting();
+    if (existing) {
+      return reuseExisting(existing);
+    }
+
+    try {
+      return await this.notificationRepository.save(
+        this.notificationRepository.create({
+          ...payload,
+          idempotencyKey,
+          isRead: false,
+          readAt: null,
+        }),
+      );
+    } catch (error) {
+      if (!idempotencyKey || !isPostgresUniqueViolation(error)) {
+        throw error;
+      }
+      const concurrent = await findExisting();
+      if (!concurrent) {
+        throw error;
+      }
+      return reuseExisting(concurrent);
+    }
   }
 }

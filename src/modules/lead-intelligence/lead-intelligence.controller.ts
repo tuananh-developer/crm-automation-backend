@@ -32,6 +32,9 @@ import {
 } from './dto/index.js';
 import { EnrichmentMapper, QualificationMapper } from './mappers/index.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Lead Intelligence')
 @Controller('lead-intelligence')
@@ -41,6 +44,7 @@ export class LeadIntelligenceController {
   ) {}
 
   @Post('qualify/:leadId')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Trigger AI Lead Qualification (UC02)',
@@ -57,9 +61,10 @@ export class LeadIntelligenceController {
   @ApiResponse({ status: 404, description: 'Lead not found.' })
   async triggerQualification(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @Body() dto?: TriggerQualificationDto,
+    @Body() dto: TriggerQualificationDto | undefined,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<TriggerQualificationResponseDto> {
-    return this.leadIntelligenceService.triggerQualification(leadId, dto);
+    return this.leadIntelligenceService.triggerQualification(leadId, dto, user);
   }
 
   @Post(['qualification/callback', '/internal/n8n/lead-qualification/callback'])
@@ -86,6 +91,7 @@ export class LeadIntelligenceController {
   }
 
   @Get('qualifications/:leadId')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get all qualification history for a lead' })
   @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
   @ApiResponse({
@@ -95,9 +101,12 @@ export class LeadIntelligenceController {
   })
   async getQualifications(
     @Param('leadId', ParseUUIDPipe) leadId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<QualificationResponseDto[]> {
-    const records =
-      await this.leadIntelligenceService.getQualificationsByLead(leadId);
+    const records = await this.leadIntelligenceService.getQualificationsByLead(
+      leadId,
+      user,
+    );
     return QualificationMapper.toResponseDtoList(records);
   }
 
@@ -126,6 +135,7 @@ export class LeadIntelligenceController {
   }
 
   @Get('qualifications/:leadId/latest')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get latest qualification assessment for a lead' })
   @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
   @ApiResponse({
@@ -139,13 +149,17 @@ export class LeadIntelligenceController {
   })
   async getLatestQualification(
     @Param('leadId', ParseUUIDPipe) leadId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<QualificationResponseDto | null> {
-    const record =
-      await this.leadIntelligenceService.getLatestQualification(leadId);
+    const record = await this.leadIntelligenceService.getLatestQualification(
+      leadId,
+      user,
+    );
     return record ? QualificationMapper.toResponseDto(record) : null;
   }
 
   @Get('mock-enrichment')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: 'Mock external enrichment service for testing & n8n',
     description:
@@ -195,6 +209,7 @@ export class LeadIntelligenceController {
   // ── Lead Enrichment Endpoints (UC03) ────────────────────────────────────────
 
   @Post('enrich/:leadId')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Trigger AI Lead Enrichment (UC03)',
@@ -211,12 +226,14 @@ export class LeadIntelligenceController {
   @ApiResponse({ status: 404, description: 'Lead not found.' })
   async triggerEnrichment(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @Body() dto?: TriggerEnrichmentDto,
+    @Body() dto: TriggerEnrichmentDto | undefined,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<TriggerEnrichmentResponseDto> {
-    return this.leadIntelligenceService.triggerEnrichment(leadId, dto);
+    return this.leadIntelligenceService.triggerEnrichment(leadId, dto, user);
   }
 
   @Get('enrichments/:leadId')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get all enrichment history for a lead' })
   @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
   @ApiResponse({
@@ -226,13 +243,17 @@ export class LeadIntelligenceController {
   })
   async getEnrichments(
     @Param('leadId', ParseUUIDPipe) leadId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<EnrichmentResponseDto[]> {
-    const records =
-      await this.leadIntelligenceService.getEnrichmentsByLead(leadId);
+    const records = await this.leadIntelligenceService.getEnrichmentsByLead(
+      leadId,
+      user,
+    );
     return EnrichmentMapper.toResponseDtoList(records);
   }
 
   @Get('enrichments/:leadId/latest')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get latest enrichment result for a lead' })
   @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
   @ApiResponse({
@@ -246,9 +267,12 @@ export class LeadIntelligenceController {
   })
   async getLatestEnrichment(
     @Param('leadId', ParseUUIDPipe) leadId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<EnrichmentResponseDto | null> {
-    const record =
-      await this.leadIntelligenceService.getLatestEnrichment(leadId);
+    const record = await this.leadIntelligenceService.getLatestEnrichment(
+      leadId,
+      user,
+    );
     return record ? EnrichmentMapper.toResponseDto(record) : null;
   }
 }

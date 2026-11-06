@@ -10,26 +10,19 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') || 3000;
-  const frontendUrl =
-    configService.get<string>('FRONTEND_URL') || 'http://localhost:3001';
-
-  app.setGlobalPrefix('api/v1');
-
   const isProd = configService.get<string>('NODE_ENV') === 'production';
-  const corsOrigins = isProd
-    ? [frontendUrl]
-    : [
-        frontendUrl,
-        'http://localhost:3000',
-        'http://localhost:3001',
-        'http://localhost:5678',
-      ];
+  const configuredFrontendUrl = configService.get<string>('FRONTEND_URL');
+  if (isProd && !configuredFrontendUrl?.trim()) throw new Error('FRONTEND_URL must be configured in production');
+  const frontendOrigins = configuredFrontendUrl?.split(',').map((origin) => origin.trim()).filter(Boolean) ?? [];
+  if (isProd && frontendOrigins.length === 0) throw new Error('FRONTEND_URL must contain at least one valid origin in production');
+  app.setGlobalPrefix('api/v1');
+  const corsOrigins = isProd ? frontendOrigins : [...(frontendOrigins.length ? frontendOrigins : ['http://localhost:3001']), 'http://localhost:3000', 'http://localhost:3001', 'http://localhost:5678'];
 
   app.enableCors({
     origin: corsOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Idempotency-Key'],
   });
 
   app.useGlobalPipes(

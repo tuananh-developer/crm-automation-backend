@@ -1,10 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import {
-  BadRequestException,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { ScoreLabel } from './enums/lead-intelligence.enum.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
@@ -50,7 +46,7 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
       );
       expect(trigger).toBeDefined();
       expect(trigger.parameters.queue).toBe(LEAD_SCORING_QUEUE);
-      expect(LEAD_SCORING_QUEUE).toBe('lead.scoring.queue');
+      expect(LEAD_SCORING_QUEUE).toBe('n8n.lead-scoring.q');
       expect(CRM_EXCHANGE).toBe('crm.events');
       expect(CRM_EVENTS.LEAD_SCORING_REQUESTED).toBe('lead.scoring.requested');
     });
@@ -581,7 +577,7 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
           { userId: 'spoofed-user' },
           otherSalesActor,
         ),
-      ).rejects.toBeInstanceOf(ForbiddenException);
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('attributes triggeredByUserId to authenticated actor and ignores caller-supplied dto.userId', async () => {
@@ -690,7 +686,7 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
           workflowRunId: 'run-other',
           score: 80,
         }),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('rejects callback when workflowRunId belongs to another workflow type', async () => {
@@ -706,7 +702,7 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
           workflowRunId: 'run-diff-wf',
           score: 80,
         }),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('handles idempotent duplicate callbacks safely without re-inserting score', async () => {

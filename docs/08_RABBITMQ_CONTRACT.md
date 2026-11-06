@@ -20,14 +20,16 @@ Use one versioned event envelope for domain commands/events:
 
 Use durable topic exchange `crm.events`. Each independent consumer gets its own durable queue; different consumers must not share one queue when each requires its own copy of an event. Replicas of the same consumer may share that consumer's queue for load balancing.
 
-| Consumer | Durable queue | Routing key | Required `data` fields |
-|---|---|---|---|
-| Lead-created audit consumer (only if enabled) | `crm.audit.lead-created.q` | `lead.created` | `leadId` |
-| Qualification | `n8n.lead-qualification.q` | `lead.qualification.requested` | `leadId`, `workflowRunId` |
-| Enrichment | `n8n.lead-enrichment.q` | `lead.enrichment.requested` | `leadId`, `workflowRunId`, `provider`/provider mode |
-| Scoring | `n8n.lead-scoring.q` | `lead.scoring.requested` | `leadId`, `workflowRunId` |
-| Follow-up execution | `n8n.follow-up-execution.q` | `lead.follow_up.triggered` | `executionId`, `enrollmentId`, `leadId`, `sequenceId`, `stepId`, `scheduledAt` where applicable |
-| Data Cleaning | `n8n.data-cleaning.q` | `data.cleaning.requested` | `workflowRunId`, `scope`, `timestamp`, optional actor/filter |
+| Consumer                                      | Durable queue               | Routing key                    | Required `data` fields                                                                          |
+| --------------------------------------------- | --------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------- |
+| Lead-created audit/event consumer             | `crm.audit.lead-created.q`  | `lead.created`                 | `leadId`                                                                                        |
+| Qualification                                 | `n8n.lead-qualification.q`  | `lead.qualification.requested` | `leadId`, `workflowRunId`                                                                       |
+| Enrichment                                    | `n8n.lead-enrichment.q`     | `lead.enrichment.requested`    | `leadId`, `workflowRunId`, `provider`/provider mode                                             |
+| Scoring                                       | `n8n.lead-scoring.q`        | `lead.scoring.requested`       | `leadId`, `workflowRunId`                                                                       |
+| Follow-up execution                           | `n8n.follow-up-execution.q` | `lead.follow_up.triggered`     | `executionId`, `enrollmentId`, `leadId`, `sequenceId`, `stepId`, `scheduledAt` where applicable |
+| Data Cleaning                                 | `n8n.data-cleaning.q`       | `data.cleaning.requested`      | `workflowRunId`, `scope`, `timestamp`, optional actor/filter                                    |
+
+The backend, RabbitMQ definitions and exported n8n triggers use these queue names and exact routing keys. On startup the backend removes the old `lead.#`, `lead.*` and qualification bindings from the legacy `crm_events_queue` while leaving that durable queue intact so existing backlog is not deleted. Operators should inspect and drain/replay any legacy backlog before removing that queue manually.
 
 The fifteen workflows do not all require RabbitMQ. Explicit UI requests enter through NestJS; backend authorizes and creates a run, then invokes a protected internal webhook or publishes an event according to the workflow trigger. Periodic scans use the appropriate schedule trigger. User browsers never call production n8n webhooks directly.
 
@@ -36,25 +38,56 @@ The fifteen workflows do not all require RabbitMQ. Explicit UI requests enter th
 ### Qualification
 
 ```json
-{"eventId":"<uuid>","eventType":"lead.qualification.requested","version":1,"occurredAt":"<ISO-8601>","data":{"leadId":"<uuid>","workflowRunId":"<uuid>"}}
+{
+  "eventId": "<uuid>",
+  "eventType": "lead.qualification.requested",
+  "version": 1,
+  "occurredAt": "<ISO-8601>",
+  "data": { "leadId": "<uuid>", "workflowRunId": "<uuid>" }
+}
 ```
 
 ### Enrichment
 
 ```json
-{"eventId":"<uuid>","eventType":"lead.enrichment.requested","version":1,"occurredAt":"<ISO-8601>","data":{"leadId":"<uuid>","workflowRunId":"<uuid>","provider":"MOCK"}}
+{
+  "eventId": "<uuid>",
+  "eventType": "lead.enrichment.requested",
+  "version": 1,
+  "occurredAt": "<ISO-8601>",
+  "data": { "leadId": "<uuid>", "workflowRunId": "<uuid>", "provider": "MOCK" }
+}
 ```
 
 ### Scoring
 
 ```json
-{"eventId":"<uuid>","eventType":"lead.scoring.requested","version":1,"occurredAt":"<ISO-8601>","data":{"leadId":"<uuid>","workflowRunId":"<uuid>"}}
+{
+  "eventId": "<uuid>",
+  "eventType": "lead.scoring.requested",
+  "version": 1,
+  "occurredAt": "<ISO-8601>",
+  "data": { "leadId": "<uuid>", "workflowRunId": "<uuid>" }
+}
 ```
 
 ### Follow-up
 
 ```json
-{"eventId":"<uuid>","eventType":"lead.follow_up.triggered","version":1,"occurredAt":"<ISO-8601>","data":{"executionId":"<persisted-execution-uuid>","enrollmentId":"<uuid>","leadId":"<uuid>","sequenceId":"<uuid>","stepId":"<uuid>","scheduledAt":"<ISO-8601>"}}
+{
+  "eventId": "<uuid>",
+  "eventType": "lead.follow_up.triggered",
+  "version": 1,
+  "occurredAt": "<ISO-8601>",
+  "data": {
+    "executionId": "<persisted-execution-uuid>",
+    "enrollmentId": "<uuid>",
+    "leadId": "<uuid>",
+    "sequenceId": "<uuid>",
+    "stepId": "<uuid>",
+    "scheduledAt": "<ISO-8601>"
+  }
+}
 ```
 
 `data.executionId` is mandatory and must reference a persisted `FollowUpExecution`. It is the business identity for execution idempotency; `eventId` is the message identity.
@@ -62,7 +95,19 @@ The fifteen workflows do not all require RabbitMQ. Explicit UI requests enter th
 ### Data Cleaning
 
 ```json
-{"eventId":"<uuid>","eventType":"data.cleaning.requested","version":1,"occurredAt":"<ISO-8601>","data":{"workflowRunId":"<uuid>","scope":"ALL","triggeredByUserId":"<uuid-or-null>","filter":null,"timestamp":"<ISO-8601>"}}
+{
+  "eventId": "<uuid>",
+  "eventType": "data.cleaning.requested",
+  "version": 1,
+  "occurredAt": "<ISO-8601>",
+  "data": {
+    "workflowRunId": "<uuid>",
+    "scope": "ALL",
+    "triggeredByUserId": "<uuid-or-null>",
+    "filter": null,
+    "timestamp": "<ISO-8601>"
+  }
+}
 ```
 
 Other Topic 12 workflows use authenticated NestJS request/callback contracts or scheduled triggers where that is the agreed node blueprint; do not publish invented events solely to make every flow event-driven.

@@ -50,22 +50,34 @@ describe('AuthModule', () => {
   });
 
   it('fails to compile in production when JWT_SECRET is missing', async () => {
-    await expect(
-      Test.createTestingModule({
-        imports: [
-          ConfigModule.forRoot({
-            isGlobal: true,
-            ignoreEnvFile: true,
-            load: [() => ({ NODE_ENV: 'production' })],
-          }),
-          AuthModule,
-        ],
-      })
-        .overrideProvider(getRepositoryToken(User))
-        .useValue({ findOne: jest.fn(), create: jest.fn(), save: jest.fn() })
-        .compile(),
-    ).rejects.toThrow(
-      'FATAL: JWT_SECRET environment variable is missing in production environment',
-    );
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousJwtSecret = process.env.JWT_SECRET;
+    process.env.NODE_ENV = 'production';
+    delete process.env.JWT_SECRET;
+
+    try {
+      await expect(
+        Test.createTestingModule({
+          imports: [
+            ConfigModule.forRoot({
+              isGlobal: true,
+              ignoreEnvFile: true,
+              load: [() => ({ NODE_ENV: 'production' })],
+            }),
+            AuthModule,
+          ],
+        })
+          .overrideProvider(getRepositoryToken(User))
+          .useValue({ findOne: jest.fn(), create: jest.fn(), save: jest.fn() })
+          .compile(),
+      ).rejects.toThrow(
+        'FATAL: JWT_SECRET environment variable is missing in production environment',
+      );
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+      if (previousJwtSecret === undefined) delete process.env.JWT_SECRET;
+      else process.env.JWT_SECRET = previousJwtSecret;
+    }
   });
 });

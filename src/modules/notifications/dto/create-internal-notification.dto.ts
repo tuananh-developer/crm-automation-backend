@@ -62,4 +62,9 @@ export class CreateInternalNotificationDto {
   @IsOptional()
   @IsUUID()
   reviewTaskId?: string;
+
+  @ApiPropertyOptional({ description: 'Idempotency key for deduplication' })
+  @IsOptional()
+  @IsString()
+  idempotencyKey?: string;
 }
