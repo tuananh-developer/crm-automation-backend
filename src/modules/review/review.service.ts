@@ -331,10 +331,9 @@ export class ReviewService {
         { id: savedTask.leadId },
         { status: targetLeadStatus },
       );
-      const lead =
-        (leadUpdate.affected ?? 0) > 0
-          ? await leadRepo.findOne({ where: { id: savedTask.leadId } })
-          : null;
+      const lead = await leadRepo.findOne({
+        where: { id: savedTask.leadId },
+      });
 
       await auditLogRepo.save(
         auditLogRepo.create({
