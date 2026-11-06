@@ -672,7 +672,6 @@ export class FollowUpService {
       const auditLogRepository = manager.getRepository(AuditLog);
       const enrollment = await enrollmentsRepository.findOne({
         where: { id },
-        relations: { lead: true },
         lock: { mode: 'pessimistic_write' },
       });
 
@@ -724,7 +723,6 @@ export class FollowUpService {
       const auditLogRepository = manager.getRepository(AuditLog);
       const enrollment = await enrollmentsRepository.findOne({
         where: { id },
-        relations: { lead: true },
         lock: { mode: 'pessimistic_write' },
       });
 
