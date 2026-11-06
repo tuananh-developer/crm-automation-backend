@@ -102,8 +102,10 @@ describe('FollowUpService', () => {
   });
 
   const dto = { enrollmentId: 'enrollment-1' };
+  let persistedExecution: FollowUpExecution | null;
 
   beforeEach(() => {
+    persistedExecution = null;
     enrollmentsRepository = {
       findOne: jest.fn(),
       save: jest.fn(),
@@ -120,7 +122,12 @@ describe('FollowUpService', () => {
     };
 
     executionsRepository = {
-      findOne: jest.fn(),
+      findOne: jest.fn((options: { where?: Record<string, unknown> }) => {
+        if (options.where && 'id' in options.where) {
+          return Promise.resolve(persistedExecution);
+        }
+        return Promise.resolve(null);
+      }),
       create: jest.fn(),
       save: jest.fn(),
       find: jest.fn(),
@@ -144,7 +151,10 @@ describe('FollowUpService', () => {
       (data: Partial<FollowUpExecution>) => ({ id: 'execution-1', ...data }),
     );
     (executionsRepository.save as jest.Mock).mockImplementation(
-      (execution: FollowUpExecution) => Promise.resolve(execution),
+      (execution: FollowUpExecution) => {
+        persistedExecution = execution;
+        return Promise.resolve(execution);
+      },
     );
     (auditLogRepository.create as jest.Mock).mockImplementation(
       (data: Partial<AuditLog>) => data,
@@ -217,7 +227,6 @@ describe('FollowUpService', () => {
         buildEnrollment({ lead: buildLead() }),
       );
       (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(buildStep());
-      (executionsRepository.findOne as jest.Mock).mockResolvedValue(null);
       (enrollmentsRepository.save as jest.Mock).mockImplementation(
         (enrollment: LeadFollowUpEnrollment) => Promise.resolve(enrollment),
       );
@@ -330,9 +339,6 @@ describe('FollowUpService', () => {
       });
       (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(nextStep);
       // existing execution for the next step does not exist yet
-      (executionsRepository.findOne as jest.Mock)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null);
 
       await service.execute(dto);
 
