@@ -1,0 +1,759 @@
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
+import { Customer } from './entities/customer.entity.js';
+import { Segment } from './entities/segment.entity.js';
+import { CustomerSegment } from './entities/customer-segment.entity.js';
+import { User } from '../users/entities/user.entity.js';
+import {
+  CreateSegmentDto,
+  EvaluateSegmentBulkDto,
+  EvaluateSegmentDto,
+  QuerySegmentDto,
+  UpdateSegmentDto,
+} from './dto/index.js';
+import { SegmentResponseDto } from './dto/segment-response.dto.js';
+import {
+  EvaluateSegmentBulkResponseDto,
+  EvaluateSegmentResponseDto,
+} from './dto/segment-response.dto.js';
+import { CustomerResponseDto } from './dto/customer-response.dto.js';
+import { CustomerMapper } from './mappers/customer.mapper.js';
+import { SegmentMapper } from './mappers/segment.mapper.js';
+import { PaginatedResponseDto } from '../../common/index.js';
+import { SegmentAssignmentType } from './enums/customer.enum.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
+import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
+import { SegmentWorkflowCallbackDto } from './dto/segment-workflow-callback.dto.js';
+
+@Injectable()
+export class SegmentsService {
+  constructor(
+    @InjectRepository(Customer)
+    private readonly customersRepository: Repository<Customer>,
+
+    @InjectRepository(Segment)
+    private readonly segmentsRepository: Repository<Segment>,
+
+    @InjectRepository(CustomerSegment)
+    private readonly customerSegmentsRepository: Repository<CustomerSegment>,
+
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
+
+    @InjectRepository(WorkflowRun)
+    private readonly workflowRunRepository: Repository<WorkflowRun>,
+  ) {}
+
+  async create(dto: CreateSegmentDto): Promise<SegmentResponseDto> {
+    const user = await this.usersRepository.findOne({
+      where: { id: dto.createdBy },
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID '${dto.createdBy}' not found`);
+    }
+
+    const existing = await this.segmentsRepository.findOne({
+      where: { name: dto.name },
+    });
+
+    if (existing) {
+      throw new ConflictException(
+        `Segment with name '${dto.name}' already exists`,
+      );
+    }
+
+    const segment = this.segmentsRepository.create({
+      name: dto.name,
+      description: dto.description ?? null,
+      criteria: dto.criteria,
+      isActive: dto.isActive ?? true,
+      createdBy: dto.createdBy,
+      updatedBy: null,
+    });
+
+    const saved = await this.segmentsRepository.save(segment);
+
+    saved.creator = user;
+    saved.updater = null;
+    return SegmentMapper.toResponseDto(saved);
+  }
+
+  async findAll(
+    query: QuerySegmentDto,
+  ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
+    const qb = this.segmentsRepository
+      .createQueryBuilder('segment')
+      .leftJoinAndSelect('segment.creator', 'creator')
+      .leftJoinAndSelect('segment.updater', 'updater');
+
+    if (query.search) {
+      qb.andWhere(
+        '(LOWER(segment.name) LIKE LOWER(:search) OR LOWER(segment.description) LIKE LOWER(:search))',
+        { search: `%${query.search}%` },
+      );
+    }
+
+    if (query.isActive !== undefined) {
+      qb.andWhere('segment.isActive = :isActive', {
+        isActive: query.isActive,
+      });
+    }
+
+    qb.orderBy('segment.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    let countMap = new Map<string, number>();
+
+    if (data.length > 0) {
+      const segmentIds = data.map((s) => s.id);
+      const counts = await this.customerSegmentsRepository
+        .createQueryBuilder('cs')
+        .select('cs.segmentId', 'segmentId')
+        .addSelect('COUNT(*)', 'count')
+        .where('cs.segmentId IN (:...segmentIds)', { segmentIds })
+        .groupBy('cs.segmentId')
+        .getRawMany<{ segmentId: string; count: string }>();
+
+      countMap = new Map(counts.map((c) => [c.segmentId, Number(c.count)]));
+    }
+
+    const dataWithCount = data.map((segment) =>
+      Object.assign(segment, {
+        customerCount: countMap.get(segment.id) ?? 0,
+      }),
+    );
+
+    return {
+      data: SegmentMapper.toResponseDtoArray(dataWithCount),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async findOne(id: string): Promise<SegmentResponseDto> {
+    const segment = await this.segmentsRepository.findOne({
+      where: { id },
+      relations: {
+        creator: true,
+        updater: true,
+      },
+    });
+
+    if (!segment) {
+      throw new NotFoundException(`Segment with ID '${id}' not found`);
+    }
+
+    const customerCount = await this.customerSegmentsRepository.count({
+      where: { segmentId: id },
+    });
+
+    return SegmentMapper.toResponseDto(
+      Object.assign(segment, { customerCount }),
+    );
+  }
+
+  async update(id: string, dto: UpdateSegmentDto): Promise<SegmentResponseDto> {
+    const segment = await this.segmentsRepository.findOne({
+      where: { id },
+      relations: {
+        creator: true,
+        updater: true,
+      },
+    });
+
+    if (!segment) {
+      throw new NotFoundException(`Segment with ID '${id}' not found`);
+    }
+
+    if (dto.name && dto.name !== segment.name) {
+      const existing = await this.segmentsRepository.findOne({
+        where: { name: dto.name },
+      });
+
+      if (existing && existing.id !== id) {
+        throw new ConflictException(
+          `Segment with name '${dto.name}' already exists`,
+        );
+      }
+    }
+
+    let updater: User | null = segment.updater ?? null;
+
+    if (dto.createdBy) {
+      const user = await this.usersRepository.findOne({
+        where: { id: dto.createdBy },
+      });
+
+      if (!user) {
+        throw new NotFoundException(
+          `User with ID '${dto.createdBy}' not found`,
+        );
+      }
+
+      segment.updatedBy = dto.createdBy;
+      updater = user;
+    }
+
+    if (dto.name !== undefined) {
+      segment.name = dto.name;
+    }
+
+    if (dto.description !== undefined) {
+      segment.description = dto.description ?? null;
+    }
+
+    if (dto.criteria !== undefined) {
+      segment.criteria = dto.criteria;
+    }
+
+    if (dto.isActive !== undefined) {
+      segment.isActive = dto.isActive;
+    }
+
+    const saved = await this.segmentsRepository.save(segment);
+
+    saved.creator = segment.creator;
+    saved.updater = updater;
+    return SegmentMapper.toResponseDto(saved);
+  }
+
+  async remove(id: string) {
+    const segment = await this.segmentsRepository.findOne({
+      where: { id },
+    });
+
+    if (!segment) {
+      throw new NotFoundException(`Segment with ID '${id}' not found`);
+    }
+
+    await this.customerSegmentsRepository.delete({ segmentId: id });
+    await this.segmentsRepository.remove(segment);
+
+    return {
+      message: 'Segment deleted successfully',
+      id,
+    };
+  }
+
+  async getCustomers(
+    segmentId: string,
+    query: QuerySegmentDto,
+  ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
+    await this.ensureSegmentExists(segmentId);
+
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
+    const qb = this.customerSegmentsRepository
+      .createQueryBuilder('assignment')
+      .leftJoinAndSelect('assignment.customer', 'customer')
+      .leftJoinAndSelect('customer.creator', 'customerCreator')
+      .leftJoinAndSelect('customer.updater', 'customerUpdater')
+      .leftJoinAndSelect('assignment.segment', 'segment')
+      .where('assignment.segmentId = :segmentId', { segmentId });
+
+    if (query.search) {
+      qb.andWhere(
+        '(LOWER(customer.name) LIKE LOWER(:search) OR LOWER(customer.email) LIKE LOWER(:search) OR LOWER(customer.companyName) LIKE LOWER(:search))',
+        { search: `%${query.search}%` },
+      );
+    }
+
+    qb.orderBy('customer.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    const customers = data.flatMap((assignment) =>
+      assignment.customer ? [assignment.customer] : [],
+    );
+
+    return {
+      data: CustomerMapper.toResponseDtoArray(customers),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+  async evaluateCustomer(
+    segmentId: string,
+    dto: EvaluateSegmentDto,
+  ): Promise<EvaluateSegmentResponseDto> {
+    await this.ensureSegmentExists(segmentId);
+    const segment = await this.getSegmentForEvaluation(segmentId);
+    const customer = await this.customersRepository.findOne({
+      where: { id: dto.customerId },
+      relations: {
+        convertedLeads: {
+          scores: true,
+        },
+      },
+    });
+
+    if (!customer) {
+      throw new NotFoundException(
+        `Customer with ID '${dto.customerId}' not found`,
+      );
+    }
+
+    if (dto.assignmentType === SegmentAssignmentType.AI) {
+      throw new BadRequestException(
+        'AI segmentation is not configured for this backend',
+      );
+    }
+
+    const evaluation = this.evaluateRule(segment, customer);
+
+    const existing = await this.customerSegmentsRepository.findOne({
+      where: {
+        customerId: customer.id,
+        segmentId: segment.id,
+      },
+    });
+
+    if (evaluation.matched) {
+      const assignment = existing ?? this.customerSegmentsRepository.create();
+
+      assignment.customerId = customer.id;
+      assignment.segmentId = segment.id;
+      assignment.assignmentType = SegmentAssignmentType.RULE;
+      assignment.confidence = evaluation.confidence;
+      assignment.assignedReason = evaluation.reason;
+      assignment.assignedAt = new Date();
+      assignment.assignedBy = segment.createdBy;
+
+      const saved = await this.customerSegmentsRepository.save(assignment);
+
+      return {
+        customerId: customer.id,
+        customerName: customer.name,
+        segmentId: segment.id,
+        segmentName: segment.name,
+        assignmentType: saved.assignmentType,
+        confidence: saved.confidence as number,
+        assignmentReason: saved.assignedReason as string,
+        assignedAt: saved.assignedAt,
+        assignedBy: saved.assignedBy,
+        status: 'COMPLETED',
+        matched: true,
+      };
+    }
+
+    if (existing) {
+      await this.customerSegmentsRepository.remove(existing);
+    }
+
+    return {
+      customerId: customer.id,
+      customerName: customer.name,
+      segmentId: segment.id,
+      segmentName: segment.name,
+      assignmentType: SegmentAssignmentType.RULE,
+      confidence: evaluation.confidence,
+      assignmentReason: evaluation.reason,
+      assignedAt: new Date(),
+      assignedBy: segment.createdBy,
+      status: 'COMPLETED',
+      matched: false,
+    };
+  }
+  async evaluateAll(
+    segmentId: string,
+    dto: EvaluateSegmentBulkDto,
+  ): Promise<EvaluateSegmentBulkResponseDto> {
+    const segment = await this.getSegmentForEvaluation(segmentId);
+
+    if (dto.assignmentType === SegmentAssignmentType.AI) {
+      throw new BadRequestException(
+        'AI segmentation is not configured for this backend',
+      );
+    }
+
+    const relations = {
+      convertedLeads: {
+        scores: true,
+      },
+    };
+    const customerIds =
+      dto.customerIds === undefined ? undefined : [...new Set(dto.customerIds)];
+    const customers =
+      customerIds === undefined
+        ? await this.customersRepository.find({ relations })
+        : customerIds.length === 0
+          ? []
+          : await this.customersRepository.find({
+              where: customerIds.map((id) => ({ id })),
+              relations,
+            });
+
+    const BATCH_SIZE = 50;
+    let matched = 0;
+
+    for (let i = 0; i < customers.length; i += BATCH_SIZE) {
+      const batch = customers.slice(i, i + BATCH_SIZE);
+      const customerIdsInBatch = batch.map((customer) => customer.id);
+
+      const existingAssignments = await this.customerSegmentsRepository.find({
+        where: {
+          segmentId: segment.id,
+          customerId: In(customerIdsInBatch),
+        },
+      });
+      const existingMap = new Map(
+        existingAssignments.map((assignment) => [
+          assignment.customerId,
+          assignment,
+        ]),
+      );
+
+      const toSave: CustomerSegment[] = [];
+      const toRemove: CustomerSegment[] = [];
+
+      for (const customer of batch) {
+        const evaluation = this.evaluateRule(segment, customer);
+        const existing = existingMap.get(customer.id);
+
+        if (evaluation.matched) {
+          matched++;
+
+          const assignment =
+            existing ?? this.customerSegmentsRepository.create();
+
+          assignment.customerId = customer.id;
+          assignment.segmentId = segment.id;
+          assignment.assignmentType = SegmentAssignmentType.RULE;
+          assignment.confidence = evaluation.confidence;
+          assignment.assignedReason = evaluation.reason;
+          assignment.assignedAt = new Date();
+          assignment.assignedBy = segment.createdBy;
+
+          toSave.push(assignment);
+        } else if (existing) {
+          toRemove.push(existing);
+        }
+      }
+
+      if (toSave.length > 0) {
+        await this.customerSegmentsRepository.save(toSave);
+      }
+      if (toRemove.length > 0) {
+        await this.customerSegmentsRepository.remove(toRemove);
+      }
+    }
+
+    return {
+      status: 'COMPLETED',
+      total: customers.length,
+      processed: customers.length,
+      matched,
+      message: `Evaluated ${customers.length} customer(s)`,
+    };
+  }
+  private async ensureSegmentExists(id: string) {
+    const segment = await this.segmentsRepository.findOne({
+      where: { id },
+    });
+
+    if (!segment) {
+      throw new NotFoundException(`Segment with ID '${id}' not found`);
+    }
+
+    return segment;
+  }
+
+  private async getSegmentForEvaluation(id: string) {
+    const segment = await this.segmentsRepository.findOne({
+      where: { id },
+    });
+
+    if (!segment) {
+      throw new NotFoundException(`Segment with ID '${id}' not found`);
+    }
+
+    if (!segment.isActive) {
+      throw new BadRequestException(`Segment '${segment.name}' is inactive`);
+    }
+
+    if (!segment.criteria) {
+      throw new BadRequestException(
+        `Segment '${segment.name}' has no criteria`,
+      );
+    }
+
+    return segment;
+  }
+
+  private evaluateRule(
+    segment: Segment,
+    customer: Customer,
+  ): {
+    matched: boolean;
+    confidence: number;
+    reason: string;
+  } {
+    const criteria = segment.criteria as {
+      logic?: 'AND' | 'OR';
+      conditions?: Array<{
+        id: string;
+        field: string;
+        operator: string;
+        value: string;
+      }>;
+      minConfidence?: number | null;
+    };
+
+    const conditions = criteria.conditions ?? [];
+
+    if (!conditions.length) {
+      return {
+        matched: false,
+        confidence: 0,
+        reason: 'Segment has no conditions',
+      };
+    }
+
+    const results: boolean[] = [];
+    const reasons: string[] = [];
+
+    for (const condition of conditions) {
+      const actualValue = this.getCustomerFieldValue(customer, condition.field);
+
+      const matched = this.compareValue(
+        actualValue,
+        condition.operator,
+        condition.value,
+      );
+
+      results.push(matched);
+
+      reasons.push(
+        `${condition.field} ${condition.operator} ${condition.value} => ${matched ? 'matched' : 'not matched'}`,
+      );
+    }
+
+    const matched =
+      criteria.logic === 'OR' ? results.some(Boolean) : results.every(Boolean);
+
+    return {
+      matched,
+      confidence: matched ? 1 : 0,
+      reason: reasons.join('; '),
+    };
+  }
+
+  private getCustomerFieldValue(
+    customer: Customer,
+    field: string,
+  ): string | number | null {
+    switch (field) {
+      case 'industry':
+        return customer.industry;
+
+      case 'companySize':
+        return customer.companySize;
+
+      case 'companyName':
+        return customer.companyName;
+
+      case 'jobTitle':
+        return customer.jobTitle;
+
+      case 'status':
+        return customer.status;
+
+      case 'email':
+        return customer.email;
+
+      case 'score':
+        return this.getLatestLeadScore(customer);
+
+      default:
+        return null;
+    }
+  }
+
+  private getLatestLeadScore(customer: Customer): number | null {
+    const convertedLeads = customer.convertedLeads ?? [];
+    let latestScore: number | null = null;
+    let latestCreatedAt: Date | null = null;
+
+    for (const lead of convertedLeads) {
+      for (const score of lead.scores ?? []) {
+        if (latestCreatedAt === null || score.createdAt > latestCreatedAt) {
+          latestCreatedAt = score.createdAt;
+          latestScore = Number(score.score);
+        }
+      }
+    }
+
+    return latestScore;
+  }
+
+  private compareValue(
+    actualValue: string | number | null,
+    operator: string,
+    expectedValue: string,
+  ): boolean {
+    if (actualValue === null || actualValue === undefined) {
+      return false;
+    }
+
+    const actualString = String(actualValue);
+    const expectedString = String(expectedValue);
+
+    const actualNumber = Number(actualValue);
+    const expectedNumber = Number(expectedValue);
+
+    switch (operator) {
+      case 'equals':
+        return actualString.toLowerCase() === expectedString.toLowerCase();
+
+      case 'not_equals':
+        return actualString.toLowerCase() !== expectedString.toLowerCase();
+
+      case 'contains':
+        return actualString
+          .toLowerCase()
+          .includes(expectedString.toLowerCase());
+
+      case 'greater_than':
+        return (
+          Number.isFinite(actualNumber) &&
+          Number.isFinite(expectedNumber) &&
+          actualNumber > expectedNumber
+        );
+
+      case 'greater_than_or_equal':
+        return (
+          Number.isFinite(actualNumber) &&
+          Number.isFinite(expectedNumber) &&
+          actualNumber >= expectedNumber
+        );
+
+      case 'less_than':
+        return (
+          Number.isFinite(actualNumber) &&
+          Number.isFinite(expectedNumber) &&
+          actualNumber < expectedNumber
+        );
+
+      case 'less_than_or_equal':
+        return (
+          Number.isFinite(actualNumber) &&
+          Number.isFinite(expectedNumber) &&
+          actualNumber <= expectedNumber
+        );
+
+      default:
+        return false;
+    }
+  }
+
+  async createWorkflowRun(
+    segmentId: string,
+  ): Promise<{ workflowRunId: string; status: string }> {
+    const segment = await this.segmentsRepository.findOne({
+      where: { id: segmentId },
+    });
+    if (!segment) {
+      throw new NotFoundException(`Segment '${segmentId}' not found`);
+    }
+
+    const workflowRun = this.workflowRunRepository.create({
+      workflowName: 'WF07_CUSTOMER_SEGMENTATION',
+      status: WorkflowStatus.PENDING,
+      inputPayload: {
+        segmentId,
+        segmentName: segment.name,
+        requestedAt: new Date().toISOString(),
+      } as Record<string, any>,
+      outputPayload: null,
+      startedAt: new Date(),
+    });
+
+    const savedRun = await this.workflowRunRepository.save(workflowRun);
+
+    return {
+      workflowRunId: savedRun.id,
+      status: savedRun.status,
+    };
+  }
+
+  async handleWorkflowCallback(dto: SegmentWorkflowCallbackDto): Promise<{
+    success: boolean;
+    workflowRunId: string;
+    status: string;
+  }> {
+    if (!dto.workflowRunId) {
+      throw new BadRequestException('workflowRunId is required');
+    }
+
+    const workflowRun = await this.workflowRunRepository.findOne({
+      where: { id: dto.workflowRunId },
+    });
+
+    if (!workflowRun) {
+      throw new NotFoundException(
+        `WorkflowRun '${dto.workflowRunId}' not found`,
+      );
+    }
+
+    if (workflowRun.workflowName !== 'WF07_CUSTOMER_SEGMENTATION') {
+      throw new BadRequestException('Workflow name mismatch');
+    }
+
+    const isSuccess = dto.status !== 'FAILED';
+    workflowRun.status = isSuccess
+      ? dto.status === 'SUCCESS'
+        ? WorkflowStatus.SUCCESS
+        : workflowRun.status
+      : WorkflowStatus.FAILED;
+
+    const existingOutput =
+      (workflowRun.outputPayload as Record<string, any>) || {};
+
+    const updatedOutput = {
+      ...existingOutput,
+      segmentId: dto.segmentId,
+      segmentName: dto.segmentName,
+      statistics: dto.statistics,
+      aiInsights: dto.aiInsights,
+      rejectedInsights: dto.rejectedInsights,
+      anomalyDetected: dto.anomalyDetected ?? false,
+      receivedAt: new Date().toISOString(),
+    };
+
+    workflowRun.outputPayload = updatedOutput;
+    workflowRun.finishedAt = new Date();
+    workflowRun.errorMessage = dto.errorMessage || null;
+
+    await this.workflowRunRepository.save(workflowRun);
+
+    return {
+      success: workflowRun.status !== WorkflowStatus.FAILED,
+      workflowRunId: workflowRun.id,
+      status: workflowRun.status,
+    };
+  }
+}
