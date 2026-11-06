@@ -146,15 +146,24 @@ export class LeadIntelligenceService {
     reviewRequired: boolean;
     reviewTaskId?: string;
   }> {
-    const processQualification = async (repos: {
-      leadRepo: Repository<Lead>;
-      qualificationRepo: Repository<LeadQualification>;
-      workflowRunRepo: Repository<WorkflowRun>;
-      reviewTaskRepo: Repository<ReviewTask>;
-      notificationRepo: Repository<Notification>;
-    }) => {
+    const processQualification = async (
+      repos: {
+        leadRepo: Repository<Lead>;
+        qualificationRepo: Repository<LeadQualification>;
+        workflowRunRepo: Repository<WorkflowRun>;
+        reviewTaskRepo: Repository<ReviewTask>;
+        notificationRepo: Repository<Notification>;
+      },
+      lockLeadForUpdate = false,
+    ) => {
+      // Different WorkflowRuns for the same Lead are independent rows. Lock the
+      // Lead itself so concurrent qualification callbacks cannot both observe
+      // "no pending ReviewTask" and create duplicate tasks.
       const lead = await repos.leadRepo.findOne({
         where: { id: dto.leadId },
+        ...(lockLeadForUpdate
+          ? { lock: { mode: 'pessimistic_write' as const } }
+          : {}),
       });
       if (!lead) {
         throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
@@ -317,7 +326,7 @@ export class LeadIntelligenceService {
           workflowRunRepo: manager.getRepository(WorkflowRun),
           reviewTaskRepo: manager.getRepository(ReviewTask),
           notificationRepo: manager.getRepository(Notification),
-        });
+        }, true);
       });
     }
 
