@@ -565,6 +565,74 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     expect(taskRow.decision).toBe('APPROVE');
   });
 
+  it('rolls back user role changes when AuditLog persistence fails', async () => {
+    const triggerName = `trg_fail_user_audit_${suffix}`;
+    const functionName = `fail_user_audit_${suffix}`;
+    const [beforeAuditCount] = await dataSource.query(
+      `SELECT COUNT(*)::int AS count
+       FROM audit_logs
+       WHERE entity_type = 'User'
+         AND entity_id = $1
+         AND action = 'USER_UPDATED';`,
+      [userId],
+    );
+
+    await dataSource.query(`
+      CREATE FUNCTION ${functionName}() RETURNS trigger
+      LANGUAGE plpgsql
+      AS $useraudit$
+      BEGIN
+        IF NEW.entity_type = 'User'
+          AND NEW.entity_id = '${userId}'::uuid
+          AND NEW.action = 'USER_UPDATED' THEN
+          RAISE EXCEPTION 'intentional user audit insert failure'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $useraudit$;
+    `);
+    await dataSource.query(`
+      CREATE TRIGGER ${triggerName}
+      BEFORE INSERT ON audit_logs
+      FOR EACH ROW EXECUTE FUNCTION ${functionName}();
+    `);
+
+    try {
+      const response = await request(app.getHttpServer())
+        .patch(`/api/v1/users/${userId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ role: 'ADMIN' });
+
+      expect(response.status).toBe(500);
+
+      const [user] = await dataSource.query(
+        'SELECT role FROM users WHERE id = $1;',
+        [userId],
+      );
+      expect(user.role).toBe('SALES');
+
+      const [afterAuditCount] = await dataSource.query(
+        `SELECT COUNT(*)::int AS count
+         FROM audit_logs
+         WHERE entity_type = 'User'
+           AND entity_id = $1
+           AND action = 'USER_UPDATED';`,
+        [userId],
+      );
+      expect(Number(afterAuditCount.count)).toBe(
+        Number(beforeAuditCount.count),
+      );
+    } finally {
+      await dataSource.query(
+        `DROP TRIGGER IF EXISTS ${triggerName} ON audit_logs;`,
+      );
+      await dataSource.query(
+        `DROP FUNCTION IF EXISTS ${functionName}();`,
+      );
+    }
+  });
+
   it('enforces Admin-only quote approval and persists approve/reject decisions', async () => {
     const quoteLeadId = createdLeadIds[0];
     if (!quoteLeadId) {

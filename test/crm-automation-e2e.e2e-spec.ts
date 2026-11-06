@@ -3,6 +3,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module.js';
+import { N8nClientService } from '../src/infrastructure/n8n/n8n-client.service.js';
 import { DataSource } from 'typeorm';
 
 describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
@@ -22,6 +23,11 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   let segmentId: string;
 
   const N8N_KEY = 'e2e-test-n8n-secret-key';
+  const n8nTriggerWebhook = jest.fn().mockResolvedValue({
+    success: true,
+    providerMessageId: 'e2e-provider-message-id',
+    message: 'Mock n8n accepted follow-up',
+  });
   const timestamp = Date.now();
   const testEmail = `enterprise.lead.${timestamp}@innovate-tech.io`;
 
@@ -37,10 +43,14 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   beforeAll(async () => {
     process.env.N8N_API_KEY = N8N_KEY;
     process.env.N8N_WEBHOOK_SECRET = N8N_KEY;
+    process.env.N8N_FOLLOW_UP_WEBHOOK_PATH = 'follow-up-execute';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(N8nClientService)
+      .useValue({ triggerWebhook: n8nTriggerWebhook })
+      .compile();
 
     app = moduleFixture.createNestApplication();
     app.setGlobalPrefix('api/v1');
@@ -305,6 +315,8 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // UC06: Execute Follow-up
   // ─────────────────────────────────────────────────────────────────────────
   it('UC06: should record Follow-up step execution via POST /api/v1/follow-ups/executions', async () => {
+    n8nTriggerWebhook.mockClear();
+
     const res = await api
       .post('/api/v1/follow-ups/executions')
       .send({
@@ -312,7 +324,35 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
         stepId,
       });
 
-    expect([200, 201]).toContain(res.status);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('SUCCESS');
+    expect(n8nTriggerWebhook).toHaveBeenCalledTimes(1);
+    expect(n8nTriggerWebhook).toHaveBeenCalledWith(
+      'follow-up-execute',
+      expect.objectContaining({
+        enrollmentId,
+        stepId,
+        leadId,
+      }),
+    );
+
+    const [execution] = await dataSource.query(
+      `SELECT status, provider_message_id, response_payload
+       FROM follow_up_executions
+       WHERE enrollment_id = $1 AND step_id = $2
+       ORDER BY created_at DESC
+       LIMIT 1;`,
+      [enrollmentId, stepId],
+    );
+
+    expect(execution.status).toBe('SUCCESS');
+    expect(execution.provider_message_id).toBe('e2e-provider-message-id');
+    expect(execution.response_payload).toEqual(
+      expect.objectContaining({
+        success: true,
+        providerMessageId: 'e2e-provider-message-id',
+      }),
+    );
   });
 
   // ───────────────────────────────────────────────────────────────────────────
