@@ -127,7 +127,11 @@ export class FollowUpService {
     const execution = await this.dataSource.transaction(async (manager) => {
       const executionsRepository = manager.getRepository(FollowUpExecution);
 
-      const lockedEnrollment = await this.findLockedEnrollment(manager, enrollment.id, actor);
+      const lockedEnrollment = await this.findLockedEnrollment(
+        manager,
+        enrollment.id,
+        actor,
+      );
       if (lockedEnrollment.status !== EnrollmentStatus.ACTIVE) {
         throw new ConflictException(
           `Follow-up enrollment '${lockedEnrollment.id}' is '${lockedEnrollment.status}' and cannot execute steps`,
@@ -398,6 +402,7 @@ export class FollowUpService {
           let retryCount = execution.retryCount;
           if (
             enrollment.status !== EnrollmentStatus.CANCELLED &&
+            enrollment.status !== EnrollmentStatus.COMPLETED &&
             execution.retryCount < maxRetries
           ) {
             retryCount = execution.retryCount + 1;
@@ -920,6 +925,7 @@ export class FollowUpService {
       return {
         execution: savedExecution,
         hasNextStep: Boolean(nextStep),
+        enrollmentStatus: savedEnrollment.status,
       };
     });
 
@@ -927,11 +933,18 @@ export class FollowUpService {
       `Follow-up execution ${outcome.execution.id} succeeded for enrollment ${enrollment.id}`,
     );
 
+    const completionMessage =
+      outcome.enrollmentStatus === EnrollmentStatus.CANCELLED
+        ? ' The enrollment remains cancelled; no further steps were scheduled.'
+        : outcome.hasNextStep
+          ? ' Next step scheduled.'
+          : ' Enrollment completed.';
+
     return {
       execution: outcome.execution,
       status: outcome.execution.status,
       retryCount: outcome.execution.retryCount,
-      message: `Follow-up step '${step.id}' executed successfully.${outcome.hasNextStep ? ' Next step scheduled.' : ' Enrollment completed.'}`,
+      message: `Follow-up step '${step.id}' executed successfully.${completionMessage}`,
     };
   }
 
@@ -968,7 +981,11 @@ export class FollowUpService {
       let retryCount = savedExecution.retryCount;
 
       // FAILED -> RETRYING (bounded by max retries)
-      if (savedExecution.retryCount < maxRetries) {
+      if (
+        savedExecution.retryCount < maxRetries &&
+        currentEnrollment.status !== EnrollmentStatus.CANCELLED &&
+        currentEnrollment.status !== EnrollmentStatus.COMPLETED
+      ) {
         retryCount = savedExecution.retryCount + 1;
         savedExecution.retryCount = retryCount;
         savedExecution.status = ExecutionStatus.RETRYING;
