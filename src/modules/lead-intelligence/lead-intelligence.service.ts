@@ -1480,8 +1480,9 @@ export class LeadIntelligenceService {
 
   private assertLeadAccess(lead: Lead, actor: AuthenticatedUser): void {
     if (actor.role === UserRole.SALES && lead.ownerId !== actor.id) {
-      throw new ForbiddenException(
-        'You do not have permission to access intelligence for this lead',
+      // Match LeadsService: do not disclose another user's Lead existence.
+      throw new NotFoundException(
+        `Lead with ID '${lead.id}' not found`,
       );
     }
   }
