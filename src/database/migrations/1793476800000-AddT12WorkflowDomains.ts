@@ -32,8 +32,8 @@ export class AddT12WorkflowDomains1793476800000 implements MigrationInterface {
 
     await queryRunner.query(`CREATE TABLE IF NOT EXISTS "sales_meetings" (
       "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(), "workflow_run_id" uuid NOT NULL UNIQUE REFERENCES "workflow_runs"("id") ON DELETE CASCADE,
-      "owner_id" uuid NOT NULL REFERENCES "users"("id") ON DELETE RESTRICT, "lead_id" uuid NULL REFERENCES "leads"("id") ON DELETE SET NULL,
-      "customer_id" uuid NULL REFERENCES "customers"("id") ON DELETE SET NULL, "attendee_ids" jsonb NOT NULL DEFAULT '[]'::jsonb,
+      "owner_id" uuid NOT NULL REFERENCES "users"("id") ON DELETE RESTRICT, "lead_id" uuid NULL REFERENCES "leads"("id") ON DELETE RESTRICT,
+      "customer_id" uuid NULL REFERENCES "customers"("id") ON DELETE RESTRICT, "attendee_ids" jsonb NOT NULL DEFAULT '[]'::jsonb,
       "meeting_purpose" varchar(500) NULL, "scheduled_at" timestamptz NULL, "source_type" varchar(40) NOT NULL DEFAULT 'MEETING_TRANSCRIPT',
       "status" varchar(30) NOT NULL DEFAULT 'PROCESSING', "transcript_id" uuid NULL, "summary_id" uuid NULL,
       "notification_sent_at" timestamptz NULL, "created_at" timestamptz NOT NULL DEFAULT now(), "updated_at" timestamptz NOT NULL DEFAULT now(),
