@@ -356,6 +356,12 @@ export class FollowUpService {
     for (const candidate of staleExecutions) {
       try {
         await this.dataSource.transaction(async (manager) => {
+          // Keep a consistent lock order (enrollment -> execution) with the
+          // normal execution and lifecycle paths to avoid PostgreSQL deadlocks.
+          const enrollment = await this.findLockedEnrollment(
+            manager,
+            candidate.enrollmentId,
+          );
           const executionsRepository = manager.getRepository(FollowUpExecution);
           const auditLogRepository = manager.getRepository(AuditLog);
           const execution = await executionsRepository.findOne({
@@ -373,11 +379,6 @@ export class FollowUpService {
           ) {
             return;
           }
-
-          const enrollment = await this.findLockedEnrollment(
-            manager,
-            execution.enrollmentId,
-          );
           const step = await manager.getRepository(FollowUpStep).findOne({
             where: { id: execution.stepId },
           });
@@ -817,6 +818,7 @@ export class FollowUpService {
       );
 
       const previousStatus = execution.status;
+      const enrollmentStatusAtCompletion = currentEnrollment.status;
       execution.status = ExecutionStatus.SUCCESS;
       execution.completedAt = completedAt;
       execution.providerMessageId = response.providerMessageId ?? null;
@@ -892,7 +894,7 @@ export class FollowUpService {
           entityId: execution.id,
           oldValue: {
             status: previousStatus,
-            enrollmentStatus: enrollment.status,
+            enrollmentStatus: enrollmentStatusAtCompletion,
           },
           newValue: {
             status: savedExecution.status,
@@ -905,9 +907,10 @@ export class FollowUpService {
             channel: step.channel,
             attempt: execution.retryCount + 1,
             providerMessageId: execution.providerMessageId,
-            enrollmentWasPaused: enrollment.status === EnrollmentStatus.PAUSED,
+            enrollmentWasPaused:
+              enrollmentStatusAtCompletion === EnrollmentStatus.PAUSED,
             enrollmentWasCancelled:
-              enrollment.status === EnrollmentStatus.CANCELLED,
+              enrollmentStatusAtCompletion === EnrollmentStatus.CANCELLED,
           },
           ipAddress: null,
           userAgent: null,
