@@ -87,6 +87,7 @@ describe('FollowUpService lifecycle concurrency', () => {
       findOne: jest.fn(),
       create: jest.fn((entity) => ({ id: 'next-execution', ...entity })),
       save: jest.fn((entity) => Promise.resolve(entity)),
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
     };
     stepRepository = {
       findOne: jest.fn(),
@@ -189,6 +190,7 @@ describe('FollowUpService lifecycle concurrency', () => {
     enrollmentRepository.findOne?.mockResolvedValue(
       makeEnrollment({ status: EnrollmentStatus.CANCELLED }),
     );
+    executionRepository.findOne?.mockResolvedValue(execution);
 
     const result = await (
       service as unknown as {
@@ -222,7 +224,9 @@ describe('FollowUpService lifecycle concurrency', () => {
     });
     enrollmentRepository.findOne?.mockResolvedValue(pausedEnrollment);
     stepRepository.findOne?.mockResolvedValue(makeStep());
-    executionRepository.findOne?.mockResolvedValue(null);
+    executionRepository.findOne
+      ?.mockResolvedValueOnce(execution)
+      .mockResolvedValueOnce(null);
 
     const result = await (
       service as unknown as {
@@ -252,6 +256,25 @@ describe('FollowUpService lifecycle concurrency', () => {
         enrollmentId: 'enrollment-1',
         stepId: 'step-2',
         status: ExecutionStatus.PENDING,
+      }),
+    );
+  });
+
+  it('marks pending and retrying executions SKIPPED when an enrollment is cancelled', async () => {
+    enrollmentRepository.findOne
+      ?.mockResolvedValueOnce(makeEnrollment())
+      .mockResolvedValueOnce(makeEnrollment());
+
+    await service.cancelEnrollment('enrollment-1', {});
+
+    expect(executionRepository.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enrollmentId: 'enrollment-1',
+        status: expect.anything(),
+      }),
+      expect.objectContaining({
+        status: ExecutionStatus.SKIPPED,
+        completedAt: expect.any(Date),
       }),
     );
   });
