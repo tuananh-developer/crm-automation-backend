@@ -47,8 +47,8 @@ import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
         if (!useLocalDb && dbUrl) {
           const sslCa = config
             .get<string>('DB_SSL_CA')
-            ?.split(String.raw`\\n`)
-            .join('\\n');
+            ?.split(String.raw`\n`)
+            .join('\n');
           const connection = resolvePostgresConnectionOptions(dbUrl, {
             forceSsl: config.get<string>('DB_SSL') === 'true' || isProd,
             ca: sslCa,
