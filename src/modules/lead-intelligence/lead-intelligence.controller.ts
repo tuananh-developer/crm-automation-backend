@@ -166,7 +166,7 @@ export class LeadIntelligenceController {
   }
 
   @Get('mock-enrichment')
-  @UseGuards(N8nAuthGuard)
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: 'Mock external enrichment service for testing & n8n',
     description:

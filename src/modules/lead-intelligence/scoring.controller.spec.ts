@@ -27,14 +27,16 @@ describe('ScoringController', () => {
     workflowRunId: 'wf-run-123',
     score: 85,
     label: ScoreLabel.HOT,
-    factors: { companySize: 10, industry: 15 },
-    modelProvider: 'rule-based',
-    modelVersion: '1.0',
-    scoringMethod: 'rule-engine',
+    reason: 'High buying intent and strong company fit',
+    scoringFeatures: { intent: 90, fit: 80 },
+    modelProvider: 'openai',
+    modelName: 'gpt-4o',
+    modelVersion: '2024-08-06',
     inputSnapshot: {},
+    outputSnapshot: {},
     createdAt: new Date(),
     updatedAt: new Date(),
-  } as LeadScore;
+  } as unknown as LeadScore;
 
   const mockActor: AuthenticatedUser = {
     id: 'user-actor-456',
