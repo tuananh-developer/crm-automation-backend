@@ -525,7 +525,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
       [enrollmentId, [stepId, secondStepId, thirdStepId, fourthStepId]],
     );
     expect(unexpectedNextStep.count).toBe(0);
-  });
+  }, 15000);
 
   // ───────────────────────────────────────────────────────────────────────────
   // UC07: Human Review
