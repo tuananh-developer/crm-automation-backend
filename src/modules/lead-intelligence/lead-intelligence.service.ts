@@ -1138,8 +1138,9 @@ export class LeadIntelligenceService {
 
     const isDecisionMaker = isExecutiveDecisionMakerTitle(jobTitle);
 
+    const safeInteractions = Array.isArray(interactions) ? interactions : [];
     const now = Date.now();
-    const recentInteractions = interactions.filter((i) => {
+    const recentInteractions = safeInteractions.filter((i) => {
       const occurred = new Date(i.occurredAt).getTime();
       return now - occurred <= 30 * 24 * 60 * 60 * 1000;
     });
@@ -1156,7 +1157,7 @@ export class LeadIntelligenceService {
         ? Number(qualification.confidence)
         : null,
       enrichmentStatus: enrichment?.status ?? null,
-      totalInteractionsCount: interactions.length,
+      totalInteractionsCount: safeInteractions.length,
       recentInteractionsCount: recentInteractions.length,
     };
 
@@ -1164,7 +1165,7 @@ export class LeadIntelligenceService {
       lead,
       qualification,
       enrichment,
-      interactions,
+      interactions: safeInteractions,
       scoringFeatures,
     };
   }
