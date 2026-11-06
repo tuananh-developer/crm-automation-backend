@@ -5,15 +5,23 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module.js';
+import { Quote } from '../src/modules/t12-workflows/entities/quote.entity.js';
+import { QuoteApproval } from '../src/modules/t12-workflows/entities/quote-approval.entity.js';
+import { WF12_NAME } from '../src/modules/t12-workflows/quotes.service.js';
+import { WorkflowStatus } from '../src/modules/workflow/enums/workflow.enum.js';
+import type { WorkflowRun } from '../src/modules/workflow/entities/workflow-run.entity.js';
 
 describe('Critical transaction integrity (PostgreSQL E2E)', () => {
   let app: INestApplication<App>;
   let dataSource: DataSource;
   let accessToken: string;
   let userId: string;
+  let adminToken: string;
+  let adminUserId: string;
   let sourceId: string;
   const createdLeadIds: string[] = [];
   const workflowRunIds: string[] = [];
+  const quoteIds: string[] = [];
   const suffix = Date.now().toString(36);
   const n8nSecret = `transaction-e2e-${suffix}-secret`;
 
@@ -81,6 +89,29 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       [`Transaction E2E Source ${suffix}`, 'Isolated transaction test fixture'],
     );
     sourceId = sources[0].id;
+
+    const adminRegistration = await request(app.getHttpServer())
+      .post('/api/v1/auth/register')
+      .send({
+        name: 'Transaction E2E Admin',
+        email: `transaction.admin.${suffix}@example.test`,
+        password: 'E2eStrongPassword123!',
+      });
+    expect(adminRegistration.status).toBe(201);
+    adminUserId = adminRegistration.body.user.id;
+    await dataSource.query(
+      "UPDATE users SET role = 'ADMIN' WHERE id = $1;",
+      [adminUserId],
+    );
+
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({
+        email: `transaction.admin.${suffix}@example.test`,
+        password: 'E2eStrongPassword123!',
+      });
+    expect(adminLogin.status).toBe(200);
+    adminToken = adminLogin.body.accessToken;
   });
 
   afterAll(async () => {
@@ -101,6 +132,15 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
         "DELETE FROM audit_logs WHERE entity_type = 'Lead' AND entity_id = ANY($1::uuid[]);",
         [createdLeadIds],
       );
+    }
+    if (quoteIds.length > 0) {
+      await dataSource.query(
+        'DELETE FROM quote_approvals WHERE quote_id = ANY($1::uuid[]);',
+        [quoteIds],
+      );
+      await dataSource.query('DELETE FROM quotes WHERE id = ANY($1::uuid[]);', [
+        quoteIds,
+      ]);
     }
     if (workflowRunIds.length > 0) {
       await dataSource.query(
@@ -124,6 +164,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     }
     if (userId) {
       await dataSource.query('DELETE FROM users WHERE id = $1;', [userId]);
+    }
+    if (adminUserId) {
+      await dataSource.query('DELETE FROM users WHERE id = $1;', [adminUserId]);
     }
     await app.close();
   });
@@ -355,5 +398,126 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       [email],
     );
     expect(Number(users.count)).toBe(1);
+  });
+
+  it('enforces a dedicated rate limit on repeated failed login attempts', async () => {
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({
+          email: `nonexistent.login.${suffix}@example.test`,
+          password: 'IncorrectPassword123!',
+        });
+      statuses.push(response.status);
+    }
+
+    expect(statuses).toContain(429);
+    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(0);
+  });
+
+  it('enforces Admin-only quote approval and persists approve/reject decisions', async () => {
+    const createPendingQuote = async (title: string) => {
+      const run = await dataSource.getRepository<WorkflowRun>('WorkflowRun').save({
+        workflowName: WF12_NAME,
+        n8nExecutionId: null,
+        leadId: null,
+        customerId: null,
+        triggeredByUserId: userId,
+        status: WorkflowStatus.SUCCESS,
+        inputPayload: {},
+        outputPayload: {},
+        errorMessage: null,
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        idempotencyKey: null,
+      });
+      workflowRunIds.push(run.id);
+
+      const quote = await dataSource.getRepository(Quote).save({
+        workflowRunId: run.id,
+        createdBy: userId,
+        customerId: null,
+        leadId: null,
+        title,
+        executiveSummary: null,
+        body: null,
+        currency: 'USD',
+        subtotal: '1000.00',
+        discountTotal: '250.00',
+        taxTotal: '0.00',
+        totalAmount: '750.00',
+        status: 'PENDING_APPROVAL',
+        approvalRequired: true,
+        submittedForApprovalAt: new Date(),
+        approvedBy: null,
+        approvedAt: null,
+        rejectionReason: null,
+        pricingSnapshot: { currency: 'USD', lineItems: [] },
+      });
+      quoteIds.push(quote.id);
+
+      await dataSource.getRepository(QuoteApproval).save({
+        quoteId: quote.id,
+        requestedBy: userId,
+        reviewedBy: null,
+        status: 'PENDING',
+        decisionComment: null,
+        idempotencyKey: `e2e-quote-approval-${quote.id}`,
+        resolvedAt: null,
+      });
+      return quote.id;
+    };
+
+    const approvalQuoteId = await createPendingQuote(`Approval ${suffix}`);
+    const salesAttempt = await api
+      .post(`/api/v1/quotes/${approvalQuoteId}/approve`)
+      .send({ comment: 'Sales must not approve quotes' });
+    expect(salesAttempt.status).toBe(403);
+
+    const approved = await request(app.getHttpServer())
+      .post(`/api/v1/quotes/${approvalQuoteId}/approve`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ comment: 'Approved after review' });
+    expect(approved.status).toBe(200);
+    expect(approved.body.status).toBe('APPROVED');
+
+    const [approvedQuote] = await dataSource.query(
+      'SELECT status, approved_by FROM quotes WHERE id = $1;',
+      [approvalQuoteId],
+    );
+    const [approvedRequest] = await dataSource.query(
+      'SELECT status, reviewed_by FROM quote_approvals WHERE quote_id = $1;',
+      [approvalQuoteId],
+    );
+    expect(approvedQuote.status).toBe('APPROVED');
+    expect(approvedQuote.approved_by).toBe(adminUserId);
+    expect(approvedRequest.status).toBe('APPROVED');
+    expect(approvedRequest.reviewed_by).toBe(adminUserId);
+
+    const rejectedQuoteId = await createPendingQuote(`Rejection ${suffix}`);
+    const rejected = await request(app.getHttpServer())
+      .post(`/api/v1/quotes/${rejectedQuoteId}/reject`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ comment: 'Discount exceeds the permitted policy' });
+    expect(rejected.status).toBe(200);
+    expect(rejected.body.status).toBe('REJECTED');
+
+    const [rejectedQuote] = await dataSource.query(
+      'SELECT status, rejection_reason FROM quotes WHERE id = $1;',
+      [rejectedQuoteId],
+    );
+    const [rejectedRequest] = await dataSource.query(
+      'SELECT status, decision_comment FROM quote_approvals WHERE quote_id = $1;',
+      [rejectedQuoteId],
+    );
+    expect(rejectedQuote.status).toBe('REJECTED');
+    expect(rejectedQuote.rejection_reason).toBe(
+      'Discount exceeds the permitted policy',
+    );
+    expect(rejectedRequest.status).toBe('REJECTED');
+    expect(rejectedRequest.decision_comment).toBe(
+      'Discount exceeds the permitted policy',
+    );
   });
 });
