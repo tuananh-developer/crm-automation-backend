@@ -62,13 +62,16 @@ export class AuthService {
     try {
       savedUser = await this.usersRepository.save(user);
     } catch (error: unknown) {
-      const databaseError = error as {
-        code?: string;
-        driverError?: { code?: string };
-      };
+      const databaseError = error as
+        | {
+            code?: string;
+            driverError?: { code?: string };
+          }
+        | null
+        | undefined;
       if (
-        databaseError.code === '23505' ||
-        databaseError.driverError?.code === '23505'
+        databaseError?.code === '23505' ||
+        databaseError?.driverError?.code === '23505'
       ) {
         throw new ConflictException(
           'A user with this email already exists',
