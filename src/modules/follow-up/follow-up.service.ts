@@ -820,6 +820,23 @@ export class FollowUpService {
     return enrollment;
   }
 
+  private async findLockedExecution(
+    manager: EntityManager,
+    id: string,
+  ): Promise<FollowUpExecution> {
+    const executionRepository = manager.getRepository(FollowUpExecution);
+    const execution = await executionRepository.findOne({
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!execution) {
+      throw new NotFoundException(
+        `Follow-up execution with ID '${id}' not found`,
+      );
+    }
+    return execution;
+  }
+
   private async handleSuccess(
     execution: FollowUpExecution,
     enrollment: LeadFollowUpEnrollment,
@@ -839,15 +856,33 @@ export class FollowUpService {
         manager,
         enrollment.id,
       );
+      const currentExecution = await this.findLockedExecution(
+        manager,
+        execution.id,
+      );
 
-      const previousStatus = execution.status;
+      if (currentExecution.status === ExecutionStatus.SUCCESS) {
+        return {
+          execution: currentExecution,
+          hasNextStep: false,
+          enrollmentStatus: currentEnrollment.status,
+          alreadyProcessed: true,
+        };
+      }
+      if (currentExecution.status !== ExecutionStatus.RUNNING) {
+        throw new ConflictException(
+          `Follow-up execution '${currentExecution.id}' is '${currentExecution.status}' and cannot be completed`,
+        );
+      }
+
+      const previousStatus = currentExecution.status;
       const enrollmentStatusAtCompletion = currentEnrollment.status;
-      execution.status = ExecutionStatus.SUCCESS;
-      execution.completedAt = completedAt;
-      execution.providerMessageId = response.providerMessageId ?? null;
-      execution.responsePayload = response as Record<string, unknown>;
-      execution.errorMessage = null;
-      const savedExecution = await executionsRepository.save(execution);
+      currentExecution.status = ExecutionStatus.SUCCESS;
+      currentExecution.completedAt = completedAt;
+      currentExecution.providerMessageId = response.providerMessageId ?? null;
+      currentExecution.responsePayload = response as Record<string, unknown>;
+      currentExecution.errorMessage = null;
+      const savedExecution = await executionsRepository.save(currentExecution);
 
       // A successful in-flight delivery must never reactivate a cancelled
       // enrollment. For PAUSED enrollments, persist the next step but leave it
@@ -914,7 +949,7 @@ export class FollowUpService {
           userId: currentEnrollment.assignedBy,
           action: 'FOLLOW_UP_EXECUTED',
           entityType: 'FollowUpExecution',
-          entityId: execution.id,
+          entityId: savedExecution.id,
           oldValue: {
             status: previousStatus,
             enrollmentStatus: enrollmentStatusAtCompletion,
@@ -928,8 +963,8 @@ export class FollowUpService {
             enrollmentId: currentEnrollment.id,
             stepId: step.id,
             channel: step.channel,
-            attempt: execution.retryCount + 1,
-            providerMessageId: execution.providerMessageId,
+            attempt: currentExecution.retryCount + 1,
+            providerMessageId: currentExecution.providerMessageId,
             enrollmentWasPaused:
               enrollmentStatusAtCompletion === EnrollmentStatus.PAUSED,
             enrollmentWasCancelled:
@@ -944,6 +979,7 @@ export class FollowUpService {
         execution: savedExecution,
         hasNextStep: Boolean(nextStep),
         enrollmentStatus: savedEnrollment.status,
+        alreadyProcessed: false,
       };
     });
 
@@ -951,8 +987,9 @@ export class FollowUpService {
       `Follow-up execution ${outcome.execution.id} succeeded for enrollment ${enrollment.id}`,
     );
 
-    const completionMessage =
-      outcome.enrollmentStatus === EnrollmentStatus.CANCELLED
+    const completionMessage = outcome.alreadyProcessed
+      ? ' This execution was already finalized; no additional changes were made.'
+      : outcome.enrollmentStatus === EnrollmentStatus.CANCELLED
         ? ' The enrollment remains cancelled; no further steps were scheduled.'
         : outcome.hasNextStep
           ? ' Next step scheduled.'
@@ -983,45 +1020,56 @@ export class FollowUpService {
         manager,
         enrollment.id,
       );
+      const currentExecution = await this.findLockedExecution(
+        manager,
+        execution.id,
+      );
 
-      const previousStatus = execution.status;
-      const previousRetryCount = execution.retryCount;
+      // A timeout/recovery worker or duplicate callback may already have
+      // finalized this attempt. Never overwrite a newer state from a stale
+      // in-memory execution object.
+      if (currentExecution.status !== ExecutionStatus.RUNNING) {
+        return {
+          execution: currentExecution,
+          retryScheduled: currentExecution.status === ExecutionStatus.RETRYING,
+          alreadyProcessed: true,
+        };
+      }
 
-      // RUNNING -> FAILED
-      execution.status = ExecutionStatus.FAILED;
-      execution.completedAt = failedAt;
-      execution.errorMessage = errorMessage;
-      execution.responsePayload = responsePayload;
+      const previousStatus = currentExecution.status;
+      const previousRetryCount = currentExecution.retryCount;
 
-      const savedExecution = await executionsRepository.save(execution);
+      currentExecution.status = ExecutionStatus.FAILED;
+      currentExecution.completedAt = failedAt;
+      currentExecution.errorMessage = errorMessage;
+      currentExecution.responsePayload = responsePayload;
 
       let retryScheduled = false;
-      let retryCount = savedExecution.retryCount;
+      let retryCount = currentExecution.retryCount;
 
-      // FAILED -> RETRYING (bounded by max retries)
       if (
-        savedExecution.retryCount < maxRetries &&
+        currentExecution.retryCount < maxRetries &&
         currentEnrollment.status !== EnrollmentStatus.CANCELLED &&
         currentEnrollment.status !== EnrollmentStatus.COMPLETED
       ) {
-        retryCount = savedExecution.retryCount + 1;
-        savedExecution.retryCount = retryCount;
-        savedExecution.status = ExecutionStatus.RETRYING;
-        savedExecution.startedAt = null;
-        savedExecution.completedAt = null;
-        savedExecution.scheduledAt = new Date(
+        retryCount = currentExecution.retryCount + 1;
+        currentExecution.retryCount = retryCount;
+        currentExecution.status = ExecutionStatus.RETRYING;
+        currentExecution.startedAt = null;
+        currentExecution.completedAt = null;
+        currentExecution.scheduledAt = new Date(
           failedAt.getTime() + this.getRetryDelayMinutes() * 60_000,
         );
-        await executionsRepository.save(savedExecution);
         retryScheduled = true;
       }
 
+      const savedExecution = await executionsRepository.save(currentExecution);
       await auditLogRepository.save(
         auditLogRepository.create({
           userId: currentEnrollment.assignedBy,
           action: 'FOLLOW_UP_FAILED',
           entityType: 'FollowUpExecution',
-          entityId: execution.id,
+          entityId: savedExecution.id,
           oldValue: {
             status: previousStatus,
             retryCount: previousRetryCount,
@@ -1031,7 +1079,7 @@ export class FollowUpService {
             retryCount,
           },
           metadata: {
-            enrollmentId: enrollment.id,
+            enrollmentId: currentEnrollment.id,
             stepId: step.id,
             channel: step.channel,
             attempt: previousRetryCount + 1,
@@ -1044,7 +1092,11 @@ export class FollowUpService {
         }),
       );
 
-      return { execution: savedExecution, retryScheduled };
+      return {
+        execution: savedExecution,
+        retryScheduled,
+        alreadyProcessed: false,
+      };
     });
 
     this.logger.warn(
@@ -1055,9 +1107,11 @@ export class FollowUpService {
       execution: outcome.execution,
       status: outcome.execution.status,
       retryCount: outcome.execution.retryCount,
-      message: outcome.retryScheduled
-        ? `Follow-up execution failed: ${errorMessage}. Retry ${outcome.execution.retryCount}/${maxRetries} is scheduled.`
-        : `Follow-up execution failed: ${errorMessage}. Retry limit of ${maxRetries} reached.`,
+      message: outcome.alreadyProcessed
+        ? `Follow-up execution was already finalized as ${outcome.execution.status}; no additional retry was created.`
+        : outcome.retryScheduled
+          ? `Follow-up execution failed: ${errorMessage}. Retry ${outcome.execution.retryCount}/${maxRetries} is scheduled.`
+          : `Follow-up execution failed: ${errorMessage}. Retry limit of ${maxRetries} reached.`,
     };
   }
 
