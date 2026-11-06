@@ -46,8 +46,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       sourceId,
     });
     expect(response.status).toBe(201);
-    createdLeadIds.push(response.body.id);
-    return response.body.id as string;
+    const leadId = response.body.id as string;
+    createdLeadIds.push(leadId);
+    return leadId;
   };
 
   beforeAll(async () => {
@@ -351,10 +352,10 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
 
       expect(apply.status).toBe(500);
 
-      const leads = (await dataSource.query(
+      const leads = await dataSource.query(
         'SELECT id, phone FROM leads WHERE id = ANY($1::uuid[]) ORDER BY id;',
         [[firstLeadId, secondLeadId]],
-      )) as Array<{ id: string; phone: string }>;
+      );
       const phonesById = new Map(leads.map((lead) => [lead.id, lead.phone]));
       expect(phonesById.get(firstLeadId)).toBe('+1 (415) 555-0101');
       expect(phonesById.get(secondLeadId)).toBe('+1 (415) 555-0102');
