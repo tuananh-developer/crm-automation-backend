@@ -7,7 +7,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Request } from 'express';
 
 @Injectable()
@@ -17,12 +17,13 @@ export class N8nAuthGuard implements CanActivate {
   constructor(private readonly configService: ConfigService) {}
 
   private safeCompare(actual: string, expected: string): boolean {
-    const actualBuf = Buffer.from(actual, 'utf8');
-    const expectedBuf = Buffer.from(expected, 'utf8');
-    if (actualBuf.length !== expectedBuf.length) {
-      return false;
-    }
-    return timingSafeEqual(actualBuf, expectedBuf);
+    // Hash both values first so timingSafeEqual always compares fixed-size
+    // digests instead of returning early when the input lengths differ.
+    const actualDigest = createHash('sha256').update(actual, 'utf8').digest();
+    const expectedDigest = createHash('sha256')
+      .update(expected, 'utf8')
+      .digest();
+    return timingSafeEqual(actualDigest, expectedDigest);
   }
 
   canActivate(context: ExecutionContext): boolean {

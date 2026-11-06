@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
@@ -410,7 +409,7 @@ describe('LeadIntelligenceService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should reject a Sales actor who does not own the Lead', async () => {
+    it('should hide a Lead from a Sales actor who does not own it', async () => {
       (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
 
       await expect(
@@ -418,7 +417,7 @@ describe('LeadIntelligenceService', () => {
           ...actor,
           id: 'another-user',
         }),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(NotFoundException);
       expect(workflowRunsRepo.create).not.toHaveBeenCalled();
     });
 
@@ -1188,10 +1187,10 @@ describe('LeadIntelligenceService', () => {
       });
     });
 
-    it('should deny score history access for a Lead owned by another Sales user', async () => {
+    it('should hide score history for a Lead owned by another Sales user', async () => {
       await expect(
         service.getScoresByLead('lead-123', { ...actor, id: 'other-user' }),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(NotFoundException);
       expect(scoresRepo.find).not.toHaveBeenCalled();
     });
   });
@@ -1656,13 +1655,13 @@ describe('LeadIntelligenceService', () => {
       });
     });
 
-    it('should deny enrichment history access for a Lead owned by another Sales user', async () => {
+    it('should hide enrichment history for a Lead owned by another Sales user', async () => {
       await expect(
         service.getEnrichmentsByLead('lead-123', {
           ...actor,
           id: 'other-user',
         }),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(NotFoundException);
       expect(enrichmentsRepo.find).not.toHaveBeenCalled();
     });
   });

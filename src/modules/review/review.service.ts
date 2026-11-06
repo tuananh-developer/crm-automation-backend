@@ -9,6 +9,7 @@ import { Repository, DataSource } from 'typeorm';
 import { ReviewTask } from './entities/review-task.entity.js';
 import { ReviewDecision, ReviewStatus } from './enums/review.enum.js';
 import { Lead } from '../leads/entities/lead.entity.js';
+import { LeadStatus } from '../leads/enums/lead.enum.js';
 import { User } from '../users/entities/user.entity.js';
 import { randomUUID } from 'node:crypto';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
@@ -318,26 +319,21 @@ export class ReviewService {
 
       const savedTask = await reviewTaskRepo.save(reviewTask);
 
-      // Update lead status based on decision
+      // Update only the status column so a concurrent Lead edit cannot be
+      // overwritten by saving a stale entity snapshot.
+      const targetLeadStatus =
+        savedTask.decision === ReviewDecision.APPROVE
+          ? LeadStatus.QUALIFIED
+          : savedTask.decision === ReviewDecision.REJECT
+            ? LeadStatus.LOST
+            : LeadStatus.QUALIFYING;
+      await leadRepo.update(
+        { id: savedTask.leadId },
+        { status: targetLeadStatus },
+      );
       const lead = await leadRepo.findOne({
         where: { id: savedTask.leadId },
       });
-
-      if (lead) {
-        if (savedTask.decision === ReviewDecision.APPROVE) {
-          lead.status = 'QUALIFIED' as typeof lead.status;
-        }
-
-        if (savedTask.decision === ReviewDecision.REJECT) {
-          lead.status = 'LOST' as typeof lead.status;
-        }
-
-        if (savedTask.decision === ReviewDecision.MODIFY) {
-          lead.status = 'QUALIFYING' as typeof lead.status;
-        }
-
-        await leadRepo.save(lead);
-      }
 
       await auditLogRepo.save(
         auditLogRepo.create({
