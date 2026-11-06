@@ -211,6 +211,40 @@ describe('FeedbackService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
+    it('should reject SALES user with ForbiddenException if customer is unassigned (createdBy is null)', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: null,
+      });
+
+      await expect(
+        service.createFeedback(
+          {
+            customerId: 'customer-1',
+            content: 'Sales 1 attempt on unassigned customer',
+          },
+          mockSalesUser1,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should allow ADMIN user to submit feedback for unassigned customer (createdBy is null)', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: null,
+      });
+
+      const result = await service.createFeedback(
+        {
+          customerId: 'customer-1',
+          content: 'Admin feedback for unassigned customer',
+        },
+        mockAdminUser,
+      );
+
+      expect(result.feedbackId).toBe('feedback-uuid');
+    });
+
     it('should throw NotFoundException if customer does not exist', async () => {
       customersRepository.findOne.mockResolvedValue(null);
 
@@ -358,6 +392,297 @@ describe('FeedbackService', () => {
       expect(mockFeedback.errorMessage).toBe('Gemini rate limit exceeded');
       expect(mockRun.status).toBe(WorkflowStatus.FAILED);
       expect(mockRun.errorMessage).toBe('Gemini rate limit exceeded');
+    });
+
+    it('should execute within database transaction and acquire pessimistic_write lock when dataSource is present', async () => {
+      const mockFeedback = {
+        id: 'fb-1',
+        customerId: 'customer-1',
+        status: FeedbackStatus.NEW,
+        workflowRunId: 'run-1',
+      };
+      const mockRun = {
+        id: 'run-1',
+        workflowName: 't12-wf14-customer-feedback',
+        customerId: 'customer-1',
+        status: WorkflowStatus.PENDING,
+      };
+
+      const txFeedbackRepo = {
+        findOne: jest.fn().mockResolvedValue(mockFeedback),
+        save: jest.fn().mockResolvedValue(mockFeedback),
+      };
+      const txWorkflowRunsRepo = {
+        findOne: jest.fn().mockResolvedValue(mockRun),
+        save: jest.fn().mockResolvedValue(mockRun),
+      };
+
+      const mockManager = {
+        getRepository: jest.fn((entity: any) => {
+          if (entity.name === 'CustomerFeedback') return txFeedbackRepo;
+          return txWorkflowRunsRepo;
+        }),
+      };
+
+      const mockDataSource = {
+        transaction: jest.fn(async (cb: any) => await cb(mockManager)),
+      };
+
+      const transactionalService = new FeedbackService(
+        feedbackRepository,
+        customerTasksRepository,
+        customersRepository,
+        workflowRunsRepository,
+        notificationsRepository,
+        configService,
+        mockDataSource as any,
+      );
+
+      const res = await transactionalService.handleCallback({
+        feedbackId: 'fb-1',
+        workflowRunId: 'run-1',
+        status: 'SUCCESS',
+        sentiment: 'POSITIVE',
+        category: 'Compliment',
+        urgency: 'LOW',
+        escalationRequired: false,
+      });
+
+      expect(mockDataSource.transaction).toHaveBeenCalled();
+      expect(txFeedbackRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 'fb-1' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(txWorkflowRunsRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 'run-1' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(res.success).toBe(true);
+      expect(res.status).toBe(FeedbackStatus.PROCESSED);
+    });
+
+    it('should return existing result idempotently if duplicate SUCCESS callback arrives with matching payload', async () => {
+      const mockFeedback = {
+        id: 'fb-1',
+        customerId: 'customer-1',
+        status: FeedbackStatus.PROCESSED,
+        workflowRunId: 'run-1',
+        sentiment: 'POSITIVE',
+        category: 'General',
+        urgency: 'LOW',
+      };
+      const mockRun = {
+        id: 'run-1',
+        workflowName: 't12-wf14-customer-feedback',
+        customerId: 'customer-1',
+        status: WorkflowStatus.SUCCESS,
+        outputPayload: {
+          sentiment: 'POSITIVE',
+          category: 'General',
+          urgency: 'LOW',
+          escalationRequired: false,
+        },
+      };
+
+      feedbackRepository.findOne.mockResolvedValue(mockFeedback);
+      workflowRunsRepository.findOne.mockResolvedValue(mockRun);
+
+      const res = await service.handleCallback({
+        feedbackId: 'fb-1',
+        workflowRunId: 'run-1',
+        status: 'SUCCESS',
+        sentiment: 'POSITIVE',
+        category: 'General',
+        urgency: 'LOW',
+        escalationRequired: false,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.status).toBe(FeedbackStatus.PROCESSED);
+      expect(res.escalationRequired).toBe(false);
+      expect(feedbackRepository.save).not.toHaveBeenCalled();
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('should throw ConflictException (409) if duplicate SUCCESS callback arrives with conflicting sentiment', async () => {
+      const mockFeedback = {
+        id: 'fb-1',
+        customerId: 'customer-1',
+        status: FeedbackStatus.PROCESSED,
+        workflowRunId: 'run-1',
+        sentiment: 'POSITIVE',
+        category: 'General',
+        urgency: 'LOW',
+      };
+      const mockRun = {
+        id: 'run-1',
+        workflowName: 't12-wf14-customer-feedback',
+        customerId: 'customer-1',
+        status: WorkflowStatus.SUCCESS,
+        outputPayload: {
+          sentiment: 'POSITIVE',
+          category: 'General',
+          urgency: 'LOW',
+          escalationRequired: false,
+        },
+      };
+
+      feedbackRepository.findOne.mockResolvedValue(mockFeedback);
+      workflowRunsRepository.findOne.mockResolvedValue(mockRun);
+
+      await expect(
+        service.handleCallback({
+          feedbackId: 'fb-1',
+          workflowRunId: 'run-1',
+          status: 'SUCCESS',
+          sentiment: 'NEGATIVE', // Conflicting sentiment!
+          category: 'General',
+          urgency: 'LOW',
+          escalationRequired: false,
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should return existing result idempotently if duplicate FAILED callback arrives with matching errorMessage', async () => {
+      const mockFeedback = {
+        id: 'fb-1',
+        customerId: 'customer-1',
+        status: FeedbackStatus.FAILED,
+        workflowRunId: 'run-1',
+        errorMessage: 'Gemini rate limit',
+      };
+      const mockRun = {
+        id: 'run-1',
+        workflowName: 't12-wf14-customer-feedback',
+        customerId: 'customer-1',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Gemini rate limit',
+      };
+
+      feedbackRepository.findOne.mockResolvedValue(mockFeedback);
+      workflowRunsRepository.findOne.mockResolvedValue(mockRun);
+
+      const res = await service.handleCallback({
+        feedbackId: 'fb-1',
+        workflowRunId: 'run-1',
+        status: 'FAILED',
+        errorMessage: 'Gemini rate limit',
+      });
+
+      expect(res.success).toBe(false);
+      expect(res.status).toBe(FeedbackStatus.FAILED);
+      expect(feedbackRepository.save).not.toHaveBeenCalled();
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('should throw ConflictException (409) if duplicate FAILED callback arrives with conflicting errorMessage', async () => {
+      const mockFeedback = {
+        id: 'fb-1',
+        customerId: 'customer-1',
+        status: FeedbackStatus.FAILED,
+        workflowRunId: 'run-1',
+        errorMessage: 'Gemini rate limit',
+      };
+      const mockRun = {
+        id: 'run-1',
+        workflowName: 't12-wf14-customer-feedback',
+        customerId: 'customer-1',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Gemini rate limit',
+      };
+
+      feedbackRepository.findOne.mockResolvedValue(mockFeedback);
+      workflowRunsRepository.findOne.mockResolvedValue(mockRun);
+
+      await expect(
+        service.handleCallback({
+          feedbackId: 'fb-1',
+          workflowRunId: 'run-1',
+          status: 'FAILED',
+          errorMessage: 'Different timeout error',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException (409) if late FAILED callback arrives when run is already SUCCESS', async () => {
+      const mockFeedback = {
+        id: 'fb-1',
+        customerId: 'customer-1',
+        status: FeedbackStatus.PROCESSED,
+        workflowRunId: 'run-1',
+      };
+      const mockRun = {
+        id: 'run-1',
+        workflowName: 't12-wf14-customer-feedback',
+        customerId: 'customer-1',
+        status: WorkflowStatus.SUCCESS,
+      };
+
+      feedbackRepository.findOne.mockResolvedValue(mockFeedback);
+      workflowRunsRepository.findOne.mockResolvedValue(mockRun);
+
+      await expect(
+        service.handleCallback({
+          feedbackId: 'fb-1',
+          workflowRunId: 'run-1',
+          status: 'FAILED',
+          errorMessage: 'Late failure',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException (409) if late SUCCESS callback arrives when run is already FAILED', async () => {
+      const mockFeedback = {
+        id: 'fb-1',
+        customerId: 'customer-1',
+        status: FeedbackStatus.FAILED,
+        workflowRunId: 'run-1',
+      };
+      const mockRun = {
+        id: 'run-1',
+        workflowName: 't12-wf14-customer-feedback',
+        customerId: 'customer-1',
+        status: WorkflowStatus.FAILED,
+      };
+
+      feedbackRepository.findOne.mockResolvedValue(mockFeedback);
+      workflowRunsRepository.findOne.mockResolvedValue(mockRun);
+
+      await expect(
+        service.handleCallback({
+          feedbackId: 'fb-1',
+          workflowRunId: 'run-1',
+          status: 'SUCCESS',
+          sentiment: 'POSITIVE',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException (409) if run is active but feedback is already in terminal PROCESSED state', async () => {
+      const mockFeedback = {
+        id: 'fb-1',
+        customerId: 'customer-1',
+        status: FeedbackStatus.PROCESSED,
+        workflowRunId: 'run-1',
+      };
+      const mockRun = {
+        id: 'run-1',
+        workflowName: 't12-wf14-customer-feedback',
+        customerId: 'customer-1',
+        status: WorkflowStatus.RUNNING,
+      };
+
+      feedbackRepository.findOne.mockResolvedValue(mockFeedback);
+      workflowRunsRepository.findOne.mockResolvedValue(mockRun);
+
+      await expect(
+        service.handleCallback({
+          feedbackId: 'fb-1',
+          workflowRunId: 'run-1',
+          status: 'SUCCESS',
+          sentiment: 'POSITIVE',
+        }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 

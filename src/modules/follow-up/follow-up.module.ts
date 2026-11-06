@@ -14,6 +14,7 @@ import { SequencesController } from './sequences.controller.js';
 import { SequencesService } from './sequences.service.js';
 import { FollowUpController } from './follow-up.controller.js';
 import { FollowUpService } from './follow-up.service.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { FollowUpService } from './follow-up.service.js';
       AuditLog,
     ]),
     N8nModule,
+    AuthModule,
   ],
   controllers: [SequencesController, FollowUpController],
   providers: [SequencesService, FollowUpService],

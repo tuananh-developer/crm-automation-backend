@@ -149,6 +149,73 @@ describe('UsersService administration', () => {
     expect(JSON.stringify(auditSave.mock.calls)).not.toContain('passwordHash');
   });
 
+  it('audits role changes with before and after values', async () => {
+    usersFindOne.mockResolvedValue(admin('target'));
+
+    const result = await service.update(
+      'target',
+      { role: UserRole.SALES },
+      actor,
+    );
+
+    expect(result.role).toBe(UserRole.SALES);
+    expect(auditSave).toHaveBeenCalledTimes(1);
+    expect(auditSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'USER_UPDATED',
+        oldValue: expect.objectContaining({ role: UserRole.ADMIN }),
+        newValue: expect.objectContaining({ role: UserRole.SALES }),
+      }),
+    );
+  });
+
+  it('audits status changes with before and after values', async () => {
+    usersFindOne.mockResolvedValue(admin('target'));
+
+    const result = await service.update(
+      'target',
+      { status: UserStatus.LOCKED },
+      actor,
+    );
+
+    expect(result.status).toBe(UserStatus.LOCKED);
+    expect(auditSave).toHaveBeenCalledTimes(1);
+    expect(auditSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'USER_UPDATED',
+        oldValue: expect.objectContaining({ status: UserStatus.ACTIVE }),
+        newValue: expect.objectContaining({ status: UserStatus.LOCKED }),
+      }),
+    );
+  });
+
+  it('audits successful user disable operations', async () => {
+    usersFindOne.mockResolvedValue(admin('target'));
+
+    const result = await service.disable('target', actor);
+
+    expect(result.status).toBe(UserStatus.INACTIVE);
+    expect(auditSave).toHaveBeenCalledTimes(1);
+    expect(auditSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'USER_DISABLED',
+        oldValue: expect.objectContaining({ status: UserStatus.ACTIVE }),
+        newValue: expect.objectContaining({ status: UserStatus.INACTIVE }),
+      }),
+    );
+  });
+
+  it('does not write an audit record when user persistence fails', async () => {
+    usersFindOne.mockResolvedValue(admin('target'));
+    usersSave.mockRejectedValue(new Error('user persistence failed'));
+
+    await expect(
+      service.update('target', { role: UserRole.SALES }, actor),
+    ).rejects.toThrow('user persistence failed');
+
+    expect(auditSave).not.toHaveBeenCalled();
+  });
+
   it('prevents self-disable', async () => {
     await expect(service.disable(actor.id, actor)).rejects.toBeInstanceOf(
       ForbiddenException,

@@ -2,10 +2,23 @@ import { EnrichmentController } from './enrichment.controller.js';
 import type { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { EnrichmentStatus } from './enums/lead-intelligence.enum.js';
 import type { LeadEnrichment } from './entities/lead-enrichment.entity.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('EnrichmentController', () => {
   let controller: EnrichmentController;
   let service: jest.Mocked<Partial<LeadIntelligenceService>>;
+  const actor: AuthenticatedUser = {
+    id: 'user-owner-123',
+    name: 'Sales Rep',
+    email: 'sales@example.test',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 
   const mockEnrichment: LeadEnrichment = {
     id: 'enrich-123',
@@ -66,13 +79,19 @@ describe('EnrichmentController', () => {
   });
 
   it('should trigger enrichment via service', async () => {
-    const result = await controller.triggerEnrichment('lead-123', {
-      provider: 'clearbit',
-    });
+    const result = await controller.triggerEnrichment(
+      'lead-123',
+      { provider: 'clearbit' },
+      actor,
+    );
 
-    expect(service.triggerEnrichment).toHaveBeenCalledWith('lead-123', {
-      provider: 'clearbit',
-    });
+    expect(service.triggerEnrichment).toHaveBeenCalledWith(
+      'lead-123',
+      {
+        provider: 'clearbit',
+      },
+      actor,
+    );
     expect(result.workflowRunId).toBe('wf-run-123');
   });
 
@@ -110,16 +129,31 @@ describe('EnrichmentController', () => {
   });
 
   it('should get all enrichments for a lead via service', async () => {
-    const result = await controller.getEnrichmentsByLead('lead-123');
+    const result = await controller.getEnrichmentsByLead('lead-123', actor);
 
-    expect(service.getEnrichmentsByLead).toHaveBeenCalledWith('lead-123');
+    expect(service.getEnrichmentsByLead).toHaveBeenCalledWith(
+      'lead-123',
+      actor,
+    );
     expect(result).toHaveLength(1);
   });
 
   it('should get latest enrichment for a lead via service', async () => {
-    const result = await controller.getLatestEnrichment('lead-123');
+    const result = await controller.getLatestEnrichment('lead-123', actor);
 
-    expect(service.getLatestEnrichment).toHaveBeenCalledWith('lead-123');
+    expect(service.getLatestEnrichment).toHaveBeenCalledWith('lead-123', actor);
     expect(result?.id).toBe('enrich-123');
+  });
+
+  describe('Authorization Metadata', () => {
+    /* eslint-disable @typescript-eslint/unbound-method */
+    it('should protect triggerEnrichment endpoint with JwtAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        EnrichmentController.prototype.triggerEnrichment,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtAuthGuard);
+    });
   });
 });

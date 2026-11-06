@@ -8,6 +8,7 @@ import { User } from '../users/entities/user.entity.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
+import { parseJwtExpiresInSeconds } from './jwt-expiration.util.js';
 
 @Module({
   imports: [
@@ -37,17 +38,13 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
           );
         }
 
-        const secret =
-          jwtSecret || 'crm-jwt-secret-key-super-secure-change-in-production';
-        const expiresIn = configService.get<number>(
-          'JWT_EXPIRES_IN_SECONDS',
-          86400,
-        );
-
         return {
-          secret,
+          secret:
+            jwtSecret || 'crm-jwt-secret-key-super-secure-change-in-production',
           signOptions: {
-            expiresIn,
+            expiresIn: parseJwtExpiresInSeconds(
+              configService.get<string | number>('JWT_EXPIRES_IN_SECONDS'),
+            ),
           },
         };
       },

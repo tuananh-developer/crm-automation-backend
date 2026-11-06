@@ -3,10 +3,23 @@ import type { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { ScoreLabel } from './enums/lead-intelligence.enum.js';
 import type { LeadScore } from './entities/lead-score.entity.js';
 import type { ScoringCallbackDto } from './dto/scoring-callback.dto.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('ScoringController', () => {
   let controller: ScoringController;
   let service: jest.Mocked<Partial<LeadIntelligenceService>>;
+  const actor: AuthenticatedUser = {
+    id: 'user-owner-123',
+    name: 'Sales Rep',
+    email: 'sales@example.test',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 
   const mockScore: LeadScore = {
     id: 'score-123',
@@ -50,9 +63,17 @@ describe('ScoringController', () => {
   });
 
   it('should trigger scoring via service', async () => {
-    const result = await controller.triggerScoring('lead-123');
+    const result = await controller.triggerScoring(
+      'lead-123',
+      undefined,
+      actor,
+    );
 
-    expect(service.triggerScoring).toHaveBeenCalledWith('lead-123', undefined);
+    expect(service.triggerScoring).toHaveBeenCalledWith(
+      'lead-123',
+      undefined,
+      actor,
+    );
     expect(result.workflowRunId).toBe('wf-run-123');
   });
 
@@ -74,24 +95,36 @@ describe('ScoringController', () => {
   });
 
   it('should return scoring context', async () => {
-    const result = await controller.getScoringContext('lead-123');
+    const result = await controller.getScoringContext('lead-123', actor);
 
-    expect(service.getScoringContext).toHaveBeenCalledWith('lead-123');
+    expect(service.getScoringContext).toHaveBeenCalledWith('lead-123', actor);
     expect(result.lead.id).toBe('lead-123');
   });
 
   it('should return score history', async () => {
-    const result = await controller.getScores('lead-123');
+    const result = await controller.getScores('lead-123', actor);
 
-    expect(service.getScoresByLead).toHaveBeenCalledWith('lead-123');
+    expect(service.getScoresByLead).toHaveBeenCalledWith('lead-123', actor);
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('score-123');
   });
 
   it('should return latest score', async () => {
-    const result = await controller.getLatestScore('lead-123');
+    const result = await controller.getLatestScore('lead-123', actor);
 
-    expect(service.getLatestScore).toHaveBeenCalledWith('lead-123');
+    expect(service.getLatestScore).toHaveBeenCalledWith('lead-123', actor);
     expect(result?.label).toBe(ScoreLabel.HOT);
+  });
+
+  describe('Authorization Metadata', () => {
+    /* eslint-disable @typescript-eslint/unbound-method */
+    it('should protect triggerScoring endpoint with JwtAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        ScoringController.prototype.triggerScoring,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtAuthGuard);
+    });
   });
 });

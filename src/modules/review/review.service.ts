@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -8,7 +9,9 @@ import { Repository, DataSource } from 'typeorm';
 import { ReviewTask } from './entities/review-task.entity.js';
 import { ReviewDecision, ReviewStatus } from './enums/review.enum.js';
 import { Lead } from '../leads/entities/lead.entity.js';
+import { LeadStatus } from '../leads/enums/lead.enum.js';
 import { User } from '../users/entities/user.entity.js';
+import { randomUUID } from 'node:crypto';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
@@ -21,6 +24,7 @@ import {
   ReviewTaskResponseDto,
 } from './dto/index.js';
 import { ReviewTaskMapper } from './mappers/index.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @Injectable()
 export class ReviewService {
@@ -64,7 +68,10 @@ export class ReviewService {
     return reviewTask;
   }
 
-  async create(dto: CreateReviewTaskDto): Promise<ReviewTaskResponseDto> {
+  async create(
+    dto: CreateReviewTaskDto,
+    actor: AuthenticatedUser,
+  ): Promise<ReviewTaskResponseDto> {
     const lead = await this.leadRepository.findOne({
       where: { id: dto.leadId },
     });
@@ -72,6 +79,7 @@ export class ReviewService {
     if (!lead) {
       throw new NotFoundException('Lead not found');
     }
+    this.assertLeadAccess(lead, actor);
 
     if (dto.workflowRunId) {
       const workflowRun = await this.workflowRunRepository.findOne({
@@ -106,8 +114,13 @@ export class ReviewService {
     return ReviewTaskMapper.toResponseDto(saved);
   }
 
-  async findAll(): Promise<ReviewTaskResponseDto[]> {
+  async findAll(actor: AuthenticatedUser): Promise<ReviewTaskResponseDto[]> {
     const reviewTasks = await this.reviewTaskRepository.find({
+      ...(actor.role === UserRole.SALES
+        ? {
+            where: [{ lead: { ownerId: actor.id } }, { assignedTo: actor.id }],
+          }
+        : {}),
       relations: {
         lead: true,
         assignee: true,
@@ -121,103 +134,163 @@ export class ReviewService {
     return ReviewTaskMapper.toResponseDtoList(reviewTasks);
   }
 
-  async findOne(id: string): Promise<ReviewTaskResponseDto> {
+  async findOne(
+    id: string,
+    actor: AuthenticatedUser,
+  ): Promise<ReviewTaskResponseDto> {
     const reviewTask = await this.findTaskEntity(id);
+    this.assertTaskAccess(reviewTask, actor);
     return ReviewTaskMapper.toResponseDto(reviewTask);
   }
 
   async assign(
     id: string,
     dto: AssignReviewTaskDto,
+    actor: AuthenticatedUser,
   ): Promise<ReviewTaskResponseDto> {
-    const reviewTask = await this.findTaskEntity(id);
+    return this.dataSource.transaction(async (manager) => {
+      const taskRepository = manager.getRepository(ReviewTask);
+      const reviewerRepository = manager.getRepository(User);
+      const notificationRepository = manager.getRepository(Notification);
+      const auditRepository = manager.getRepository(AuditLog);
 
-    if (reviewTask.status !== ReviewStatus.PENDING) {
-      throw new BadRequestException(
-        'Only PENDING review tasks can be assigned',
-      );
-    }
+      // Serialize assignments for one task; notification and audit are committed
+      // atomically with the assignment itself.
+      const reviewTask = await this.findLockedTask(taskRepository, id);
+      if (!reviewTask) {
+        throw new NotFoundException('Review task not found');
+      }
 
-    if (reviewTask.assignedTo && reviewTask.assignedTo !== dto.reviewerId) {
-      throw new BadRequestException(
-        'Review task is already assigned to a different reviewer',
-      );
-    }
+      this.assertLeadAccess(reviewTask.lead!, actor);
+      if (actor.role === UserRole.SALES && dto.reviewerId !== actor.id) {
+        throw new ForbiddenException(
+          'Sales users may only claim tasks for themselves',
+        );
+      }
 
-    const reviewer = await this.userRepository.findOne({
-      where: { id: dto.reviewerId },
+      if (reviewTask.status !== ReviewStatus.PENDING) {
+        throw new BadRequestException(
+          'Only PENDING review tasks can be assigned',
+        );
+      }
+
+      if (
+        actor.role === UserRole.SALES &&
+        reviewTask.assignedTo &&
+        reviewTask.assignedTo !== dto.reviewerId
+      ) {
+        throw new BadRequestException(
+          'Sales users cannot reassign a task claimed by another reviewer',
+        );
+      }
+
+      const reviewer = await reviewerRepository.findOne({
+        where: { id: dto.reviewerId },
+      });
+      if (!reviewer) {
+        throw new NotFoundException('Reviewer not found');
+      }
+      if (reviewer.role !== UserRole.SALES) {
+        throw new BadRequestException('Reviewer must have SALES role');
+      }
+      if (reviewer.status !== UserStatus.ACTIVE) {
+        throw new BadRequestException('Reviewer must be ACTIVE');
+      }
+
+      const previousAssigneeId = reviewTask.assignedTo;
+      const assignmentChanged = previousAssigneeId !== reviewer.id;
+      reviewTask.assignedTo = reviewer.id;
+      reviewTask.assignee = reviewer;
+      const savedTask = await taskRepository.save(reviewTask);
+
+      // Repeating the same assignment is a no-op for notifications and audit.
+      // A genuinely new assignment transition receives its own idempotency key,
+      // including when a task is later reassigned back to a previous reviewer.
+      if (assignmentChanged) {
+        await notificationRepository.save(
+          notificationRepository.create({
+            userId: reviewer.id,
+            type: NotificationType.HUMAN_REVIEW_REQUIRED,
+            title: 'Human review required',
+            content: `Lead ${savedTask.leadId} requires manual review.`,
+            leadId: savedTask.leadId,
+            customerId: null,
+            reviewTaskId: savedTask.id,
+            idempotencyKey: randomUUID(),
+            isRead: false,
+            readAt: null,
+          }),
+        );
+
+        await auditRepository.save(
+          auditRepository.create({
+            userId: actor.id,
+            action: 'REVIEW_ASSIGNED',
+            entityType: 'ReviewTask',
+            entityId: savedTask.id,
+            oldValue: { assignedTo: previousAssigneeId },
+            newValue: { assignedTo: reviewer.id },
+            metadata: { leadId: savedTask.leadId },
+            ipAddress: null,
+            userAgent: null,
+          }),
+        );
+      }
+
+      savedTask.lead = reviewTask.lead;
+      savedTask.assignee = reviewer;
+      savedTask.workflowRun = reviewTask.workflowRun;
+      return ReviewTaskMapper.toResponseDto(savedTask);
     });
-
-    if (!reviewer) {
-      throw new NotFoundException('Reviewer not found');
-    }
-
-    if (reviewer.role !== UserRole.SALES) {
-      throw new BadRequestException('Reviewer must have SALES role');
-    }
-
-    if (reviewer.status !== UserStatus.ACTIVE) {
-      throw new BadRequestException('Reviewer must be ACTIVE');
-    }
-
-    reviewTask.assignedTo = reviewer.id;
-    reviewTask.assignee = reviewer;
-
-    const savedTask = await this.reviewTaskRepository.save(reviewTask);
-    savedTask.lead = reviewTask.lead;
-    savedTask.assignee = reviewer;
-    savedTask.workflowRun = reviewTask.workflowRun;
-
-    await this.createNotification(reviewer.id, savedTask, reviewTask.leadId);
-
-    return ReviewTaskMapper.toResponseDto(savedTask);
   }
 
-  async start(id: string): Promise<ReviewTaskResponseDto> {
-    const reviewTask = await this.findTaskEntity(id);
+  async start(
+    id: string,
+    actor: AuthenticatedUser,
+  ): Promise<ReviewTaskResponseDto> {
+    return this.dataSource.transaction(async (manager) => {
+      const taskRepository = manager.getRepository(ReviewTask);
+      const reviewTask = await this.findLockedTask(taskRepository, id);
+      if (!reviewTask) {
+        throw new NotFoundException('Review task not found');
+      }
+      this.assertTaskAccess(reviewTask, actor, true);
 
-    if (reviewTask.status !== ReviewStatus.PENDING) {
-      throw new BadRequestException('Only PENDING review tasks can be started');
-    }
+      if (reviewTask.status !== ReviewStatus.PENDING) {
+        throw new BadRequestException('Only PENDING review tasks can be started');
+      }
+      if (!reviewTask.assignedTo) {
+        throw new BadRequestException(
+          'Review task must be assigned before starting',
+        );
+      }
 
-    if (!reviewTask.assignedTo) {
-      throw new BadRequestException(
-        'Review task must be assigned before starting',
-      );
-    }
-
-    reviewTask.status = ReviewStatus.IN_REVIEW;
-    reviewTask.startedAt = new Date();
-
-    const savedTask = await this.reviewTaskRepository.save(reviewTask);
-    savedTask.lead = reviewTask.lead;
-    savedTask.assignee = reviewTask.assignee;
-    savedTask.workflowRun = reviewTask.workflowRun;
-    return ReviewTaskMapper.toResponseDto(savedTask);
+      reviewTask.status = ReviewStatus.IN_REVIEW;
+      reviewTask.startedAt = new Date();
+      const savedTask = await taskRepository.save(reviewTask);
+      savedTask.lead = reviewTask.lead;
+      savedTask.assignee = reviewTask.assignee;
+      savedTask.workflowRun = reviewTask.workflowRun;
+      return ReviewTaskMapper.toResponseDto(savedTask);
+    });
   }
 
   async resolve(
     id: string,
     dto: ResolveReviewTaskDto,
+    actor: AuthenticatedUser,
   ): Promise<ReviewTaskResponseDto> {
     return this.dataSource.transaction(async (manager) => {
       const reviewTaskRepo = manager.getRepository(ReviewTask);
       const leadRepo = manager.getRepository(Lead);
       const auditLogRepo = manager.getRepository(AuditLog);
 
-      const reviewTask = await reviewTaskRepo.findOne({
-        where: { id },
-        relations: {
-          lead: true,
-          assignee: true,
-          workflowRun: true,
-          notifications: true,
-        },
-      });
+      const reviewTask = await this.findLockedTask(reviewTaskRepo, id);
 
       if (!reviewTask) {
         throw new NotFoundException('Review task not found');
       }
+      this.assertTaskAccess(reviewTask, actor, true);
 
       if (reviewTask.status !== ReviewStatus.IN_REVIEW) {
         throw new BadRequestException('Only IN_REVIEW tasks can be resolved');
@@ -246,30 +319,25 @@ export class ReviewService {
 
       const savedTask = await reviewTaskRepo.save(reviewTask);
 
-      // Update lead status based on decision
+      // Update only the status column so a concurrent Lead edit cannot be
+      // overwritten by saving a stale entity snapshot.
+      const targetLeadStatus =
+        savedTask.decision === ReviewDecision.APPROVE
+          ? LeadStatus.QUALIFIED
+          : savedTask.decision === ReviewDecision.REJECT
+            ? LeadStatus.LOST
+            : LeadStatus.QUALIFYING;
+      await leadRepo.update(
+        { id: savedTask.leadId },
+        { status: targetLeadStatus },
+      );
       const lead = await leadRepo.findOne({
         where: { id: savedTask.leadId },
       });
 
-      if (lead) {
-        if (savedTask.decision === ReviewDecision.APPROVE) {
-          lead.status = 'QUALIFIED' as typeof lead.status;
-        }
-
-        if (savedTask.decision === ReviewDecision.REJECT) {
-          lead.status = 'LOST' as typeof lead.status;
-        }
-
-        if (savedTask.decision === ReviewDecision.MODIFY) {
-          lead.status = 'QUALIFYING' as typeof lead.status;
-        }
-
-        await leadRepo.save(lead);
-      }
-
       await auditLogRepo.save(
         auditLogRepo.create({
-          userId: savedTask.assignedTo,
+          userId: actor.id,
           action: 'REVIEW_RESOLVED',
           entityType: 'ReviewTask',
           entityId: savedTask.id,
@@ -295,23 +363,54 @@ export class ReviewService {
     });
   }
 
-  private async createNotification(
-    userId: string,
+  /**
+   * Lock only the ReviewTask row. Loading nullable relations in the same
+   * SELECT as FOR UPDATE makes PostgreSQL reject the query because TypeORM
+   * uses LEFT JOINs for assignee, workflowRun, and notifications.
+   * The second read remains protected by the row lock held by this transaction.
+   */
+  private async findLockedTask(
+    repository: Repository<ReviewTask>,
+    id: string,
+  ): Promise<ReviewTask | null> {
+    const lockedTask = await repository.findOne({
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!lockedTask) {
+      return null;
+    }
+
+    return repository.findOne({
+      where: { id },
+      relations: {
+        lead: true,
+        assignee: true,
+        workflowRun: true,
+        notifications: true,
+      },
+    });
+  }
+
+  private assertLeadAccess(lead: Lead, actor: AuthenticatedUser): void {
+    if (actor.role === UserRole.SALES && lead.ownerId !== actor.id) {
+      throw new NotFoundException('Review task not found');
+    }
+  }
+
+  private assertTaskAccess(
     reviewTask: ReviewTask,
-    leadId: string,
-  ): Promise<void> {
-    await this.notificationRepository.save(
-      this.notificationRepository.create({
-        userId,
-        type: NotificationType.HUMAN_REVIEW_REQUIRED,
-        title: 'Human review required',
-        content: `Lead ${leadId} requires manual review.`,
-        leadId,
-        customerId: null,
-        reviewTaskId: reviewTask.id,
-        isRead: false,
-        readAt: null,
-      }),
-    );
+    actor: AuthenticatedUser,
+    requireAssignee = false,
+  ): void {
+    if (actor.role !== UserRole.SALES) return;
+    const ownsLead = reviewTask.lead?.ownerId === actor.id;
+    const isAssignedReviewer = reviewTask.assignedTo === actor.id;
+    if (
+      (!ownsLead && !isAssignedReviewer) ||
+      (requireAssignee && !isAssignedReviewer)
+    ) {
+      throw new NotFoundException('Review task not found');
+    }
   }
 }

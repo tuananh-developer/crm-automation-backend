@@ -6,10 +6,11 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import {
   CustomerFeedback,
   FeedbackStatus,
@@ -52,6 +53,9 @@ export class FeedbackService {
     private readonly notificationsRepository: Repository<Notification>,
 
     private readonly configService: ConfigService,
+
+    @Optional()
+    private readonly dataSource?: DataSource,
   ) {}
 
   public redactSensitiveContent(rawText: string): string {
@@ -93,8 +97,7 @@ export class FeedbackService {
 
     if (
       user.role !== UserRole.ADMIN &&
-      customer.createdBy &&
-      customer.createdBy !== user.id
+      (!customer.createdBy || customer.createdBy !== user.id)
     ) {
       throw new ForbiddenException(
         `You do not have permission to access Customer ${customerId}`,
@@ -292,107 +295,210 @@ export class FeedbackService {
       `Received T12-WF14 callback for feedback ${dto.feedbackId}, status=${dto.status}`,
     );
 
-    const feedback = await this.feedbackRepository.findOne({
-      where: { id: dto.feedbackId },
-    });
-    if (!feedback) {
-      throw new NotFoundException(`Feedback ${dto.feedbackId} not found`);
-    }
-
-    const workflowRun = await this.workflowRunsRepository.findOne({
-      where: { id: dto.workflowRunId },
-    });
-    if (!workflowRun) {
-      throw new BadRequestException(
-        `Invalid callback correlation: WorkflowRun ${dto.workflowRunId} not found`,
-      );
-    }
-
-    if (workflowRun.workflowName !== 't12-wf14-customer-feedback') {
-      throw new BadRequestException(
-        `Invalid callback correlation: WorkflowRun ${dto.workflowRunId} is not for t12-wf14-customer-feedback`,
-      );
-    }
-
-    if (workflowRun.customerId !== feedback.customerId) {
-      throw new BadRequestException(
-        `Invalid callback correlation: WorkflowRun customer ${workflowRun.customerId} does not match feedback customer ${feedback.customerId}`,
-      );
-    }
-
-    if (feedback.workflowRunId && feedback.workflowRunId !== workflowRun.id) {
-      throw new BadRequestException(
-        `Invalid callback correlation: WorkflowRun ${workflowRun.id} does not match feedback workflowRunId ${feedback.workflowRunId}`,
-      );
-    }
-
-    if (
-      workflowRun.inputPayload?.feedbackId &&
-      workflowRun.inputPayload.feedbackId !== feedback.id
-    ) {
-      throw new BadRequestException(
-        `Invalid callback correlation: WorkflowRun input feedbackId does not match callback feedbackId`,
-      );
-    }
-
-    const isSuccess = dto.status === 'SUCCESS';
-    if (isSuccess) {
-      feedback.sentiment = dto.sentiment ?? 'NEUTRAL';
-      feedback.category = dto.category ?? 'General Feedback';
-      feedback.urgency = dto.urgency ?? 'LOW';
-      feedback.status = dto.escalationRequired
-        ? FeedbackStatus.ESCALATED
-        : FeedbackStatus.PROCESSED;
-      feedback.rawAIOutput = dto.rawAIOutput ?? null;
-      feedback.errorMessage = null;
-    } else {
-      feedback.status = FeedbackStatus.FAILED;
-      feedback.errorMessage =
-        dto.errorMessage ?? 'Workflow execution reported failure';
-      if (dto.rawAIOutput) {
-        feedback.rawAIOutput = dto.rawAIOutput;
+    const processCallback = async (repos: {
+      feedbackRepo: Repository<CustomerFeedback>;
+      workflowRunsRepo: Repository<WorkflowRun>;
+    }) => {
+      // 1. Lock rows with pessimistic_write to prevent concurrent/race condition updates
+      const feedback = await repos.feedbackRepo.findOne({
+        where: { id: dto.feedbackId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!feedback) {
+        throw new NotFoundException(`Feedback ${dto.feedbackId} not found`);
       }
+
+      const workflowRun = await repos.workflowRunsRepo.findOne({
+        where: { id: dto.workflowRunId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!workflowRun) {
+        throw new BadRequestException(
+          `Invalid callback correlation: WorkflowRun ${dto.workflowRunId} not found`,
+        );
+      }
+
+      // 2. Correlation validations
+      if (workflowRun.workflowName !== 't12-wf14-customer-feedback') {
+        throw new BadRequestException(
+          `Invalid callback correlation: WorkflowRun ${dto.workflowRunId} is not for t12-wf14-customer-feedback`,
+        );
+      }
+
+      if (workflowRun.customerId !== feedback.customerId) {
+        throw new BadRequestException(
+          `Invalid callback correlation: WorkflowRun customer ${workflowRun.customerId} does not match feedback customer ${feedback.customerId}`,
+        );
+      }
+
+      if (feedback.workflowRunId && feedback.workflowRunId !== workflowRun.id) {
+        throw new BadRequestException(
+          `Invalid callback correlation: WorkflowRun ${workflowRun.id} does not match feedback workflowRunId ${feedback.workflowRunId}`,
+        );
+      }
+
+      if (
+        workflowRun.inputPayload?.feedbackId &&
+        workflowRun.inputPayload.feedbackId !== feedback.id
+      ) {
+        throw new BadRequestException(
+          `Invalid callback correlation: WorkflowRun input feedbackId does not match callback feedbackId`,
+        );
+      }
+
+      const isSuccess = dto.status === 'SUCCESS';
+      const targetRunStatus = isSuccess
+        ? WorkflowStatus.SUCCESS
+        : WorkflowStatus.FAILED;
+      const targetFeedbackStatus = isSuccess
+        ? dto.escalationRequired
+          ? FeedbackStatus.ESCALATED
+          : FeedbackStatus.PROCESSED
+        : FeedbackStatus.FAILED;
+
+      // 3. State-machine & Active-state assertion
+      const isRunTerminal =
+        workflowRun.status === WorkflowStatus.SUCCESS ||
+        workflowRun.status === WorkflowStatus.FAILED;
+
+      const isFeedbackTerminal = feedback.status !== FeedbackStatus.NEW;
+
+      if (isRunTerminal || isFeedbackTerminal) {
+        // Conflicting terminal status (e.g. late FAILED callback attempting to overwrite SUCCESS, or SUCCESS trying to overwrite FAILED)
+        if (
+          workflowRun.status !== targetRunStatus ||
+          (isSuccess && feedback.status === FeedbackStatus.FAILED) ||
+          (!isSuccess && feedback.status !== FeedbackStatus.FAILED)
+        ) {
+          throw new ConflictException(
+            `Conflict: WorkflowRun '${workflowRun.id}' is already in terminal state '${workflowRun.status}' (feedback status: '${feedback.status}'), cannot transition to '${targetRunStatus}'`,
+          );
+        }
+
+        // Check if duplicate callback has conflicting payload
+        if (isSuccess) {
+          const payloadConflict =
+            (dto.sentiment &&
+              feedback.sentiment &&
+              dto.sentiment !== feedback.sentiment) ||
+            (dto.category &&
+              feedback.category &&
+              dto.category !== feedback.category) ||
+            (dto.urgency &&
+              feedback.urgency &&
+              dto.urgency !== feedback.urgency) ||
+            (dto.escalationRequired !== undefined &&
+              Boolean(dto.escalationRequired) !==
+                (feedback.status === FeedbackStatus.ESCALATED));
+
+          if (payloadConflict) {
+            throw new ConflictException(
+              `Conflict: WorkflowRun '${workflowRun.id}' already completed with a conflicting feedback payload`,
+            );
+          }
+
+          this.logger.warn(
+            `Idempotent duplicate Customer Feedback callback detected for feedbackId=${feedback.id}, workflowRunId=${workflowRun.id}`,
+          );
+          return {
+            success: true,
+            feedbackId: feedback.id,
+            status: feedback.status,
+            escalationRequired: feedback.status === FeedbackStatus.ESCALATED,
+          };
+        } else {
+          if (
+            dto.errorMessage &&
+            workflowRun.errorMessage &&
+            dto.errorMessage.trim() !== workflowRun.errorMessage.trim()
+          ) {
+            throw new ConflictException(
+              `Conflict: WorkflowRun '${workflowRun.id}' already failed with a conflicting error message`,
+            );
+          }
+
+          this.logger.warn(
+            `Idempotent duplicate failed Customer Feedback callback detected for feedbackId=${feedback.id}, workflowRunId=${workflowRun.id}`,
+          );
+          return {
+            success: false,
+            feedbackId: feedback.id,
+            status: feedback.status,
+            escalationRequired: false,
+          };
+        }
+      }
+
+      // 4. First transition from active state
+      if (isSuccess) {
+        feedback.sentiment = dto.sentiment ?? 'NEUTRAL';
+        feedback.category = dto.category ?? 'General Feedback';
+        feedback.urgency = dto.urgency ?? 'LOW';
+        feedback.status = targetFeedbackStatus;
+        feedback.rawAIOutput = dto.rawAIOutput ?? null;
+        feedback.errorMessage = null;
+        feedback.resolvedAt = !dto.escalationRequired ? new Date() : null;
+      } else {
+        feedback.status = FeedbackStatus.FAILED;
+        feedback.errorMessage =
+          dto.errorMessage ?? 'Workflow execution reported failure';
+        if (dto.rawAIOutput) {
+          feedback.rawAIOutput = dto.rawAIOutput;
+        }
+      }
+      await repos.feedbackRepo.save(feedback);
+
+      workflowRun.status = targetRunStatus;
+      workflowRun.finishedAt = new Date();
+      workflowRun.errorMessage = isSuccess
+        ? null
+        : (dto.errorMessage ?? 'Workflow execution reported failure');
+      const fallbackMode =
+        typeof dto.rawAIOutput?.classificationMode === 'string'
+          ? dto.rawAIOutput.classificationMode
+          : isSuccess
+            ? 'GEMINI_AI'
+            : 'HEURISTIC_FALLBACK';
+      const fallbackProvider =
+        typeof dto.rawAIOutput?.provider === 'string'
+          ? dto.rawAIOutput.provider
+          : isSuccess
+            ? 'GEMINI'
+            : 'FALLBACK_HEURISTIC';
+
+      workflowRun.outputPayload = {
+        sentiment: dto.sentiment,
+        category: dto.category,
+        urgency: dto.urgency,
+        escalationRequired: dto.escalationRequired,
+        classificationMode: dto.classificationMode ?? fallbackMode,
+        provider: dto.provider ?? fallbackProvider,
+        rawAIOutput: dto.rawAIOutput,
+        errorMessage: isSuccess ? null : dto.errorMessage,
+      };
+      await repos.workflowRunsRepo.save(workflowRun);
+
+      return {
+        success: isSuccess,
+        feedbackId: feedback.id,
+        status: feedback.status,
+        escalationRequired: Boolean(dto.escalationRequired),
+      };
+    };
+
+    if (this.dataSource) {
+      return await this.dataSource.transaction(async (manager) => {
+        return processCallback({
+          feedbackRepo: manager.getRepository(CustomerFeedback),
+          workflowRunsRepo: manager.getRepository(WorkflowRun),
+        });
+      });
     }
-    await this.feedbackRepository.save(feedback);
 
-    workflowRun.status = isSuccess
-      ? WorkflowStatus.SUCCESS
-      : WorkflowStatus.FAILED;
-    workflowRun.finishedAt = new Date();
-    workflowRun.errorMessage = isSuccess
-      ? null
-      : (dto.errorMessage ?? 'Workflow execution reported failure');
-    const fallbackMode =
-      typeof dto.rawAIOutput?.classificationMode === 'string'
-        ? dto.rawAIOutput.classificationMode
-        : isSuccess
-          ? 'GEMINI_AI'
-          : 'HEURISTIC_FALLBACK';
-    const fallbackProvider =
-      typeof dto.rawAIOutput?.provider === 'string'
-        ? dto.rawAIOutput.provider
-        : isSuccess
-          ? 'GEMINI'
-          : 'FALLBACK_HEURISTIC';
-
-    workflowRun.outputPayload = {
-      sentiment: dto.sentiment,
-      category: dto.category,
-      urgency: dto.urgency,
-      escalationRequired: dto.escalationRequired,
-      classificationMode: dto.classificationMode ?? fallbackMode,
-      provider: dto.provider ?? fallbackProvider,
-      rawAIOutput: dto.rawAIOutput,
-      errorMessage: isSuccess ? null : dto.errorMessage,
-    };
-    await this.workflowRunsRepository.save(workflowRun);
-
-    return {
-      success: isSuccess,
-      feedbackId: feedback.id,
-      status: feedback.status,
-      escalationRequired: Boolean(dto.escalationRequired),
-    };
+    return await processCallback({
+      feedbackRepo: this.feedbackRepository,
+      workflowRunsRepo: this.workflowRunsRepository,
+    });
   }
 
   /**

@@ -35,6 +35,7 @@ export class DataCleaningController {
   constructor(private readonly dataCleaningService: DataCleaningService) {}
 
   @Post('scans')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Initiate a new Data Cleaning Scan (UC10 - Steps 1-5)',
@@ -50,11 +51,15 @@ export class DataCleaningController {
     status: 400,
     description: 'Invalid input or validation error.',
   })
-  createScan(@Body() dto: CreateScanDto) {
-    return this.dataCleaningService.createScan(dto);
+  createScan(
+    @Body() dto: CreateScanDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.dataCleaningService.createScan(dto, user);
   }
 
   @Get('scans/:workflowRunId')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: 'Get Data Cleaning Scan Status & Findings (UC10 - Step 11)',
     description:
@@ -73,8 +78,11 @@ export class DataCleaningController {
     status: 404,
     description: 'WorkflowRun not found.',
   })
-  getScan(@Param('workflowRunId', ParseUUIDPipe) workflowRunId: string) {
-    return this.dataCleaningService.getScan(workflowRunId);
+  getScan(
+    @Param('workflowRunId', ParseUUIDPipe) workflowRunId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.dataCleaningService.getScan(workflowRunId, user);
   }
 
   @Get('scans/:workflowRunId/leads')
@@ -168,9 +176,8 @@ export class DataCleaningController {
   applyCleaning(
     @Param('workflowRunId', ParseUUIDPipe) workflowRunId: string,
     @Body() dto: ApplyCleaningDto,
-    @CurrentUser() user?: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    const userId = user?.id;
-    return this.dataCleaningService.applyCleaning(workflowRunId, dto, userId);
+    return this.dataCleaningService.applyCleaning(workflowRunId, dto, user);
   }
 }

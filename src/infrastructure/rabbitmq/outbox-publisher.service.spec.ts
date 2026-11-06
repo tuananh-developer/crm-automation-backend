@@ -1,0 +1,220 @@
+import { DataSource, Repository } from 'typeorm';
+import { OutboxPublisher } from './outbox-publisher.service.js';
+import {
+  OutboxEvent,
+  OutboxEventStatus,
+  OutboxTransport,
+} from './entities/outbox-event.entity.js';
+import { ConfigService } from '@nestjs/config';
+import { RabbitMQService } from './rabbitmq.service.js';
+import { WorkflowRun } from '../../modules/workflow/entities/workflow-run.entity.js';
+import { WorkflowStatus } from '../../modules/workflow/enums/workflow.enum.js';
+
+describe('OutboxPublisher', () => {
+  const event = {
+    id: 'outbox-1',
+    eventType: 'lead.created',
+    exchange: 'crm.events',
+    routingKey: 'lead.created',
+    payload: {
+      eventId: 'event-1',
+      eventType: 'lead.created',
+      data: { leadId: 'lead-1' },
+    },
+    attempts: 1,
+    lockToken: 'lock-1',
+    transport: OutboxTransport.RABBITMQ,
+    destination: null,
+    destinationPath: null,
+  };
+
+  let publisher: OutboxPublisher;
+  let manager: { query: jest.Mock; getRepository: jest.Mock };
+  let repository: jest.Mocked<Partial<Repository<OutboxEvent>>>;
+  let dataSource: jest.Mocked<Partial<DataSource>>;
+  let rabbitmq: jest.Mocked<Partial<RabbitMQService>>;
+
+  beforeEach(() => {
+    repository = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    manager = {
+      query: jest.fn().mockResolvedValue([[{ ...event }], 1]),
+      getRepository: jest.fn().mockReturnValue(repository),
+    };
+    dataSource = {
+      isInitialized: true,
+      transaction: jest
+        .fn()
+        .mockImplementation(
+          (callback: (value: typeof manager) => Promise<unknown>) =>
+            callback(manager),
+        ),
+      getRepository: jest.fn().mockReturnValue(repository),
+    };
+    rabbitmq = {
+      publishOutboxEvent: jest.fn().mockResolvedValue(undefined),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService,
+    );
+  });
+
+  it('does not process events when the outbox claim returns no rows', async () => {
+    manager.query.mockResolvedValueOnce([[], 0]);
+
+    await publisher.publishPendingEvents();
+
+    expect(rabbitmq.publishOutboxEvent).not.toHaveBeenCalled();
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
+  it('claims pending events and marks them published after broker confirmation', async () => {
+    await publisher.publishPendingEvents();
+
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringContaining('FOR UPDATE SKIP LOCKED'),
+      [25],
+    );
+    expect(rabbitmq.publishOutboxEvent).toHaveBeenCalledWith(event);
+    expect(repository.update).toHaveBeenCalledWith(
+      { id: event.id, lockToken: event.lockToken },
+      expect.objectContaining({
+        status: OutboxEventStatus.PUBLISHED,
+        publishedAt: expect.any(Date),
+        lockedUntil: null,
+        lockToken: null,
+      }),
+    );
+  });
+
+  it('dispatches allowlisted HTTP outbox events and starts the workflow only after acknowledgement', async () => {
+    const workflowRunId = '11111111-1111-1111-1111-111111111111';
+    const httpEvent = {
+      ...event,
+      transport: OutboxTransport.HTTP,
+      destination: 'N8N_WF10_WEBHOOK_URL',
+      destinationPath: 'internal/t12-wf10-next-best-action',
+      payload: { workflowRunId, entityType: 'Lead', entityId: 'lead-1' },
+    };
+    manager.query.mockResolvedValueOnce([httpEvent]);
+    const workflowRepository = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    manager.getRepository.mockImplementation((entity: unknown) =>
+      entity === WorkflowRun ? workflowRepository : repository,
+    );
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'N8N_WF10_WEBHOOK_URL') {
+          return 'https://n8n.example/webhook/internal/t12-wf10-next-best-action';
+        }
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        return undefined;
+      }),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      config as unknown as ConfigService,
+    );
+
+    await publisher.publishPendingEvents();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://n8n.example/webhook/internal/t12-wf10-next-best-action',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'X-N8N-API-KEY': 'test-n8n-secret',
+          'Idempotency-Key': workflowRunId,
+        }),
+        body: JSON.stringify(httpEvent.payload),
+      }),
+    );
+    expect(workflowRepository.update).toHaveBeenCalledWith(
+      { id: workflowRunId, status: WorkflowStatus.PENDING },
+      { status: WorkflowStatus.RUNNING },
+    );
+    expect(rabbitmq.publishOutboxEvent).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('schedules an exponential retry when publication fails', async () => {
+    (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
+      new Error('broker unavailable'),
+    );
+
+    const before = Date.now();
+    await publisher.publishPendingEvents();
+
+    const update = (repository.update as jest.Mock).mock.calls[0][1] as {
+      status: OutboxEventStatus;
+      lastError: string;
+      nextAttemptAt: Date;
+    };
+    expect(update.status).toBe(OutboxEventStatus.PENDING);
+    expect(update.lastError).toBe('broker unavailable');
+    expect(update.nextAttemptAt).toBeInstanceOf(Date);
+    expect(update.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(
+      before + 60_000,
+    );
+    expect(update.nextAttemptAt.getTime()).toBeLessThanOrEqual(
+      Date.now() + 60_000,
+    );
+  });
+
+  it('moves an event to terminal failure after the retry limit', async () => {
+    manager.query.mockResolvedValueOnce([{ ...event, attempts: 10 }]);
+    (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
+      new Error('permanent broker failure'),
+    );
+
+    await publisher.publishPendingEvents();
+
+    expect(repository.update).toHaveBeenCalledWith(
+      { id: event.id, lockToken: event.lockToken },
+      expect.objectContaining({
+        status: OutboxEventStatus.FAILED,
+        lastError: 'permanent broker failure',
+        nextAttemptAt: null,
+        lockedUntil: null,
+        lockToken: null,
+      }),
+    );
+  });
+
+  it('does not poll when the database is not initialized', async () => {
+    (dataSource as { isInitialized?: boolean }).isInitialized = false;
+
+    await publisher.publishPendingEvents();
+
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+    expect(rabbitmq.publishOutboxEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not start a second poll while the previous batch is still processing', async () => {
+    let releasePublish!: () => void;
+    (rabbitmq.publishOutboxEvent as jest.Mock).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releasePublish = resolve;
+        }),
+    );
+
+    const firstPoll = publisher.publishPendingEvents();
+    await Promise.resolve();
+    await Promise.resolve();
+    await publisher.publishPendingEvents();
+
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    releasePublish();
+    await firstPoll;
+  });
+});

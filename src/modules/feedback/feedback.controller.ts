@@ -80,6 +80,10 @@ export class FeedbackController {
     return this.feedbackService.getInternalFeedback(feedbackId);
   }
 
+  /**
+   * Canonical route for retrieving customer feedback history.
+   * FeedbackController is the authoritative domain owner of customer feedback records.
+   */
   @Get('customers/:customerId/feedback')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -98,6 +102,11 @@ export class FeedbackController {
     summary: 'Internal n8n callback for T12-WF14 classification',
   })
   @ApiParam({ name: 'feedbackId', format: 'uuid' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Conflict: WorkflowRun already in terminal state or conflicting callback payload.',
+  })
   async handleCallback(
     @Param('feedbackId', ParseUUIDPipe) feedbackId: string,
     @Body() dto: FeedbackCallbackDto,
