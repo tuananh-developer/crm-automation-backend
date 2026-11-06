@@ -88,6 +88,15 @@ describe('N8nAuthGuard', () => {
     expect(guard.canActivate(context)).toBe(true);
   });
 
+  it('should reject a key with a different length', () => {
+    configService.get.mockImplementation((key: string) =>
+      key === 'N8N_API_KEY' ? 'secret-token-123' : undefined,
+    );
+
+    const context = createMockContext({ 'x-api-key': 'short' });
+    expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+  });
+
   it('should throw UnauthorizedException when key does not match', () => {
     configService.get.mockImplementation((key: string) =>
       key === 'N8N_API_KEY' ? 'secret-token-123' : undefined,
