@@ -418,11 +418,16 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
   });
 
   it('enforces Admin-only quote approval and persists approve/reject decisions', async () => {
+    const quoteLeadId = createdLeadIds[0];
+    if (!quoteLeadId) {
+      throw new Error('A Lead fixture must exist before Quote approval');
+    }
+
     const createPendingQuote = async (title: string) => {
       const run = await dataSource.getRepository(WorkflowRun).save({
         workflowName: WF12_NAME,
         n8nExecutionId: null,
-        leadId: null,
+        leadId: quoteLeadId,
         customerId: null,
         triggeredByUserId: userId,
         status: WorkflowStatus.SUCCESS,
@@ -439,7 +444,7 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
         workflowRunId: run.id,
         createdBy: userId,
         customerId: null,
-        leadId: null,
+        leadId: quoteLeadId,
         title,
         executiveSummary: null,
         body: null,
