@@ -8,7 +8,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
+import { DataSource, In, LessThanOrEqual, MoreThan, Repository, type EntityManager } from 'typeorm';
 import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
 import { FollowUpExecution } from './entities/follow-up-execution.entity.js';
@@ -680,7 +680,11 @@ export class FollowUpService {
           `Follow-up enrollment with ID '${id}' not found`,
         );
       }
-      if (actor) this.assertEnrollmentAccess(enrollment, actor);
+      await this.assertEnrollmentAccessInTransaction(
+        manager,
+        enrollment,
+        actor,
+      );
       if (enrollment.status !== EnrollmentStatus.PAUSED) {
         throw new ConflictException(
           `Enrollment '${id}' is '${enrollment.status}' and cannot be resumed`,
@@ -731,7 +735,11 @@ export class FollowUpService {
           `Follow-up enrollment with ID '${id}' not found`,
         );
       }
-      if (actor) this.assertEnrollmentAccess(enrollment, actor);
+      await this.assertEnrollmentAccessInTransaction(
+        manager,
+        enrollment,
+        actor,
+      );
       if (
         enrollment.status === EnrollmentStatus.CANCELLED ||
         enrollment.status === EnrollmentStatus.COMPLETED
