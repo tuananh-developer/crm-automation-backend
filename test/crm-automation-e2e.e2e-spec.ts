@@ -463,6 +463,31 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     expect(nextExecution.status).toBe('PENDING');
   });
 
+  it('UC06 cancellation: skips pending next steps atomically with cancellation', async () => {
+    const cancelResponse = await api
+      .post(
+        `/api/v1/follow-ups/enrollments/${concurrencyEnrollmentId}/cancel`,
+      )
+      .send({ reason: 'Customer opted out' });
+
+    expect(cancelResponse.status).toBe(200);
+    expect(cancelResponse.body.status).toBe('CANCELLED');
+
+    const [nextExecution] = await dataSource.query(
+      `SELECT status
+       FROM follow_up_executions
+       WHERE enrollment_id = $1 AND step_id = (
+         SELECT current_step_id
+         FROM lead_follow_up_enrollments
+         WHERE id = $1
+       )
+       ORDER BY created_at DESC
+       LIMIT 1;`,
+      [concurrencyEnrollmentId],
+    );
+    expect(nextExecution.status).toBe('SKIPPED');
+  });
+
   it('UC06 concurrency: two stale-recovery workers retry an execution only once', async () => {
     const enrollmentResponse = await api
       .post(`/api/v1/follow-up/sequences/${sequenceId}/enroll`)
