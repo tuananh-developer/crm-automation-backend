@@ -19,6 +19,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   let sequenceId: string;
   let stepId: string;
   let enrollmentId: string;
+  let concurrencyEnrollmentId: string;
   let reviewTaskId: string;
   let segmentId: string;
 
@@ -105,6 +106,16 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
         await dataSource.query(
           `DELETE FROM lead_follow_up_enrollments WHERE id = $1;`,
           [enrollmentId],
+        );
+      }
+      if (concurrencyEnrollmentId) {
+        await dataSource.query(
+          `DELETE FROM follow_up_executions WHERE enrollment_id = $1;`,
+          [concurrencyEnrollmentId],
+        );
+        await dataSource.query(
+          `DELETE FROM lead_follow_up_enrollments WHERE id = $1;`,
+          [concurrencyEnrollmentId],
         );
       }
       if (sequenceId) {
@@ -353,6 +364,90 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
         providerMessageId: 'e2e-provider-message-id',
       }),
     );
+  });
+
+  it('UC06 concurrency: preserves PAUSED when an in-flight delivery completes', async () => {
+    const nextStepResponse = await api
+      .post(`/api/v1/follow-up/sequences/${sequenceId}/steps`)
+      .send({
+        stepOrder: 2,
+        delayMinutes: 0,
+        channel: 'EMAIL',
+        actionType: 'SEND_EMAIL',
+        subjectTemplate: 'Second follow-up for {{companyName}}',
+        contentTemplate: 'Hello {{firstName}}, this is the second follow-up.',
+        isActive: true,
+      });
+
+    expect([200, 201]).toContain(nextStepResponse.status);
+    const nextStepId = nextStepResponse.body.id as string;
+
+    const enrollmentResponse = await api
+      .post(`/api/v1/follow-up/sequences/${sequenceId}/enroll`)
+      .send({ leadId });
+
+    expect([200, 201]).toContain(enrollmentResponse.status);
+    concurrencyEnrollmentId = enrollmentResponse.body.enrollment.id;
+
+    let markDispatchStarted!: () => void;
+    let resolveDispatch!: (value: {
+      success: boolean;
+      providerMessageId: string;
+      message: string;
+    }) => void;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      markDispatchStarted = resolve;
+    });
+    n8nTriggerWebhook.mockImplementationOnce(() => {
+      markDispatchStarted();
+      return new Promise((resolve) => {
+        resolveDispatch = resolve;
+      });
+    });
+
+    const executionPromise = api
+      .post('/api/v1/follow-ups/executions')
+      .send({ enrollmentId: concurrencyEnrollmentId, stepId })
+      .then((response) => response);
+
+    await dispatchStarted;
+
+    const pauseResponse = await api
+      .post(
+        `/api/v1/follow-ups/enrollments/${concurrencyEnrollmentId}/pause`,
+      )
+      .send({});
+    expect(pauseResponse.status).toBe(200);
+    expect(pauseResponse.body.status).toBe('PAUSED');
+
+    resolveDispatch({
+      success: true,
+      providerMessageId: 'e2e-provider-message-paused',
+      message: 'Mock n8n completed after pause',
+    });
+
+    const executionResponse = await executionPromise;
+    expect(executionResponse.status).toBe(200);
+    expect(executionResponse.body.status).toBe('SUCCESS');
+
+    const [enrollment] = await dataSource.query(
+      `SELECT status, current_step_id
+       FROM lead_follow_up_enrollments
+       WHERE id = $1;`,
+      [concurrencyEnrollmentId],
+    );
+    expect(enrollment.status).toBe('PAUSED');
+    expect(enrollment.current_step_id).toBe(nextStepId);
+
+    const [nextExecution] = await dataSource.query(
+      `SELECT status
+       FROM follow_up_executions
+       WHERE enrollment_id = $1 AND step_id = $2
+       ORDER BY created_at DESC
+       LIMIT 1;`,
+      [concurrencyEnrollmentId, nextStepId],
+    );
+    expect(nextExecution.status).toBe('PENDING');
   });
 
   // ───────────────────────────────────────────────────────────────────────────
