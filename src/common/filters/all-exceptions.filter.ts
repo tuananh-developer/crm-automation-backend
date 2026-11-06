@@ -53,13 +53,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
       );
     }
 
+    const isUnexpectedServerError =
+      status >= 500 && !(exception instanceof HttpException);
+
     response.status(status).json({
       statusCode: status,
       timestamp: new Date().toISOString(),
       path: request.url,
       method: request.method,
-      error: errorName,
-      message,
+      error: isUnexpectedServerError ? 'InternalServerError' : errorName,
+      message: isUnexpectedServerError ? 'Internal server error' : message,
     });
   }
 }
