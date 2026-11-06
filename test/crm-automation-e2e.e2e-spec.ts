@@ -43,6 +43,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   beforeAll(async () => {
     process.env.N8N_API_KEY = N8N_KEY;
     process.env.N8N_WEBHOOK_SECRET = N8N_KEY;
+    process.env.N8N_FOLLOW_UP_WEBHOOK_PATH = 'follow-up-execute';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
