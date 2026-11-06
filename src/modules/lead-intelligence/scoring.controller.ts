@@ -57,9 +57,9 @@ export class ScoringController {
   async triggerScoring(
     @Param('leadId', ParseUUIDPipe) leadId: string,
     @Body() dto?: TriggerScoringDto,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<TriggerScoringResponseDto> {
-    return this.leadIntelligenceService.triggerScoring(leadId, dto, actor);
+    return this.leadIntelligenceService.triggerScoring(leadId, dto, user);
   }
 
   @Post(['scoring/callback', 'callback'])
@@ -105,11 +105,11 @@ export class ScoringController {
   @ApiResponse({ status: 404, description: 'Lead not found.' })
   async getScoringContext(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<ScoringContextResponseDto> {
     const context = await this.leadIntelligenceService.getScoringContext(
       leadId,
-      actor,
+      user,
     );
     return ScoringMapper.toContextResponseDto(context);
   }
@@ -143,11 +143,11 @@ export class ScoringController {
   })
   async getScores(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<ScoringResponseDto[]> {
     const records = await this.leadIntelligenceService.getScoresByLead(
       leadId,
-      actor,
+      user,
     );
     return ScoringMapper.toResponseDtoList(records);
   }
@@ -179,11 +179,11 @@ export class ScoringController {
   @ApiResponse({ status: 404, description: 'No score found for this lead.' })
   async getLatestScore(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<ScoringResponseDto | null> {
     const record = await this.leadIntelligenceService.getLatestScore(
       leadId,
-      actor,
+      user,
     );
     return record ? ScoringMapper.toResponseDto(record) : null;
   }

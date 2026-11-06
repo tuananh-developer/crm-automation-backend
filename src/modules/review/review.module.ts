@@ -8,6 +8,7 @@ import { Notification } from '../notifications/entities/notification.entity.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import { ReviewController } from './review.controller.js';
 import { ReviewService } from './review.service.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { ReviewService } from './review.service.js';
       Notification,
       AuditLog,
     ]),
+    AuthModule,
   ],
   controllers: [ReviewController],
   providers: [ReviewService],

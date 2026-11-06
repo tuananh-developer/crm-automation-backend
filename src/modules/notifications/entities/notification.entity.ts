@@ -13,6 +13,10 @@ import type { Customer } from '../../customers/entities/customer.entity.js';
 import type { ReviewTask } from '../../review/entities/review-task.entity.js';
 
 @Entity('notifications')
+@Index('UQ_notifications_idempotency_key', ['idempotencyKey'], {
+  unique: true,
+  where: '"idempotency_key" IS NOT NULL',
+})
 @Index('IDX_notifications_user_id', ['userId'])
 @Index('IDX_notifications_is_read', ['isRead'])
 @Index('IDX_notifications_created_at', ['createdAt'])
@@ -55,6 +59,14 @@ export class Notification {
 
   @Column({ name: 'read_at', type: 'timestamptz', nullable: true })
   readAt!: Date | null;
+
+  @Column({
+    name: 'idempotency_key',
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+  })
+  idempotencyKey!: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;

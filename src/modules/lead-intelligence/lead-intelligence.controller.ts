@@ -31,11 +31,11 @@ import {
   TriggerQualificationDto,
   TriggerQualificationResponseDto,
 } from './dto/index.js';
-import { EnrichmentMapper, QualificationMapper } from './mappers/index.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { QualificationMapper, EnrichmentMapper } from './mappers/index.js';
 
 @ApiTags('Lead Intelligence')
 @Controller('lead-intelligence')
@@ -43,6 +43,8 @@ export class LeadIntelligenceController {
   constructor(
     private readonly leadIntelligenceService: LeadIntelligenceService,
   ) {}
+
+  // ── Lead Qualification Endpoints (UC02) ────────────────────────────────────
 
   @Post('qualify/:leadId')
   @UseGuards(JwtAuthGuard)
@@ -63,13 +65,9 @@ export class LeadIntelligenceController {
   async triggerQualification(
     @Param('leadId', ParseUUIDPipe) leadId: string,
     @Body() dto?: TriggerQualificationDto,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<TriggerQualificationResponseDto> {
-    return this.leadIntelligenceService.triggerQualification(
-      leadId,
-      dto,
-      actor,
-    );
+    return this.leadIntelligenceService.triggerQualification(leadId, dto, user);
   }
 
   @Post(['qualification/callback', '/internal/n8n/lead-qualification/callback'])
@@ -106,11 +104,11 @@ export class LeadIntelligenceController {
   })
   async getQualifications(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<QualificationResponseDto[]> {
     const records = await this.leadIntelligenceService.getQualificationsByLead(
       leadId,
-      actor,
+      user,
     );
     return QualificationMapper.toResponseDtoList(records);
   }
@@ -130,11 +128,11 @@ export class LeadIntelligenceController {
   })
   async getLatestQualification(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<QualificationResponseDto | null> {
     const record = await this.leadIntelligenceService.getLatestQualification(
       leadId,
-      actor,
+      user,
     );
     return record ? QualificationMapper.toResponseDto(record) : null;
   }
@@ -241,9 +239,9 @@ export class LeadIntelligenceController {
   async triggerEnrichment(
     @Param('leadId', ParseUUIDPipe) leadId: string,
     @Body() dto?: TriggerEnrichmentDto,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<TriggerEnrichmentResponseDto> {
-    return this.leadIntelligenceService.triggerEnrichment(leadId, dto, actor);
+    return this.leadIntelligenceService.triggerEnrichment(leadId, dto, user);
   }
 
   @Get('enrichments/:leadId')
@@ -257,11 +255,11 @@ export class LeadIntelligenceController {
   })
   async getEnrichments(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<EnrichmentResponseDto[]> {
     const records = await this.leadIntelligenceService.getEnrichmentsByLead(
       leadId,
-      actor,
+      user,
     );
     return EnrichmentMapper.toResponseDtoList(records);
   }
@@ -281,11 +279,11 @@ export class LeadIntelligenceController {
   })
   async getLatestEnrichment(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<EnrichmentResponseDto | null> {
     const record = await this.leadIntelligenceService.getLatestEnrichment(
       leadId,
-      actor,
+      user,
     );
     return record ? EnrichmentMapper.toResponseDto(record) : null;
   }

@@ -112,9 +112,9 @@ export class EnrichmentController {
   async triggerEnrichment(
     @Param('leadId', ParseUUIDPipe) leadId: string,
     @Body() dto?: TriggerEnrichmentDto,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<TriggerEnrichmentResponseDto> {
-    return this.leadIntelligenceService.triggerEnrichment(leadId, dto, actor);
+    return this.leadIntelligenceService.triggerEnrichment(leadId, dto, user);
   }
 
   @Post(['callback', '/internal/n8n/lead-enrichment/callback'])
@@ -138,6 +138,11 @@ export class EnrichmentController {
     status: 404,
     description: 'Lead or enrichment record not found.',
   })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Conflict: WorkflowRun already in terminal state or conflicting callback payload.',
+  })
   async handleCallback(
     @Body() dto: EnrichmentCallbackDto,
   ): Promise<EnrichmentCallbackResponseDto> {
@@ -160,11 +165,11 @@ export class EnrichmentController {
   })
   async getEnrichmentsByLead(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<EnrichmentResponseDto[]> {
     const records = await this.leadIntelligenceService.getEnrichmentsByLead(
       leadId,
-      actor,
+      user,
     );
     return EnrichmentMapper.toResponseDtoList(records);
   }
@@ -187,11 +192,11 @@ export class EnrichmentController {
   })
   async getLatestEnrichment(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ): Promise<EnrichmentResponseDto | null> {
     const record = await this.leadIntelligenceService.getLatestEnrichment(
       leadId,
-      actor,
+      user,
     );
     return record ? EnrichmentMapper.toResponseDto(record) : null;
   }

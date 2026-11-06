@@ -2,36 +2,17 @@ import { EnrichmentController } from './enrichment.controller.js';
 import type { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { EnrichmentStatus } from './enums/lead-intelligence.enum.js';
 import type { LeadEnrichment } from './entities/lead-enrichment.entity.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
 describe('EnrichmentController', () => {
   let controller: EnrichmentController;
   let service: jest.Mocked<Partial<LeadIntelligenceService>>;
-
-  const mockEnrichment: LeadEnrichment = {
-    id: 'enrich-123',
-    leadId: 'lead-123',
-    workflowRunId: 'wf-run-123',
-    provider: 'n8n',
-    externalRequestId: null,
-    status: EnrichmentStatus.SUCCESS,
-    companyName: 'Acme Corp',
-    companyWebsite: 'https://acme.com',
-    companyIndustry: 'Tech',
-    companySize: 100,
-    contactJobTitle: 'CTO',
-    contactLinkedinUrl: null,
-    rawResponse: null,
-    errorMessage: null,
-    enrichedAt: new Date(),
-    createdAt: new Date(),
-  };
-
-  const mockActor: AuthenticatedUser = {
-    id: 'user-123',
-    name: 'Test Sales Rep',
-    email: 'rep@example.com',
+  const actor: AuthenticatedUser = {
+    id: 'user-owner-123',
+    name: 'Sales Rep',
+    email: 'sales@example.test',
     role: UserRole.SALES,
     status: UserStatus.ACTIVE,
     lastLoginAt: null,
@@ -39,13 +20,43 @@ describe('EnrichmentController', () => {
     updatedAt: new Date(),
   };
 
+  const mockActor: AuthenticatedUser = {
+    id: 'user-actor-456',
+    name: 'Actor Rep',
+    email: 'actor@example.test',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  const mockEnrichment: LeadEnrichment = {
+    id: 'enrich-123',
+    leadId: 'lead-123',
+    workflowRunId: 'wf-run-123',
+    provider: 'n8n',
+    status: EnrichmentStatus.SUCCESS,
+    companyName: 'Acme Corp',
+    companyWebsite: 'https://acme.com',
+    companyIndustry: 'Technology',
+    companySize: 150,
+    contactJobTitle: 'VP of Engineering',
+    contactLinkedinUrl: 'https://linkedin.com/in/johndoe',
+    rawResponse: { source: 'mock-provider', score: 0.95 },
+    errorMessage: null,
+    externalRequestId: 'ext-req-123',
+    enrichedAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  } as LeadEnrichment;
+
   beforeEach(() => {
     service = {
       triggerEnrichment: jest.fn().mockResolvedValue({
-        message: 'Lead enrichment workflow triggered successfully',
         workflowRunId: 'wf-run-123',
-        enrichmentId: 'enrich-123',
-        leadId: 'lead-123',
+        status: 'PENDING',
+        message: 'Enrichment triggered',
       }),
       handleEnrichmentCallback: jest.fn().mockResolvedValue({
         enrichment: mockEnrichment,
@@ -54,13 +65,13 @@ describe('EnrichmentController', () => {
       getEnrichmentsByLead: jest.fn().mockResolvedValue([mockEnrichment]),
       getLatestEnrichment: jest.fn().mockResolvedValue(mockEnrichment),
       mockEnrichment: jest.fn().mockReturnValue({
+        domain: 'acme.com',
         provider: 'mock',
-        externalRequestId: 'ext-123',
         company: {
           name: 'Acme Solutions',
           website: 'https://acme.com',
-          industry: 'Software & Technology',
-          size: 150,
+          industry: 'Software',
+          size: 250,
         },
         contact: {
           jobTitle: 'Director of Operations',
@@ -79,16 +90,18 @@ describe('EnrichmentController', () => {
   });
 
   it('should trigger enrichment via service', async () => {
-    const result = await controller.triggerEnrichment('lead-123', {
-      provider: 'clearbit',
-    });
+    const result = await controller.triggerEnrichment(
+      'lead-123',
+      { provider: 'clearbit' },
+      actor,
+    );
 
     expect(service.triggerEnrichment).toHaveBeenCalledWith(
       'lead-123',
       {
         provider: 'clearbit',
       },
-      undefined,
+      actor,
     );
     expect(result.workflowRunId).toBe('wf-run-123');
   });
@@ -138,22 +151,19 @@ describe('EnrichmentController', () => {
   });
 
   it('should get all enrichments for a lead via service', async () => {
-    const result = await controller.getEnrichmentsByLead('lead-123');
+    const result = await controller.getEnrichmentsByLead('lead-123', actor);
 
     expect(service.getEnrichmentsByLead).toHaveBeenCalledWith(
       'lead-123',
-      undefined,
+      actor,
     );
     expect(result).toHaveLength(1);
   });
 
   it('should get latest enrichment for a lead via service', async () => {
-    const result = await controller.getLatestEnrichment('lead-123');
+    const result = await controller.getLatestEnrichment('lead-123', actor);
 
-    expect(service.getLatestEnrichment).toHaveBeenCalledWith(
-      'lead-123',
-      undefined,
-    );
+    expect(service.getLatestEnrichment).toHaveBeenCalledWith('lead-123', actor);
     expect(result?.id).toBe('enrich-123');
   });
 
@@ -176,6 +186,15 @@ describe('EnrichmentController', () => {
         EnrichmentController.prototype.triggerEnrichment,
       );
       expect(path).toEqual([':leadId/enrichments', 'trigger/:leadId']);
+    });
+
+    it('should protect triggerEnrichment endpoint with JwtAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        EnrichmentController.prototype.triggerEnrichment,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtAuthGuard);
     });
     /* eslint-enable @typescript-eslint/unbound-method */
   });

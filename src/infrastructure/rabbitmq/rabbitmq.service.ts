@@ -10,15 +10,20 @@ import amqp, {
   type AmqpConnectionManager,
 } from 'amqp-connection-manager';
 import type { ConfirmChannel } from 'amqplib';
+import type { EntityManager } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import {
   CRM_EVENTS,
   CRM_EXCHANGE,
-  DEFAULT_CRM_QUEUE,
-  LEAD_ENRICHMENT_QUEUE,
-  LEAD_SCORING_QUEUE,
   DATA_CLEANING_QUEUE,
+  ENRICHMENT_QUEUE,
+  FOLLOW_UP_QUEUE,
+  LEGACY_CRM_QUEUE,
+  LEAD_CREATED_QUEUE,
+  QUALIFICATION_QUEUE,
+  SCORING_QUEUE,
 } from './rabbitmq.constants.js';
+import { OutboxEvent, OutboxEventStatus } from './entities/outbox-event.entity.js';
 import type {
   CrmEvent,
   LeadCreatedEventData,
@@ -39,9 +44,6 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     const url = this.getRabbitmqUrl();
-    const queueName =
-      this.configService.get<string>('RABBITMQ_QUEUE') || DEFAULT_CRM_QUEUE;
-
     try {
       this.connection = amqp.connect([url]);
 
@@ -59,50 +61,11 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
 
       this.channelWrapper = this.connection.createChannel({
         json: true,
-        setup: async (channel: ConfirmChannel) => {
-          await channel.assertExchange(CRM_EXCHANGE, 'topic', {
-            durable: true,
-          });
-          await channel.assertQueue(queueName, { durable: true });
-          await channel.bindQueue(queueName, CRM_EXCHANGE, 'lead.#');
-          await channel.bindQueue(
-            queueName,
-            CRM_EXCHANGE,
-            CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED,
-          );
-
-          // Assert dedicated queue for AI Lead Enrichment (UC03)
-          await channel.assertQueue(LEAD_ENRICHMENT_QUEUE, { durable: true });
-          await channel.bindQueue(
-            LEAD_ENRICHMENT_QUEUE,
-            CRM_EXCHANGE,
-            CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
-          );
-
-          // Assert dedicated queue for AI Lead Scoring (UC04)
-          await channel.assertQueue(LEAD_SCORING_QUEUE, { durable: true });
-          await channel.bindQueue(
-            LEAD_SCORING_QUEUE,
-            CRM_EXCHANGE,
-            CRM_EVENTS.LEAD_SCORING_REQUESTED,
-          );
-
-          // Assert dedicated queue for AI CRM Data Cleaning (UC10)
-          await channel.assertQueue(DATA_CLEANING_QUEUE, { durable: true });
-          await channel.bindQueue(
-            DATA_CLEANING_QUEUE,
-            CRM_EXCHANGE,
-            CRM_EVENTS.DATA_CLEANING_REQUESTED,
-          );
-
-          this.logger.log(
-            `Exchange '${CRM_EXCHANGE}', default queue '${queueName}', '${LEAD_ENRICHMENT_QUEUE}', '${LEAD_SCORING_QUEUE}', and '${DATA_CLEANING_QUEUE}' asserted and bound`,
-          );
-        },
+        setup: (channel: ConfirmChannel) => this.setupChannel(channel),
       });
 
       if (this.channelWrapper) {
-        await this.channelWrapper.waitForConnect();
+        await this.waitForInitialConnection(this.channelWrapper, 5000);
       }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -110,6 +73,62 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
         `Failed to establish initial RabbitMQ connection: ${msg}. Event publishing will run in resilient fallback mode.`,
       );
     }
+  }
+
+  private async waitForInitialConnection(
+    channel: ChannelWrapper,
+    timeoutMs: number,
+  ): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`RabbitMQ did not connect within ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+
+      channel.waitForConnect().then(
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+  }
+
+  private async setupChannel(channel: ConfirmChannel): Promise<void> {
+    await channel.assertExchange(CRM_EXCHANGE, 'topic', { durable: true });
+
+    const consumers = [
+      [LEAD_CREATED_QUEUE, CRM_EVENTS.LEAD_CREATED],
+      [QUALIFICATION_QUEUE, CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED],
+      [ENRICHMENT_QUEUE, CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED],
+      [SCORING_QUEUE, CRM_EVENTS.LEAD_SCORING_REQUESTED],
+      [DATA_CLEANING_QUEUE, CRM_EVENTS.DATA_CLEANING_REQUESTED],
+      [FOLLOW_UP_QUEUE, CRM_EVENTS.FOLLOW_UP_TRIGGERED],
+    ] as const;
+
+    for (const [queue, routingKey] of consumers) {
+      await channel.assertQueue(queue, { durable: true });
+      await channel.bindQueue(queue, CRM_EXCHANGE, routingKey);
+    }
+
+    // Keep the old durable queue so existing messages are preserved, but stop
+    // routing new events into its former broad consumer binding.
+    await channel.assertQueue(LEGACY_CRM_QUEUE, { durable: true });
+    await channel.unbindQueue(LEGACY_CRM_QUEUE, CRM_EXCHANGE, 'lead.#');
+    await channel.unbindQueue(LEGACY_CRM_QUEUE, CRM_EXCHANGE, 'lead.*');
+    await channel.unbindQueue(
+      LEGACY_CRM_QUEUE,
+      CRM_EXCHANGE,
+      CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED,
+    );
+
+    this.logger.log(
+      `Exchange '${CRM_EXCHANGE}' and dedicated workflow queues asserted and bound`,
+    );
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -128,18 +147,37 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
   }
 
   getRabbitmqUrl(): string {
-    const isProd = this.configService.get<string>('NODE_ENV') === 'production';
+    const nodeEnv = (
+      this.configService.get<string>('NODE_ENV') ||
+      process.env.NODE_ENV ||
+      ''
+    ).toLowerCase();
+    const isProd = nodeEnv === 'production';
     const useCloudAmqp =
-      this.configService.get<string>('USE_CLOUD_AMQP') === 'true';
-    const fullUrl = this.configService.get<string>('RABBITMQ_URL');
+      (this.configService.get<string>('USE_CLOUD_AMQP') ||
+        process.env.USE_CLOUD_AMQP) === 'true';
+    const fullUrl =
+      this.configService.get<string>('RABBITMQ_URL') ||
+      process.env.RABBITMQ_URL;
 
-    // 1. In production or when USE_CLOUD_AMQP=true: target CloudAMQP broker
+    if (isProd && !fullUrl) {
+      throw new Error(
+        'FATAL: RABBITMQ_URL is required in production; local guest credentials are not allowed',
+      );
+    }
+    if (useCloudAmqp && !fullUrl) {
+      throw new Error(
+        'RABBITMQ_URL is required when USE_CLOUD_AMQP=true',
+      );
+    }
+
+    // Production and explicit CloudAMQP mode must never silently fall back to localhost.
     if ((isProd || useCloudAmqp) && fullUrl) {
-      this.logger.log('Targeting CloudAMQP broker (Production / Cloud mode)');
+      this.logger.log('Targeting configured CloudAMQP broker');
       return fullUrl;
     }
 
-    // 2. In development / local mode: prioritize local Docker RabbitMQ broker
+    // Development mode: prioritize local Docker RabbitMQ broker
     const host =
       this.configService.get<string>('LOCAL_RABBITMQ_HOST') || 'localhost';
     const port = this.configService.get<number>('LOCAL_RABBITMQ_PORT') || 5672;
@@ -158,6 +196,29 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
     return this.isConnected;
   }
 
+  async enqueueEvent<T = Record<string, unknown>>(manager: EntityManager, eventType: string, data: T): Promise<OutboxEvent> {
+    const event: CrmEvent<T> = { eventId: randomUUID(), eventType, version: 1, occurredAt: new Date().toISOString(), data };
+    const record = manager.create(OutboxEvent, { eventType, exchange: CRM_EXCHANGE, routingKey: eventType, payload: event as unknown as Record<string, any>, status: OutboxEventStatus.PENDING, attempts: 0, lastError: null, nextAttemptAt: null, publishedAt: null, lockedUntil: null, lockToken: null });
+    return manager.save(OutboxEvent, record);
+  }
+
+  async publishOutboxEvent(
+    event: Pick<
+      OutboxEvent,
+      'id' | 'eventType' | 'exchange' | 'routingKey' | 'payload'
+    >,
+  ): Promise<void> {
+    if (!this.channelWrapper || !this.isConnected) {
+      throw new Error('RabbitMQ is not connected; outbox event was not published');
+    }
+
+    await this.channelWrapper.publish(
+      event.exchange,
+      event.routingKey,
+      event.payload,
+      { persistent: true, contentType: 'application/json' },
+    );
+  }
   async publishEvent<T = Record<string, any>>(
     eventType: string,
     data: T,
@@ -182,10 +243,16 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.error(`Failed to publish event '${eventType}': ${msg}`);
+        throw new Error(`Failed to publish event '${eventType}': ${msg}`, {
+          cause: err,
+        });
       }
     } else {
       this.logger.warn(
         `RabbitMQ channel not ready. Event '${eventType}' could not be sent to broker.`,
+      );
+      throw new Error(
+        `RabbitMQ channel not ready; event '${eventType}' was not published.`,
       );
     }
 

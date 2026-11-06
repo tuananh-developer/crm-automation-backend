@@ -18,11 +18,11 @@ import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import { AuthResponseDto } from './dto/auth-response.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { parseJwtExpiresInSeconds } from './jwt-expiration.util.js';
 
 @Injectable()
 export class AuthService {
   private readonly saltRounds = 10;
-  private readonly expiresInSeconds = 86400; // 24 hours
 
   constructor(
     @InjectRepository(User)
@@ -31,9 +31,12 @@ export class AuthService {
     private readonly configService: ConfigService,
   ) {}
 
-  /**
-   * Register a new user with bcrypt password hashing and emit JWT token.
-   */
+  private get expiresInSeconds(): number {
+    return parseJwtExpiresInSeconds(
+      this.configService.get<string | number>('JWT_EXPIRES_IN_SECONDS'),
+    );
+  }
+
   async register(dto: RegisterDto): Promise<AuthResponseDto> {
     const existing = await this.usersRepository.findOne({
       where: { email: dto.email },
@@ -41,12 +44,11 @@ export class AuthService {
 
     if (existing) {
       throw new ConflictException(
-        `User with email '${dto.email}' already exists`,
+        'A user with this email already exists',
       );
     }
 
     const passwordHash = await bcrypt.hash(dto.password, this.saltRounds);
-
     const user = this.usersRepository.create({
       name: dto.name,
       email: dto.email,
@@ -56,20 +58,36 @@ export class AuthService {
       lastLoginAt: new Date(),
     });
 
-    const savedUser = await this.usersRepository.save(user);
-    const token = this.generateToken(savedUser);
+    let savedUser: User;
+    try {
+      savedUser = await this.usersRepository.save(user);
+    } catch (error: unknown) {
+      const databaseError = error as
+        | {
+            code?: string;
+            driverError?: { code?: string };
+          }
+        | null
+        | undefined;
+      if (
+        databaseError?.code === '23505' ||
+        databaseError?.driverError?.code === '23505'
+      ) {
+        throw new ConflictException(
+          'A user with this email already exists',
+        );
+      }
+      throw error;
+    }
 
     return {
-      accessToken: token,
+      accessToken: this.generateToken(savedUser),
       tokenType: 'Bearer',
       expiresIn: this.expiresInSeconds,
       user: this.sanitizeUser(savedUser),
     };
   }
 
-  /**
-   * Authenticate an existing user with constant-time password verification.
-   */
   async login(dto: LoginDto): Promise<AuthResponseDto> {
     const user = await this.usersRepository.findOne({
       where: { email: dto.email },
@@ -92,30 +110,21 @@ export class AuthService {
 
     user.lastLoginAt = new Date();
     const updatedUser = await this.usersRepository.save(user);
-
-    const token = this.generateToken(updatedUser);
-
     return {
-      accessToken: token,
+      accessToken: this.generateToken(updatedUser),
       tokenType: 'Bearer',
       expiresIn: this.expiresInSeconds,
       user: this.sanitizeUser(updatedUser),
     };
   }
 
-  /**
-   * Fetch current authenticated user profile without exposing password hashes.
-   */
-  async getProfile(userId: string): Promise<AuthenticatedUser> {
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
+  getProfile(userId: string): Promise<AuthenticatedUser> {
+    return this.usersRepository.findOne({ where: { id: userId } }).then((user) => {
+      if (!user) {
+        throw new NotFoundException(`User with ID '${userId}' not found`);
+      }
+      return this.sanitizeUser(user);
     });
-
-    if (!user) {
-      throw new NotFoundException(`User with ID '${userId}' not found`);
-    }
-
-    return this.sanitizeUser(user);
   }
 
   private generateToken(user: User): string {
@@ -124,7 +133,6 @@ export class AuthService {
       email: user.email,
       role: user.role,
     };
-
     return this.jwtService.sign(payload);
   }
 
