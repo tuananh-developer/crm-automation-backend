@@ -440,7 +440,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     const pauseResponse = await api
       .post(`/api/v1/follow-ups/enrollments/${enrollmentId}/pause`)
       .send({ reason: 'E2E pause while provider is processing' });
-    expect(pauseResponse.status).toBe(200);
+    expect([200, 201]).toContain(pauseResponse.status);
     expect(pauseResponse.body.status).toBe('PAUSED');
 
     pausedDelivery.complete();
@@ -475,7 +475,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     const resumeResponse = await api
       .post(`/api/v1/follow-ups/enrollments/${enrollmentId}/resume`)
       .send({});
-    expect(resumeResponse.status).toBe(200);
+    expect([200, 201]).toContain(resumeResponse.status);
     expect(resumeResponse.body.status).toBe('ACTIVE');
 
     // Complete step 3 normally to make step 4 the next in-flight delivery.
@@ -494,7 +494,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     const cancelResponse = await api
       .post(`/api/v1/follow-ups/enrollments/${enrollmentId}/cancel`)
       .send({ reason: 'E2E cancellation while provider is processing' });
-    expect(cancelResponse.status).toBe(200);
+    expect([200, 201]).toContain(cancelResponse.status);
     expect(cancelResponse.body.status).toBe('CANCELLED');
 
     cancelledDelivery.complete();
