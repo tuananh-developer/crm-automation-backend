@@ -34,6 +34,10 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       request(app.getHttpServer())
         .post(path)
         .set('Authorization', `Bearer ${accessToken}`),
+    patch: (path: string) =>
+      request(app.getHttpServer())
+        .patch(path)
+        .set('Authorization', `Bearer ${accessToken}`),
   };
 
   const createLead = async (name: string, email: string, phone?: string) => {
@@ -255,6 +259,90 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     }
   });
 
+  it('completes the UC10 scan, callback, report, apply and audit flow', async () => {
+    const leadId = await createLead(
+      'Cleaning Happy Path',
+      `cleaning.happy.${suffix}@example.test`,
+      '+1 (415) 555-0103',
+    );
+
+    const scan = await api.post('/api/v1/data-cleaning/scans').send({
+      scope: 'FILTER',
+      filter: { sourceId, limit: 100 },
+    });
+    expect(scan.status).toBe(202);
+    const workflowRunId = scan.body.workflowRunId as string;
+    workflowRunIds.push(workflowRunId);
+
+    const findingId = randomUUID();
+    const callback = await request(app.getHttpServer())
+      .post('/api/v1/data-cleaning/callback')
+      .set('x-n8n-api-key', n8nSecret)
+      .send({
+        workflowRunId,
+        status: 'SUCCESS',
+        summary: {
+          totalLeadsScanned: 1,
+          totalIssuesFound: 1,
+          issuesByType: { INCONSISTENT_PHONE: 1 },
+          issuesBySeverity: { LOW: 1 },
+          duplicatesFound: 0,
+          safeToApplyCount: 1,
+        },
+        findings: [
+          {
+            id: findingId,
+            recordType: 'Lead',
+            recordId: leadId,
+            fieldName: 'phone',
+            issueType: 'INCONSISTENT_PHONE',
+            severity: 'LOW',
+            currentValue: '+1 (415) 555-0103',
+            proposedValue: '+14155550103',
+            confidence: 0.92,
+            reason: 'Normalize phone formatting',
+            safeToApply: true,
+            requiresHumanApproval: true,
+          },
+        ],
+      });
+    expect(callback.status).toBe(200);
+
+    const report = await api.get(
+      `/api/v1/data-cleaning/scans/${workflowRunId}`,
+    );
+    expect(report.status).toBe(200);
+    expect(report.body.workflowRunId).toBe(workflowRunId);
+    expect(report.body.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: findingId,
+          recordId: leadId,
+          fieldName: 'phone',
+        }),
+      ]),
+    );
+
+    const applied = await api
+      .post(`/api/v1/data-cleaning/scans/${workflowRunId}/apply`)
+      .send({ acceptedFindingIds: [findingId] });
+    expect(applied.status).toBe(200);
+    expect(applied.body.appliedCount).toBe(1);
+    expect(applied.body.skippedCount).toBe(0);
+
+    const [lead] = await dataSource.query(
+      'SELECT phone FROM leads WHERE id = $1;',
+      [leadId],
+    );
+    expect(lead.phone).toBe('+14155550103');
+
+    const [auditCount] = await dataSource.query(
+      "SELECT COUNT(*)::int AS count FROM audit_logs WHERE action = 'LEAD_DATA_CLEANED' AND entity_type = 'Lead' AND entity_id = $1;",
+      [leadId],
+    );
+    expect(Number(auditCount.count)).toBe(1);
+  });
+
   it('rolls back all Data Cleaning findings when a later Lead update fails', async () => {
     const firstLeadId = await createLead(
       'Cleaning First',
@@ -415,6 +503,62 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
 
     expect(statuses).toContain(429);
     expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(0);
+  });
+
+  it('preserves Lead contact edits when review resolution runs concurrently', async () => {
+    const leadId = await createLead(
+      'Review Concurrency',
+      `review.concurrency.${suffix}@example.test`,
+      '+1 (415) 555-0104',
+    );
+
+    const task = await api.post('/api/v1/review-tasks').send({
+      leadId,
+      reason: 'Concurrent status and contact update regression',
+    });
+    expect(task.status).toBe(201);
+    const reviewTaskId = task.body.id as string;
+
+    const assigned = await api
+      .patch(`/api/v1/review-tasks/${reviewTaskId}/assign`)
+      .send({ reviewerId: userId });
+    expect(assigned.status).toBe(200);
+
+    const started = await api.patch(
+      `/api/v1/review-tasks/${reviewTaskId}/start`,
+    );
+    expect(started.status).toBe(200);
+    expect(started.body.status).toBe('IN_REVIEW');
+
+    const [leadUpdate, resolution] = await Promise.all([
+      api.patch(`/api/v1/leads/${leadId}`).send({
+        phone: '+14155550199',
+        notes: 'Updated while review was being resolved',
+      }),
+      api.patch(`/api/v1/review-tasks/${reviewTaskId}/resolve`).send({
+        decision: 'APPROVE',
+        reviewComment: 'Approved during concurrent Lead update',
+      }),
+    ]);
+
+    expect(leadUpdate.status).toBe(200);
+    expect(resolution.status).toBe(200);
+    expect(resolution.body.status).toBe('RESOLVED');
+
+    const [lead] = await dataSource.query(
+      'SELECT status, phone, notes FROM leads WHERE id = $1;',
+      [leadId],
+    );
+    expect(lead.status).toBe('QUALIFIED');
+    expect(lead.phone).toBe('+14155550199');
+    expect(lead.notes).toBe('Updated while review was being resolved');
+
+    const [taskRow] = await dataSource.query(
+      'SELECT status, decision FROM review_tasks WHERE id = $1;',
+      [reviewTaskId],
+    );
+    expect(taskRow.status).toBe('RESOLVED');
+    expect(taskRow.decision).toBe('APPROVE');
   });
 
   it('enforces Admin-only quote approval and persists approve/reject decisions', async () => {
