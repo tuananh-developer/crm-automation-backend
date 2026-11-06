@@ -77,6 +77,8 @@ export interface ScanInputPayload {
     search?: string;
     limit?: number;
   } | null;
+  /** Sales scans are restricted to this authenticated Lead owner. */
+  ownerId?: string | null;
   requestedAt?: string;
 }
 

@@ -40,6 +40,7 @@ import {
 } from '../../modules/review/enums/review.enum.js';
 import { Notification } from '../../modules/notifications/entities/notification.entity.js';
 import { AuditLog } from '../../modules/audit/entities/audit-log.entity.js';
+import { assertSeedSafety } from './seed-safety.js';
 
 export async function runSeed(options?: { fresh?: boolean }): Promise<void> {
   try {
@@ -48,6 +49,7 @@ export async function runSeed(options?: { fresh?: boolean }): Promise<void> {
     // Ignore if .env is missing or already loaded
   }
   const isFresh = options?.fresh ?? process.argv.includes('--fresh');
+  assertSeedSafety(isFresh);
   console.log(
     `🌱 Starting CRM seed data process${isFresh ? ' (FRESH MODE)' : ''}...\n`,
   );

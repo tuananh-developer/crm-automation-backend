@@ -22,13 +22,12 @@ export class QualificationCallbackDto {
   @IsUUID()
   leadId!: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: 'UUID of the associated WorkflowRun',
     example: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44',
   })
   @IsUUID()
-  @IsOptional()
-  workflowRunId?: string;
+  workflowRunId!: string;
 
   @ApiProperty({
     description: 'Qualification status result from AI assessment',

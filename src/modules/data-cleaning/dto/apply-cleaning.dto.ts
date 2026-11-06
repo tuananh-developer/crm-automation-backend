@@ -1,5 +1,5 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ArrayNotEmpty, IsArray, IsOptional, IsUUID } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { ArrayNotEmpty, IsArray, IsUUID } from 'class-validator';
 
 export class ApplyCleaningDto {
   @ApiProperty({
@@ -11,12 +11,4 @@ export class ApplyCleaningDto {
   @ArrayNotEmpty({ message: 'acceptedFindingIds must not be empty' })
   @IsUUID('4', { each: true, message: 'Each finding ID must be a valid UUID' })
   acceptedFindingIds!: string[];
-
-  @ApiPropertyOptional({
-    description: 'UUID of user applying the changes',
-    format: 'uuid',
-  })
-  @IsOptional()
-  @IsUUID()
-  userId?: string;
 }

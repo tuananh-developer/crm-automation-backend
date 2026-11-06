@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBody,
@@ -33,9 +34,13 @@ import { LeadFollowUpEnrollmentResponseDto } from '@/modules/follow-up/dto/lead-
 import { FollowUpExecutionMapper } from './mappers/follow-up-execution.mapper.js';
 import { LeadFollowUpEnrollmentMapper } from './mappers/lead-follow-up-enrollment.mapper.js';
 import { ExecuteFollowUpResponseDto } from './dto/execute-follow-up-response.dto.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Follow-ups')
 @Controller('follow-ups')
+@UseGuards(JwtAuthGuard)
 export class FollowUpController {
   constructor(private readonly followUpService: FollowUpService) {}
 
@@ -62,8 +67,9 @@ export class FollowUpController {
   })
   enrollLead(
     @Body() dto: EnrollLeadDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
-    return this.followUpService.enrollLead(dto);
+    return this.followUpService.enrollLead(dto, actor);
   }
 
   @Post('enrollments/:id/pause')
@@ -86,9 +92,10 @@ export class FollowUpController {
   pauseEnrollment(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateEnrollmentDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
     return this.followUpService
-      .pauseEnrollment(id, dto)
+      .pauseEnrollment(id, dto, actor)
       .then((enrollment) =>
         LeadFollowUpEnrollmentMapper.toResponseDto(enrollment),
       );
@@ -113,9 +120,10 @@ export class FollowUpController {
   @ApiResponse({ status: 404, description: 'Enrollment not found.' })
   resumeEnrollment(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
     return this.followUpService
-      .resumeEnrollment(id)
+      .resumeEnrollment(id, actor)
       .then((enrollment) =>
         LeadFollowUpEnrollmentMapper.toResponseDto(enrollment),
       );
@@ -141,10 +149,11 @@ export class FollowUpController {
   @ApiResponse({ status: 404, description: 'Enrollment not found.' })
   cancelEnrollment(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
     @Body() dto?: UpdateEnrollmentDto,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
     return this.followUpService
-      .cancelEnrollment(id, dto ?? {})
+      .cancelEnrollment(id, dto ?? {}, actor)
       .then((enrollment) =>
         LeadFollowUpEnrollmentMapper.toResponseDto(enrollment),
       );
@@ -172,8 +181,9 @@ export class FollowUpController {
   })
   execute(
     @Body() dto: ExecuteFollowUpDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ExecuteFollowUpResponseDto> {
-    return this.followUpService.execute(dto).then((result) => ({
+    return this.followUpService.execute(dto, actor).then((result) => ({
       execution: FollowUpExecutionMapper.toResponseDto(result.execution),
       status: result.status,
       retryCount: result.retryCount,
@@ -209,7 +219,8 @@ export class FollowUpController {
   )
   findExecutions(
     @Query() query: QueryFollowUpExecutionDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<FollowUpExecutionResponseDto>> {
-    return this.followUpService.findExecutions(query);
+    return this.followUpService.findExecutions(query, actor);
   }
 }

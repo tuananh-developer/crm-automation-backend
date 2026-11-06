@@ -100,6 +100,11 @@ export class ConversationsController {
   @UseGuards(N8nAuthGuard)
   @ApiOperation({ summary: 'Internal n8n callback for T12-WF09' })
   @ApiParam({ name: 'transcriptId', format: 'uuid' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Conflict: WorkflowRun already in terminal state or conflicting callback payload.',
+  })
   async handleCallback(
     @Param('transcriptId', ParseUUIDPipe) transcriptId: string,
     @Body() dto: ConversationCallbackDto,

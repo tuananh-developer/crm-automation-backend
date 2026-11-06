@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
@@ -120,7 +121,7 @@ export class ConversationsService {
       if (!lead) {
         throw new NotFoundException(`Lead with ID ${leadId} not found`);
       }
-      if (lead.ownerId && lead.ownerId !== user.id) {
+      if (!lead.ownerId || lead.ownerId !== user.id) {
         throw new ForbiddenException(
           `You do not have permission to access Lead ${leadId}`,
         );
@@ -134,7 +135,7 @@ export class ConversationsService {
       if (!customer) {
         throw new NotFoundException(`Customer with ID ${customerId} not found`);
       }
-      if (customer.createdBy && customer.createdBy !== user.id) {
+      if (!customer.createdBy || customer.createdBy !== user.id) {
         throw new ForbiddenException(
           `You do not have permission to access Customer ${customerId}`,
         );
@@ -361,93 +362,146 @@ export class ConversationsService {
       `Received T12-WF09 callback for transcript ${dto.transcriptId}, status=${dto.status}`,
     );
 
-    const transcript = await this.transcriptsRepository.findOne({
-      where: { id: dto.transcriptId },
-    });
-    if (!transcript) {
-      throw new NotFoundException(`Transcript ${dto.transcriptId} not found`);
-    }
-
-    const workflowRun = await this.workflowRunsRepository.findOne({
-      where: { id: dto.workflowRunId },
-    });
-    if (!workflowRun) {
-      throw new NotFoundException(`WorkflowRun ${dto.workflowRunId} not found`);
-    }
-
-    // Correlation check: transcript must match workflowRun
-    if (
-      transcript.workflowRunId &&
-      transcript.workflowRunId !== workflowRun.id
-    ) {
-      throw new BadRequestException(
-        'WorkflowRun ID does not match transcript correlation',
-      );
-    }
-
-    // Correlation check: workflowName must be t12-wf09-conversation-summarizer
-    if (workflowRun.workflowName !== 't12-wf09-conversation-summarizer') {
-      throw new BadRequestException(
-        `WorkflowRun ${workflowRun.id} belongs to ${workflowRun.workflowName}, expected t12-wf09-conversation-summarizer`,
-      );
-    }
-
-    // Correlation check: customer alignment
-    if (
-      workflowRun.customerId &&
-      transcript.customerId &&
-      workflowRun.customerId !== transcript.customerId
-    ) {
-      throw new BadRequestException(
-        'WorkflowRun customer does not match transcript customer',
-      );
-    }
-
-    // Correlation check: lead alignment
-    if (
-      workflowRun.leadId &&
-      transcript.leadId &&
-      workflowRun.leadId !== transcript.leadId
-    ) {
-      throw new BadRequestException(
-        'WorkflowRun lead does not match transcript lead',
-      );
-    }
-
-    const isSuccess = dto.status === 'SUCCESS';
-
-    // Idempotency: If already succeeded and summary exists, return existing summary
-    if (isSuccess) {
-      const existingSummary = await this.summariesRepository.findOne({
-        where: { transcriptId: transcript.id },
-        relations: { actionItems: true },
-      });
-      if (existingSummary) {
-        this.logger.log(
-          `Summary already exists for transcript ${transcript.id}; returning existing idempotent result`,
-        );
-        return {
-          success: true,
-          transcriptId: transcript.id,
-          summaryId: existingSummary.id,
-          ownerId: transcript.createdBy,
-          createdBy: transcript.createdBy,
-          actionItemCount: existingSummary.actionItems?.length || 0,
-          processingStatus: transcript.processingStatus,
-        };
-      }
-    }
-
-    // Persist callback updates atomically in a single transaction
     return await this.dataSource.transaction(async (manager) => {
-      transcript.processingStatus = isSuccess
-        ? TranscriptProcessingStatus.COMPLETED
-        : TranscriptProcessingStatus.FAILED;
-      await manager.save(transcript);
+      // 1. Pessimistic write lock on both Transcript and WorkflowRun within transaction
+      const transcript = await manager.findOne(ConversationTranscript, {
+        where: { id: dto.transcriptId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!transcript) {
+        throw new NotFoundException(`Transcript ${dto.transcriptId} not found`);
+      }
 
-      workflowRun.status = isSuccess
+      const workflowRun = await manager.findOne(WorkflowRun, {
+        where: { id: dto.workflowRunId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!workflowRun) {
+        throw new NotFoundException(
+          `WorkflowRun ${dto.workflowRunId} not found`,
+        );
+      }
+
+      // 2. Correlation checks
+      if (
+        transcript.workflowRunId &&
+        transcript.workflowRunId !== workflowRun.id
+      ) {
+        throw new BadRequestException(
+          'WorkflowRun ID does not match transcript correlation',
+        );
+      }
+
+      if (workflowRun.workflowName !== 't12-wf09-conversation-summarizer') {
+        throw new BadRequestException(
+          `WorkflowRun ${workflowRun.id} belongs to ${workflowRun.workflowName}, expected t12-wf09-conversation-summarizer`,
+        );
+      }
+
+      if (
+        workflowRun.customerId &&
+        transcript.customerId &&
+        workflowRun.customerId !== transcript.customerId
+      ) {
+        throw new BadRequestException(
+          'WorkflowRun customer does not match transcript customer',
+        );
+      }
+
+      if (
+        workflowRun.leadId &&
+        transcript.leadId &&
+        workflowRun.leadId !== transcript.leadId
+      ) {
+        throw new BadRequestException(
+          'WorkflowRun lead does not match transcript lead',
+        );
+      }
+
+      const isSuccess = dto.status === 'SUCCESS';
+      const targetRunStatus = isSuccess
         ? WorkflowStatus.SUCCESS
         : WorkflowStatus.FAILED;
+      const targetTranscriptStatus = isSuccess
+        ? TranscriptProcessingStatus.COMPLETED
+        : TranscriptProcessingStatus.FAILED;
+
+      // 3. State-machine & Active-state assertion:
+      // Verify if the run or transcript is already in a terminal state
+      const isTerminal =
+        workflowRun.status === WorkflowStatus.SUCCESS ||
+        workflowRun.status === WorkflowStatus.FAILED ||
+        transcript.processingStatus === TranscriptProcessingStatus.COMPLETED ||
+        transcript.processingStatus === TranscriptProcessingStatus.FAILED;
+
+      if (isTerminal) {
+        // Conflicting terminal status (e.g. late FAILED callback attempting to overwrite SUCCESS, or SUCCESS trying to overwrite FAILED)
+        if (
+          workflowRun.status !== targetRunStatus ||
+          transcript.processingStatus !== targetTranscriptStatus
+        ) {
+          throw new ConflictException(
+            `Conflict: WorkflowRun '${workflowRun.id}' is already in terminal state '${workflowRun.status}' (transcript status: '${transcript.processingStatus}'), cannot transition to '${targetRunStatus}'`,
+          );
+        }
+
+        // Check if duplicate callback has conflicting payload
+        if (isSuccess) {
+          const existingSummary = await manager.findOne(ConversationSummary, {
+            where: { transcriptId: transcript.id },
+            relations: { actionItems: true },
+          });
+
+          if (
+            dto.summaryText &&
+            existingSummary?.summaryText &&
+            dto.summaryText.trim() !== existingSummary.summaryText.trim()
+          ) {
+            throw new ConflictException(
+              `Conflict: WorkflowRun '${workflowRun.id}' already completed with a conflicting summary payload`,
+            );
+          }
+
+          this.logger.warn(
+            `Idempotent duplicate callback detected for transcript ${transcript.id}, workflowRunId=${workflowRun.id}`,
+          );
+          return {
+            success: true,
+            transcriptId: transcript.id,
+            summaryId: existingSummary?.id,
+            ownerId: transcript.createdBy,
+            createdBy: transcript.createdBy,
+            actionItemCount: existingSummary?.actionItems?.length || 0,
+            processingStatus: transcript.processingStatus,
+          };
+        } else {
+          if (
+            dto.errorMessage &&
+            workflowRun.errorMessage &&
+            dto.errorMessage.trim() !== workflowRun.errorMessage.trim()
+          ) {
+            throw new ConflictException(
+              `Conflict: WorkflowRun '${workflowRun.id}' already failed with a conflicting error message`,
+            );
+          }
+
+          this.logger.warn(
+            `Idempotent duplicate failed callback detected for transcript ${transcript.id}, workflowRunId=${workflowRun.id}`,
+          );
+          return {
+            success: false,
+            transcriptId: transcript.id,
+            status: transcript.processingStatus,
+            errorMessage: workflowRun.errorMessage,
+          };
+        }
+      }
+
+      // 4. Transition from active state to terminal state
+      transcript.processingStatus = targetTranscriptStatus;
+      await manager.save(transcript);
+
+      workflowRun.status = targetRunStatus;
       workflowRun.finishedAt = new Date();
       workflowRun.errorMessage = isSuccess
         ? null
@@ -493,9 +547,10 @@ export class ConversationsService {
       }
 
       // Persist ConversationActionItems if provided in callback (deduplicated by title)
-      const existingItems = await manager.find(ConversationActionItem, {
-        where: { summaryId: summary.id },
-      });
+      const existingItems =
+        (await manager.find(ConversationActionItem, {
+          where: { summaryId: summary.id },
+        })) ?? [];
       const existingTitles = new Set(
         existingItems.map((i) => (i.title || '').trim().toLowerCase()),
       );
@@ -531,7 +586,7 @@ export class ConversationsService {
             userId: transcript.createdBy,
             type: NotificationType.CONVERSATION_SUMMARY_READY,
             title: 'Conversation Summary Ready',
-            content: `AI has generated summary and ${savedItems.length} proposed action item(s) for your ${transcript.sourceType.toLowerCase()}.`,
+            content: `AI has generated summary and ${savedItems.length} proposed action item(s) for your ${(transcript.sourceType || 'conversation').toLowerCase()}.`,
             customerId: transcript.customerId,
             leadId: transcript.leadId,
           });

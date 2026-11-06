@@ -12,6 +12,9 @@
     ]
   },
   "moduleNameMapper": {
+    "^@/(.*)$": "<rootDir>/../src/$1",
+    "^@module/(.*)$": "<rootDir>/../src/common/$1",
+    "^@config/(.*)$": "<rootDir>/../src/config/$1",
     "^(\\.{1,2}/.*)\\.js$": "$1"
   },
   "transformIgnorePatterns": [

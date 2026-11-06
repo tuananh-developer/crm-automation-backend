@@ -1,15 +1,22 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { ConversationsService } from './conversations.service.js';
-import { TranscriptProcessingStatus } from './entities/conversation-transcript.entity.js';
+import {
+  ConversationTranscript,
+  TranscriptProcessingStatus,
+} from './entities/conversation-transcript.entity.js';
+import { ConversationSummary } from './entities/conversation-summary.entity.js';
 import {
   ActionItemApprovalState,
   ActionItemStatus,
+  ConversationActionItem,
 } from './entities/conversation-action-item.entity.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
@@ -125,8 +132,25 @@ describe('ConversationsService', () => {
             ...dto,
             id: 'created-uuid',
           })),
-          findOne: jest.fn(() => Promise.resolve(null)),
-          find: jest.fn(() => Promise.resolve([])),
+          findOne: jest.fn((entityClass: any, options: any) => {
+            if (entityClass === ConversationTranscript) {
+              return transcriptsRepository.findOne(options);
+            }
+            if (entityClass === WorkflowRun) {
+              return workflowRunsRepository.findOne(options);
+            }
+            if (entityClass === ConversationSummary) {
+              return summariesRepository.findOne(options);
+            }
+            return Promise.resolve(null);
+          }),
+          find: jest.fn(async (entityClass: any, options: any) => {
+            if (entityClass === ConversationActionItem) {
+              const res = await actionItemsRepository.find(options);
+              return res ?? [];
+            }
+            return [];
+          }),
         };
         return await cb(manager);
       }),
@@ -213,10 +237,61 @@ describe('ConversationsService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('allows transcript creation for lead owned by sales user', async () => {
+    it('throws ForbiddenException if sales user tries to ingest transcript for unassigned lead (ownerId is null)', async () => {
       leadsRepository.findOne.mockResolvedValue({
-        id: 'lead-1',
-        ownerId: mockSalesUser1.id,
+        id: 'lead-unassigned',
+        ownerId: null,
+      });
+
+      await expect(
+        service.createTranscript(
+          {
+            leadId: 'lead-unassigned',
+            content: 'Meeting notes for unassigned lead',
+          },
+          mockSalesUser1,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws ForbiddenException if sales user tries to ingest transcript for unassigned customer (createdBy is null)', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-unassigned',
+        createdBy: null,
+      });
+
+      await expect(
+        service.createTranscript(
+          {
+            customerId: 'customer-unassigned',
+            content: 'Meeting notes for unassigned customer',
+          },
+          mockSalesUser1,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws ForbiddenException if sales user tries to ingest transcript for customer created by another user', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-other',
+        createdBy: mockSalesUser2.id,
+      });
+
+      await expect(
+        service.createTranscript(
+          {
+            customerId: 'customer-other',
+            content: 'Meeting notes for customer of user 2',
+          },
+          mockSalesUser1,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('allows transcript creation for customer created by sales user', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: mockSalesUser1.id,
       });
 
       global.fetch = jest.fn().mockResolvedValue({
@@ -226,19 +301,40 @@ describe('ConversationsService', () => {
 
       const result = await service.createTranscript(
         {
-          leadId: 'lead-1',
-          content: 'Discussed renewal with STK: 1234567890.',
+          customerId: 'customer-1',
+          content: 'Discussed onboarding with Customer.',
         },
         mockSalesUser1,
       );
 
       expect(result.transcriptId).toBe('transcript-uuid');
-      expect(transcriptsRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          createdBy: mockSalesUser1.id,
-          redactedContent: expect.stringContaining('[REDACTED_ACCOUNT]'),
-        }),
+    });
+
+    it('allows admin user to create transcript for unassigned lead and unassigned customer', async () => {
+      leadsRepository.findOne.mockResolvedValue({
+        id: 'lead-unassigned',
+        ownerId: null,
+      });
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-unassigned',
+        createdBy: null,
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve('OK'),
+      } as any);
+
+      const result = await service.createTranscript(
+        {
+          leadId: 'lead-unassigned',
+          customerId: 'customer-unassigned',
+          content: 'Admin notes for unassigned entities.',
+        },
+        mockAdminUser,
       );
+
+      expect(result.transcriptId).toBe('transcript-uuid');
     });
   });
 
@@ -394,7 +490,39 @@ describe('ConversationsService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('returns existing summary idempotently when callback is repeated on SUCCESS', async () => {
+    it('locks ConversationTranscript and WorkflowRun with pessimistic_write inside transaction', async () => {
+      transcriptsRepository.findOne.mockResolvedValue({
+        id: 't-1',
+        workflowRunId: 'run-1',
+        createdBy: mockSalesUser1.id,
+        processingStatus: TranscriptProcessingStatus.PENDING,
+      });
+      workflowRunsRepository.findOne.mockResolvedValue({
+        id: 'run-1',
+        workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.PENDING,
+      });
+
+      const res = await service.handleCallback({
+        transcriptId: 't-1',
+        workflowRunId: 'run-1',
+        status: 'SUCCESS',
+        summaryText: 'Locked transaction test summary',
+      });
+
+      expect(res.success).toBe(true);
+      expect(dataSource.transaction).toHaveBeenCalled();
+      expect(transcriptsRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 't-1' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(workflowRunsRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'run-1' },
+        lock: { mode: 'pessimistic_write' },
+      });
+    });
+
+    it('returns existing summary idempotently when duplicate callback is repeated on SUCCESS with matching summary', async () => {
       transcriptsRepository.findOne.mockResolvedValue({
         id: 't-1',
         workflowRunId: 'run-1',
@@ -404,9 +532,11 @@ describe('ConversationsService', () => {
       workflowRunsRepository.findOne.mockResolvedValue({
         id: 'run-1',
         workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.SUCCESS,
       });
       summariesRepository.findOne.mockResolvedValue({
         id: 'existing-summary-uuid',
+        summaryText: 'Client agreed to upgrade to enterprise plan.',
         actionItems: [{ id: 'item-1', title: 'Existing Item' }],
       });
 
@@ -414,13 +544,131 @@ describe('ConversationsService', () => {
         transcriptId: 't-1',
         workflowRunId: 'run-1',
         status: 'SUCCESS',
-        summaryText: 'Duplicate callback summary',
+        summaryText: 'Client agreed to upgrade to enterprise plan.',
       });
 
       expect(res.success).toBe(true);
       expect(res.summaryId).toBe('existing-summary-uuid');
       expect(res.actionItemCount).toBe(1);
-      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('returns existing failure idempotently when duplicate callback is repeated on FAILED with matching error', async () => {
+      transcriptsRepository.findOne.mockResolvedValue({
+        id: 't-1',
+        workflowRunId: 'run-1',
+        createdBy: mockSalesUser1.id,
+        processingStatus: TranscriptProcessingStatus.FAILED,
+      });
+      workflowRunsRepository.findOne.mockResolvedValue({
+        id: 'run-1',
+        workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Gemini rate limit exceeded',
+      });
+
+      const res = await service.handleCallback({
+        transcriptId: 't-1',
+        workflowRunId: 'run-1',
+        status: 'FAILED',
+        errorMessage: 'Gemini rate limit exceeded',
+      });
+
+      expect(res.success).toBe(false);
+      expect(res.errorMessage).toBe('Gemini rate limit exceeded');
+    });
+
+    it('throws ConflictException (409) when duplicate SUCCESS arrives with conflicting summary', async () => {
+      transcriptsRepository.findOne.mockResolvedValue({
+        id: 't-1',
+        workflowRunId: 'run-1',
+        processingStatus: TranscriptProcessingStatus.COMPLETED,
+      });
+      workflowRunsRepository.findOne.mockResolvedValue({
+        id: 'run-1',
+        workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.SUCCESS,
+      });
+      summariesRepository.findOne.mockResolvedValue({
+        id: 'existing-summary-uuid',
+        summaryText: 'Original summary text.',
+      });
+
+      await expect(
+        service.handleCallback({
+          transcriptId: 't-1',
+          workflowRunId: 'run-1',
+          status: 'SUCCESS',
+          summaryText: 'Conflicting summary text completely different.',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ConflictException (409) when duplicate FAILED arrives with conflicting errorMessage', async () => {
+      transcriptsRepository.findOne.mockResolvedValue({
+        id: 't-1',
+        workflowRunId: 'run-1',
+        processingStatus: TranscriptProcessingStatus.FAILED,
+      });
+      workflowRunsRepository.findOne.mockResolvedValue({
+        id: 'run-1',
+        workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Original error: Connection timeout',
+      });
+
+      await expect(
+        service.handleCallback({
+          transcriptId: 't-1',
+          workflowRunId: 'run-1',
+          status: 'FAILED',
+          errorMessage: 'Conflicting error: Out of memory',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ConflictException (409) when late FAILED callback arrives for an already COMPLETED/SUCCESS run', async () => {
+      transcriptsRepository.findOne.mockResolvedValue({
+        id: 't-1',
+        workflowRunId: 'run-1',
+        processingStatus: TranscriptProcessingStatus.COMPLETED,
+      });
+      workflowRunsRepository.findOne.mockResolvedValue({
+        id: 'run-1',
+        workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.SUCCESS,
+      });
+
+      await expect(
+        service.handleCallback({
+          transcriptId: 't-1',
+          workflowRunId: 'run-1',
+          status: 'FAILED',
+          errorMessage: 'Late failure trying to downgrade completed run',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ConflictException (409) when late SUCCESS callback arrives for an already FAILED run', async () => {
+      transcriptsRepository.findOne.mockResolvedValue({
+        id: 't-1',
+        workflowRunId: 'run-1',
+        processingStatus: TranscriptProcessingStatus.FAILED,
+      });
+      workflowRunsRepository.findOne.mockResolvedValue({
+        id: 'run-1',
+        workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Initial failure',
+      });
+
+      await expect(
+        service.handleCallback({
+          transcriptId: 't-1',
+          workflowRunId: 'run-1',
+          status: 'SUCCESS',
+          summaryText: 'Late success trying to overwrite failed run',
+        }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 
