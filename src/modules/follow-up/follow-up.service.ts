@@ -131,7 +131,6 @@ export class FollowUpService {
       const executionsRepository = manager.getRepository(FollowUpExecution);
       const lockedEnrollment = await enrollmentRepository.findOne({
         where: { id: dto.enrollmentId },
-        relations: { lead: true },
         lock: { mode: 'pessimistic_write' },
       });
 
@@ -150,9 +149,11 @@ export class FollowUpService {
           `Step '${step.id}' does not belong to sequence '${lockedEnrollment.sequenceId}' of enrollment '${lockedEnrollment.id}'`,
         );
       }
-      if (actor && lockedEnrollment.lead) {
-        this.assertLeadAccess(lockedEnrollment.lead, actor);
-      }
+      await this.assertEnrollmentAccessInTransaction(
+        manager,
+        lockedEnrollment,
+        actor,
+      );
 
       // Serialize concurrent executions of the same enrollment/step across instances.
       await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
@@ -614,7 +615,6 @@ export class FollowUpService {
       const auditLogRepository = manager.getRepository(AuditLog);
       const enrollment = await enrollmentsRepository.findOne({
         where: { id },
-        relations: { lead: true },
         lock: { mode: 'pessimistic_write' },
       });
 
@@ -623,7 +623,11 @@ export class FollowUpService {
           `Follow-up enrollment with ID '${id}' not found`,
         );
       }
-      if (actor) this.assertEnrollmentAccess(enrollment, actor);
+      await this.assertEnrollmentAccessInTransaction(
+        manager,
+        enrollment,
+        actor,
+      );
       if (enrollment.status !== EnrollmentStatus.ACTIVE) {
         throw new ConflictException(
           `Enrollment '${id}' is '${enrollment.status}' and cannot be paused`,
@@ -1346,14 +1350,22 @@ export class FollowUpService {
     }
   }
 
-  private assertEnrollmentAccess(
+  private async assertEnrollmentAccessInTransaction(
+    manager: EntityManager,
     enrollment: LeadFollowUpEnrollment,
-    actor: AuthenticatedUser,
-  ): void {
-    if (
-      actor.role === UserRole.SALES &&
-      enrollment.lead?.ownerId !== actor.id
-    ) {
+    actor?: AuthenticatedUser,
+  ): Promise<void> {
+    if (!actor || actor.role !== UserRole.SALES) return;
+
+    // Do not join Lead into the SELECT ... FOR UPDATE query. PostgreSQL rejects
+    // locking the nullable side of TypeORM's LEFT JOIN; ownership is checked in
+    // a separate read in the same transaction while the enrollment row remains
+    // locked.
+    const lead = await manager.getRepository(Lead).findOne({
+      where: { id: enrollment.leadId },
+      select: { id: true, ownerId: true },
+    });
+    if (!lead || lead.ownerId !== actor.id) {
       throw new NotFoundException(
         `Follow-up enrollment with ID '${enrollment.id}' not found`,
       );
