@@ -107,8 +107,8 @@
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/quotes/entity-context?customerId=' + ($node['Code: Validate Requirements'].json.customerId || '') + '&leadId=' + ($node['Code: Validate Requirements'].json.leadId || '') + '&workflowRunId=' + $node['Code: Validate Requirements'].json.workflowRunId }}",
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/quotes/claim-and-entity-context' }}",
         "options": {
           "timeout": 20000
         },
@@ -124,7 +124,10 @@
               "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
-        }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { customerId: $node['Code: Validate Requirements'].json.customerId || null, leadId: $node['Code: Validate Requirements'].json.leadId || null, workflowRunId: $node['Code: Validate Requirements'].json.workflowRunId, n8nExecutionId: String($exec.id) } }}"
       },
       "id": "2dffa5f8-8b89-4006-9269-c18fe8e94a42",
       "name": "HTTP Request: Get Customer Context",
@@ -409,60 +412,6 @@
       "waitBetweenTries": 5000,
       "notes": "Canonical quote submit-for-approval endpoint. NestJS creates/reuses the approval task and controls state transitions.",
       "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/workflow-executions/claim' }}",
-        "options": {
-          "timeout": 20000
-        },
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Accept",
-              "value": "application/json"
-            },
-            {
-              "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY }}"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: ($json.body || $json).workflowRunId, workflowName: 'T12-WF12_QUOTE_PROPOSAL', n8nExecutionId: String($exec.id) } }}"
-      },
-      "id": "a1100000-0000-4000-8000-000000000210",
-      "name": "HTTP Request: Claim Workflow Execution",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [
-        320,
-        160
-      ],
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 1000,
-      "notes": "Atomically claims this WorkflowRun before AI proposal generation. A duplicate n8n execution receives claimed=false and is stopped by the next node.",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const claim = $input.first()?.json ?? {};\nif (claim.claimed !== true) {\n  return [];\n}\nreturn [{ json: $('Webhook Trigger').first().json }];"
-      },
-      "id": "a1100000-0000-4000-8000-000000000211",
-      "name": "Code: Stop Duplicate Execution",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        560,
-        160
-      ],
-      "notes": "Only the execution that atomically claimed the WorkflowRun may continue.",
-      "notesInFlow": true
     }
   ],
   "connections": {
@@ -470,7 +419,7 @@
       "main": [
         [
           {
-            "node": "HTTP Request: Claim Workflow Execution",
+            "node": "Code: Validate Requirements",
             "type": "main",
             "index": 0
           }
@@ -587,28 +536,6 @@
         ],
         []
       ]
-    },
-    "HTTP Request: Claim Workflow Execution": {
-      "main": [
-        [
-          {
-            "node": "Code: Stop Duplicate Execution",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code: Stop Duplicate Execution": {
-      "main": [
-        [
-          {
-            "node": "Code: Validate Requirements",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
     }
   },
   "settings": {
@@ -622,5 +549,5 @@
     "templateCredsSetupCompleted": false
   },
   "tags": [],
-  "description": "Owner: Tuấn Anh. Protected internal webhook. NestJS catalog/pricing/quote service is authoritative. Backend price-preview route is provisional and must be implemented before activation."
+  "description": "Owner: Tuấn Anh. Protected internal webhook. NestJS catalog/pricing/quote service is authoritative. Backend price-preview route is provisional and must be implemented before activation. Atomic WorkflowRun claim is folded into the customer-context request; the graph has exactly 12 functional nodes."
 }
