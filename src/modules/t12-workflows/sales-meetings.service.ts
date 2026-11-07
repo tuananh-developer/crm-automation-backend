@@ -564,6 +564,25 @@ export class SalesMeetingsService {
       const summaryRepository = manager.getRepository(ConversationSummary);
       const meetingRepository = manager.getRepository(SalesMeeting);
       const itemRepository = manager.getRepository(ConversationActionItem);
+      const summaryReference = await summaryRepository.findOne({
+        where: { id: summaryId, workflowRunId: dto.workflowRunId },
+      });
+      if (!summaryReference) {
+        throw new NotFoundException('Meeting summary not found');
+      }
+      if (!summaryReference.meetingId) {
+        throw new NotFoundException('Meeting not found');
+      }
+
+      // Match the shared callback lock order: Meeting -> WorkflowRun -> Summary.
+      const { meeting, run } = await this.getMeetingRunForUpdate(
+        manager,
+        summaryReference.meetingId,
+        dto.workflowRunId,
+      );
+      this.renewOwnedExecutionLease(run, dto.n8nExecutionId);
+      await manager.getRepository(WorkflowRun).save(run);
+
       const summary = await summaryRepository.findOne({
         where: { id: summaryId, workflowRunId: dto.workflowRunId },
         lock: { mode: 'pessimistic_write' },
@@ -571,23 +590,6 @@ export class SalesMeetingsService {
       if (!summary) {
         throw new NotFoundException('Meeting summary not found');
       }
-
-      const meeting = summary.meetingId
-        ? await meetingRepository.findOne({
-            where: { id: summary.meetingId },
-          })
-        : null;
-      if (!meeting) {
-        throw new NotFoundException('Meeting not found');
-      }
-
-      const run = await manager.getRepository(WorkflowRun).findOne({
-        where: { id: dto.workflowRunId, workflowName: WF11_NAME },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!run) throw new NotFoundException('Meeting WorkflowRun not found');
-      this.renewOwnedExecutionLease(run, dto.n8nExecutionId);
-      await manager.getRepository(WorkflowRun).save(run);
 
       const attendeeSet = new Set(meeting.attendeeIds);
       const result: Array<{

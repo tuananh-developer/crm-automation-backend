@@ -115,7 +115,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
 
   it('saves the redacted transcript and meeting reference in one transaction', async () => {
     repositories.SalesMeeting.findOne.mockResolvedValue({ ...meeting });
-    repositories.WorkflowRun.findOne.mockResolvedValue({ ...workflowRun });
+    repositories.WorkflowRun.findOne.mockResolvedValue({ ...workflowRun, n8nExecutionId: 'execution-1', claimExpiresAt: new Date(Date.now() + 60_000) });
 
     const result = await service.saveTranscript(transcriptDto);
 
@@ -341,6 +341,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       meetingId: 'meeting-1',
     });
     repositories.SalesMeeting.findOne.mockResolvedValue({ ...meeting });
+    repositories.WorkflowRun.findOne.mockResolvedValue({ ...workflowRun, n8nExecutionId: 'execution-1', claimExpiresAt: new Date(Date.now() + 60_000) });
     repositories.ConversationActionItem.findOne.mockResolvedValue({
       id: 'action-existing',
       summaryId: 'summary-1',
