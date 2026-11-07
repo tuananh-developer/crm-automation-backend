@@ -24,7 +24,9 @@ import {
 } from '@nestjs/swagger';
 import { LeadsService } from './leads.service.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { PaginatedResponseDto } from '../../common/index.js';
 import {
@@ -91,6 +93,29 @@ export class LeadsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<LeadResponseDto>> {
     return this.leadsService.findAll(query, actor);
+  }
+
+  @Get(':id/internal')
+  @Public()
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal service read of lead details for n8n workflows',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the lead' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lead found.',
+    type: LeadResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized internal service request.',
+  })
+  @ApiResponse({ status: 404, description: 'Lead not found.' })
+  async findOneInternal(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<LeadResponseDto> {
+    return this.leadsService.findOneInternal(id);
   }
 
   @Get(':id')

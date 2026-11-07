@@ -146,6 +146,114 @@ describe('OutboxPublisher', () => {
     fetchSpy.mockRestore();
   });
 
+  it('dispatches allowlisted WF09 HTTP outbox events and updates WorkflowRun to RUNNING', async () => {
+    const workflowRunId = '22222222-2222-2222-2222-222222222222';
+    const httpEvent = {
+      ...event,
+      transport: OutboxTransport.HTTP,
+      destination: 'N8N_WF09_WEBHOOK_URL',
+      destinationPath: 'internal/t12-wf09-conversation-summarizer',
+      payload: {
+        workflowRunId,
+        transcriptId: 'transcript-1',
+        redactedContent: 'Hello',
+      },
+    };
+    manager.query.mockResolvedValueOnce([httpEvent]);
+    const workflowRepository = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    manager.getRepository.mockImplementation((entity: unknown) =>
+      entity === WorkflowRun ? workflowRepository : repository,
+    );
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'N8N_WF09_WEBHOOK_URL') {
+          return 'https://n8n.example/webhook/internal/t12-wf09-conversation-summarizer';
+        }
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        return undefined;
+      }),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      config as unknown as ConfigService,
+    );
+
+    await publisher.publishPendingEvents();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://n8n.example/webhook/internal/t12-wf09-conversation-summarizer',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'X-N8N-API-KEY': 'test-n8n-secret',
+          'Idempotency-Key': workflowRunId,
+        }),
+        body: JSON.stringify(httpEvent.payload),
+      }),
+    );
+    expect(workflowRepository.update).toHaveBeenCalledWith(
+      { id: workflowRunId, status: WorkflowStatus.PENDING },
+      { status: WorkflowStatus.RUNNING },
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it('falls back to N8N_BASE_URL and derives matching WF09 webhook path when N8N_WF09_WEBHOOK_URL is not set', async () => {
+    const workflowRunId = '33333333-3333-3333-3333-333333333333';
+    const httpEvent = {
+      ...event,
+      transport: OutboxTransport.HTTP,
+      destination: 'N8N_WF09_WEBHOOK_URL',
+      destinationPath: 'internal/t12-wf09-conversation-summarizer',
+      payload: { workflowRunId, transcriptId: 'transcript-fallback' },
+    };
+    manager.query.mockResolvedValueOnce([httpEvent]);
+    const workflowRepository = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    manager.getRepository.mockImplementation((entity: unknown) =>
+      entity === WorkflowRun ? workflowRepository : repository,
+    );
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'N8N_WF09_WEBHOOK_URL') return undefined; // NOT set in env
+        if (key === 'N8N_BASE_URL') return 'http://localhost:5678';
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        return undefined;
+      }),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      config as unknown as ConfigService,
+    );
+
+    await publisher.publishPendingEvents();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://localhost:5678/webhook/internal/t12-wf09-conversation-summarizer',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'X-N8N-API-KEY': 'test-n8n-secret',
+          'Idempotency-Key': workflowRunId,
+        }),
+      }),
+    );
+    fetchSpy.mockRestore();
+  });
+
   it('schedules an exponential retry when publication fails', async () => {
     (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
       new Error('broker unavailable'),
