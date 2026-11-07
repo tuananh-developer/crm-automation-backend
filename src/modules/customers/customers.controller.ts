@@ -36,7 +36,7 @@ export class CustomersController {
   findAll(
     @Query() query: QueryCustomerDto,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
-    return this.customersService.findAll(query);
+    return this.customersService.findAll(query, undefined as any);
   }
 
   @Get(':id')
@@ -46,7 +46,7 @@ export class CustomersController {
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<CustomerResponseDto> {
-    return this.customersService.findOne(id);
+    return this.customersService.findOne(id, undefined as any);
   }
 
   @Get(':customerId/churn-assessments')
@@ -64,7 +64,7 @@ export class CustomersController {
     @Body() dto: CreateChurnAssessmentDto,
   ): Promise<CustomerChurnAssessment> {
     return this.customersService.createChurnAssessment(customerId, {
-      score: dto.score,
+      score: dto.score ?? null,
       riskLevel: dto.riskLevel,
       evidence: dto.evidence,
       coverage: dto.coverage,
