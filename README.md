@@ -32,7 +32,7 @@
 
 ### Cấu hình NestJS Observe
 
-Thiết lập `OBSERVE_APP_KEY` và `OBSERVE_APP_SECRET` trong secret manager của môi trường deploy (hoặc `.env` local). Không commit credential thật. Service được đăng ký với ID `crm-automation-backend`; khi nhận `SIGTERM`, Nest shutdown hooks cho phép SDK flush telemetry còn trong buffer.
+Thiết lập `OBSERVE_APP_KEY` và `OBSERVE_APP_SECRET` trong secret manager của môi trường production. Không commit credential thật. Observe chỉ được bật khi `NODE_ENV=production`; cấu hình hai biến này trong môi trường development mặc định không bật telemetry. Service được đăng ký với ID `crm-automation-backend`; khi nhận `SIGTERM`, Nest shutdown hooks cho phép SDK flush telemetry còn trong buffer.
 
 Sau khi deploy với credential hợp lệ, gửi một request đến health endpoint (`GET /api/v1/health`) và kiểm tra service/traces trong Observe dashboard. Chỉ coi integration là hoạt động sau khi xác nhận telemetry được nhận và shutdown flush thành công.
 
