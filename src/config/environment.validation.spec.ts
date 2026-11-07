@@ -76,8 +76,9 @@ describe('validateEnvironmentConfiguration', () => {
     ).toThrow('must not contain a URL fragment');
   });
 
-  it('accepts production configuration with encrypted transports', () => {
+  it('accepts production configuration with encrypted transports and AMQPS credentials', () => {
     const environment = productionEnvironment();
+    environment.RABBITMQ_URL = 'amqps://crm:secret@broker.example.test/vhost';
     expect(validateEnvironmentConfiguration(environment)).toBe(environment);
   });
 });
