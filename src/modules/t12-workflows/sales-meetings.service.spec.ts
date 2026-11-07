@@ -148,7 +148,6 @@ describe('SalesMeetingsService persistence idempotency', () => {
       ...workflowRun,
       n8nExecutionId: 'execution-original',
       claimExpiresAt: new Date(Date.now() + 60_000),
-      claimExpiresAt: new Date(Date.now() + 60_000),
     });
     await expect(service.saveTranscript(transcriptDto)).rejects.toBeInstanceOf(
       ConflictException,
