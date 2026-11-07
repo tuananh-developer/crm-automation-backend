@@ -107,6 +107,13 @@ export class NextBestActionReviewDto {
   @IsUUID()
   workflowRunId!: string;
 
+  @ApiProperty({ minLength: 1, maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  n8nExecutionId!: string;
+
   @ApiProperty({ enum: ['Lead', 'Customer'] })
   @IsIn(['Lead', 'Customer'])
   entityType!: 'Lead' | 'Customer';
