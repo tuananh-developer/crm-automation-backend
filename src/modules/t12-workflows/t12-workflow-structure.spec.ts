@@ -16,6 +16,7 @@ type WorkflowNode = {
   retryOnFail?: boolean;
   maxTries?: number;
   waitBetweenTries?: number;
+  credentials?: Record<string, { id?: string; name?: string }>;
 };
 
 type WorkflowConnection = {
@@ -90,6 +91,12 @@ describe('Tuấn Anh T12 workflow exports', () => {
       }
 
       for (const node of functionalNodes) {
+        if (node.type === 'n8n-nodes-base.rabbitmqTrigger') {
+          expect(node.credentials?.rabbitmq?.id).toBe('CONFIGURE_AFTER_IMPORT');
+        }
+        if (node.type === 'n8n-nodes-base.webhook') {
+          expect(node.credentials?.httpHeaderAuth?.id).toBe('CONFIGURE_AFTER_IMPORT');
+        }
         if (node.type === 'n8n-nodes-base.httpRequest') {
           expect(node.parameters?.options?.timeout).toBeGreaterThan(0);
           expect(node.retryOnFail).toBe(true);
