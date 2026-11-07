@@ -32,7 +32,7 @@ export function assertUrlUsesScheme(
       configKey + ' must use ' + expectedScheme.slice(0, -1) + ' in production',
     );
   }
-  if (parsed.username || parsed.password) {
+  if (expectedScheme === 'https:' && (parsed.username || parsed.password)) {
     throw new Error(configKey + ' must not embed credentials in its URL');
   }
   if (parsed.hash) {
