@@ -108,6 +108,31 @@ describe('Tuấn Anh T12 workflow exports', () => {
     expect(handler.settings?.errorWorkflow).toBeUndefined();
   });
 
+  it('preserves WF11 identifiers across the attendee-context HTTP node for downstream saves', () => {
+    const wf11 = readWorkflow(
+      'integrations/n8n/workflows/t12-wf11-sales-meeting.json',
+    );
+    const builder = wf11.nodes.find(
+      (node) => node.name === 'Code: Build Meeting Prompt',
+    )?.parameters?.jsCode ?? '';
+    for (const field of ['meetingId', 'workflowRunId', 'transcriptId', 'attendeeIds']) {
+      expect(builder).toContain(field);
+    }
+    const parse = wf11.nodes.find(
+      (node) => node.name === 'Code: Parse and Validate Meeting Output',
+    )?.parameters?.jsCode ?? '';
+    expect(parse).toContain('new Set(p.attendeeIds)');
+    for (const name of [
+      'HTTP Request: Save Meeting Summary',
+      'HTTP Request: Save Meeting Action Items',
+      'HTTP Request: Notify Owner and Attendees',
+    ]) {
+      const node = wf11.nodes.find((item) => item.name === name);
+      expect(node?.parameters?.jsonBody).toContain('workflowRunId');
+      expect(node?.parameters?.jsonBody).toContain('n8nExecutionId');
+    }
+  });
+
   it('keeps execution identity in the WF10 and WF11 lease-renewing context URLs', () => {
     const wf10 = readWorkflow(
       'integrations/n8n/workflows/t12-wf10-next-best-action.json',
