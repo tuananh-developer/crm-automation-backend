@@ -25,6 +25,7 @@ import { LeadFollowUpEnrollment } from '../follow-up/entities/lead-follow-up-enr
 import { FollowUpExecution } from '../follow-up/entities/follow-up-execution.entity.js';
 import { UserRole } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { isPostgresUniqueViolation } from '../../common/utils/idempotency.util.js';
 import {
   Customer360AiSummaryDto,
   Customer360CallbackDto,
@@ -132,7 +133,7 @@ export class CustomersService {
 
   async findOne(
     id: string,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<CustomerResponseDto> {
     const customer = await this.customersRepository.findOne({
       where: { id },
@@ -148,7 +149,9 @@ export class CustomersService {
 
     if (
       !customer ||
-      (actor.role === UserRole.SALES && customer.createdBy !== actor.id)
+      (actor &&
+        actor.role === UserRole.SALES &&
+        customer.createdBy !== actor.id)
     ) {
       throw new NotFoundException(`Customer with ID '${id}' not found`);
     }
@@ -566,6 +569,7 @@ export class CustomersService {
   async triggerCustomer360(
     customerId: string,
     user: AuthenticatedUser,
+    clientProvidedKey?: string,
   ): Promise<TriggerCustomer360ResponseDto> {
     const customer = await this.customersRepository.findOne({
       where: { id: customerId },
@@ -590,14 +594,86 @@ export class CustomersService {
 
     // 1. Transactional Outbox: persist WorkflowRun and durable OutboxEvent atomically
     const dispatcher = this.dispatcher ?? new N8nWorkflowDispatchService();
-    const idempotencyKey = `wf05:${user.id}:${customer.id}:${Date.now()}`;
+    const keyPart = clientProvidedKey?.trim() || `customer:${customer.id}`;
+    const idempotencyKey = `wf05:${user.id}:${customer.id}:${keyPart}`;
 
     let savedRun: WorkflowRun;
     if (this.dataSource) {
       savedRun = await this.dataSource.transaction(async (manager) => {
         const workflowRunsRepo = manager.getRepository(WorkflowRun);
 
-        const workflowRun = workflowRunsRepo.create({
+        // Lookup-and-return pattern: if key exists, return existing run
+        const existingRun = await workflowRunsRepo.findOne({
+          where: { idempotencyKey },
+        });
+
+        if (existingRun) {
+          if (existingRun.workflowName !== 't12-wf05-customer-360') {
+            throw new ConflictException(
+              `Idempotency key is already used by another workflow: ${existingRun.workflowName}`,
+            );
+          }
+          this.logger.log(
+            `Replaying existing WorkflowRun ${existingRun.id} for idempotencyKey=${idempotencyKey}`,
+          );
+          return existingRun;
+        }
+
+        try {
+          const workflowRun = workflowRunsRepo.create({
+            workflowName: 't12-wf05-customer-360',
+            customerId: customer.id,
+            triggeredByUserId: user.id,
+            status: WorkflowStatus.PENDING,
+            startedAt: new Date(),
+            idempotencyKey,
+            inputPayload: {
+              customerId: customer.id,
+              customerName: customer.name,
+              customerEmail: customer.email,
+              companyName: customer.companyName,
+              triggeredByUserId: user.id,
+              requestedAt: new Date().toISOString(),
+            },
+          });
+
+          const run = await workflowRunsRepo.save(workflowRun);
+
+          // Atomically enqueue durable HTTP outbox event in the same transaction
+          await dispatcher.enqueue(
+            manager,
+            'N8N_WF05_WEBHOOK_URL',
+            't12-wf05-customer-360',
+            {
+              customerId: customer.id,
+              workflowRunId: run.id,
+              triggeredByUserId: user.id,
+              timestamp: new Date().toISOString(),
+            },
+          );
+
+          return run;
+        } catch (error) {
+          if (!isPostgresUniqueViolation(error)) {
+            throw error;
+          }
+          const concurrentRun = await workflowRunsRepo.findOne({
+            where: { idempotencyKey },
+          });
+          if (!concurrentRun) {
+            throw error;
+          }
+          return concurrentRun;
+        }
+      });
+    } else {
+      const existingRun = await this.workflowRunsRepository.findOne({
+        where: { idempotencyKey },
+      });
+      if (existingRun) {
+        savedRun = existingRun;
+      } else {
+        const workflowRun = this.workflowRunsRepository.create({
           workflowName: 't12-wf05-customer-360',
           customerId: customer.id,
           triggeredByUserId: user.id,
@@ -613,42 +689,8 @@ export class CustomersService {
             requestedAt: new Date().toISOString(),
           },
         });
-
-        const run = await workflowRunsRepo.save(workflowRun);
-
-        // Atomically enqueue durable HTTP outbox event in the same transaction
-        await dispatcher.enqueue(
-          manager,
-          'N8N_WF05_WEBHOOK_URL',
-          't12-wf05-customer-360',
-          {
-            customerId: customer.id,
-            workflowRunId: run.id,
-            triggeredByUserId: user.id,
-            timestamp: new Date().toISOString(),
-          },
-        );
-
-        return run;
-      });
-    } else {
-      const workflowRun = this.workflowRunsRepository.create({
-        workflowName: 't12-wf05-customer-360',
-        customerId: customer.id,
-        triggeredByUserId: user.id,
-        status: WorkflowStatus.PENDING,
-        startedAt: new Date(),
-        idempotencyKey,
-        inputPayload: {
-          customerId: customer.id,
-          customerName: customer.name,
-          customerEmail: customer.email,
-          companyName: customer.companyName,
-          triggeredByUserId: user.id,
-          requestedAt: new Date().toISOString(),
-        },
-      });
-      savedRun = await this.workflowRunsRepository.save(workflowRun);
+        savedRun = await this.workflowRunsRepository.save(workflowRun);
+      }
     }
 
     this.logger.log(

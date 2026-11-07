@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -55,15 +56,15 @@ export class CustomersController {
     return this.customersService.findAll(query, actor);
   }
 
-  @Get(':id')
-  @UseGuards(JwtAuthGuard)
+  @Get([':id', ':id/internal'])
+  @UseGuards(JwtOrN8nAuthGuard)
   @ApiOperation({ summary: 'Get customer details by ID' })
   @ApiParam({ name: 'id', description: 'UUID of the customer' })
   @ApiResponse({ status: 200, type: CustomerResponseDto })
   @ApiResponse({ status: 404, description: 'Customer not found.' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() actor: AuthenticatedUser,
+    @CurrentUser() actor?: AuthenticatedUser,
   ): Promise<CustomerResponseDto> {
     return this.customersService.findOne(id, actor);
   }
@@ -170,8 +171,9 @@ export class CustomersController {
   triggerCustomer360(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthenticatedUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ): Promise<TriggerCustomer360ResponseDto> {
-    return this.customersService.triggerCustomer360(id, user);
+    return this.customersService.triggerCustomer360(id, user, idempotencyKey);
   }
 
   @Post([

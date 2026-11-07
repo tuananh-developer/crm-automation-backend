@@ -530,6 +530,102 @@ describe('CustomersService', () => {
         service.triggerCustomer360('customer-1', mockOtherUser),
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
+
+    it('returns existing WorkflowRun and does not re-dispatch outbox event when called with same idempotency key', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const existingRun = {
+        id: 'run-existing-1',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        idempotencyKey: 'wf05:sales-1:customer-1:client-key-1',
+        status: WorkflowStatus.PENDING,
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
+        existingRun,
+      );
+
+      const result = await service.triggerCustomer360(
+        'customer-1',
+        mockSalesUser,
+        'client-key-1',
+      );
+
+      expect(result.workflowRunId).toBe('run-existing-1');
+      expect(workflowRunsRepository.create).not.toHaveBeenCalled();
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+      expect(dispatcherMock.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('recovers from concurrent race condition (unique violation 23505) and returns existing WorkflowRun', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const concurrentRun = {
+        id: 'run-concurrent-2',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        idempotencyKey: 'wf05:sales-1:customer-1:race-key',
+        status: WorkflowStatus.PENDING,
+      };
+
+      // First findOne returns null (race condition begins)
+      // Second findOne after 23505 conflict returns concurrentRun
+      (workflowRunsRepository.findOne as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(concurrentRun);
+
+      (workflowRunsRepository.create as jest.Mock).mockReturnValue({
+        id: 'run-attempted',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        idempotencyKey: 'wf05:sales-1:customer-1:race-key',
+      });
+
+      const uniqueViolationError = new Error(
+        'duplicate key value violates unique constraint',
+      );
+      (uniqueViolationError as any).code = '23505';
+      (workflowRunsRepository.save as jest.Mock).mockRejectedValueOnce(
+        uniqueViolationError,
+      );
+
+      const result = await service.triggerCustomer360(
+        'customer-1',
+        mockSalesUser,
+        'race-key',
+      );
+
+      expect(result.workflowRunId).toBe('run-concurrent-2');
+      // Dispatcher should NOT have enqueued since the saving failed and concurrent record was reused
+      expect(dispatcherMock.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('throws ConflictException when idempotency key is already used for a different workflow', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const conflictingRun = {
+        id: 'run-other-workflow',
+        customerId: 'customer-1',
+        workflowName: 't12-wf10-next-best-action',
+        idempotencyKey: 'wf05:sales-1:customer-1:conflicting-key',
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
+        conflictingRun,
+      );
+
+      await expect(
+        service.triggerCustomer360(
+          'customer-1',
+          mockSalesUser,
+          'conflicting-key',
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(dispatcherMock.enqueue).not.toHaveBeenCalled();
+    });
   });
 
   describe('handleCustomer360Callback', () => {

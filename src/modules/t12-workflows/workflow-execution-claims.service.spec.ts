@@ -46,8 +46,9 @@ describe('WorkflowExecutionClaimsService', () => {
       getRepository: jest.fn().mockReturnValue(repository),
     };
     dataSource = {
-      transaction: jest.fn((callback: (value: typeof manager) => Promise<unknown>) =>
-        callback(manager),
+      transaction: jest.fn(
+        (callback: (value: typeof manager) => Promise<unknown>) =>
+          callback(manager),
       ),
     };
     service = new WorkflowExecutionClaimsService(
@@ -122,5 +123,60 @@ describe('WorkflowExecutionClaimsService', () => {
       status: WorkflowStatus.SUCCESS,
     });
     expect(repository.save).not.toHaveBeenCalled();
+  });
+
+  describe('T12-WF05 Customer 360 claim deduplication', () => {
+    const wf05Request: ClaimWorkflowExecutionDto = {
+      workflowRunId: '22222222-2222-4222-8222-222222222222',
+      workflowName: 't12-wf05-customer-360',
+      n8nExecutionId: 'exec-wf05-initial',
+    };
+
+    it('claims an active t12-wf05-customer-360 run and transitions status to RUNNING', async () => {
+      run.id = wf05Request.workflowRunId;
+      run.workflowName = wf05Request.workflowName;
+      run.status = WorkflowStatus.PENDING;
+
+      const result = await service.claim(wf05Request);
+
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: {
+          id: wf05Request.workflowRunId,
+          workflowName: 't12-wf05-customer-360',
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          n8nExecutionId: 'exec-wf05-initial',
+          status: WorkflowStatus.RUNNING,
+        }),
+      );
+      expect(result).toEqual({
+        claimed: true,
+        duplicate: false,
+        status: WorkflowStatus.RUNNING,
+      });
+    });
+
+    it('rejects a duplicate replayed execution for t12-wf05-customer-360 preventing duplicate Gemini calls', async () => {
+      run.id = wf05Request.workflowRunId;
+      run.workflowName = wf05Request.workflowName;
+      run.n8nExecutionId = 'exec-wf05-initial';
+      run.status = WorkflowStatus.RUNNING;
+
+      const result = await service.claim({
+        ...wf05Request,
+        n8nExecutionId: 'exec-wf05-lost-ack-retry',
+      });
+
+      expect(result).toEqual({
+        claimed: false,
+        duplicate: false,
+        reason: 'ALREADY_CLAIMED',
+        status: WorkflowStatus.RUNNING,
+      });
+      expect(repository.save).not.toHaveBeenCalled();
+    });
   });
 });

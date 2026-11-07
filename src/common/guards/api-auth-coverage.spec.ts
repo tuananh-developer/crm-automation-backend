@@ -50,11 +50,7 @@ describe('API authentication guard coverage', () => {
     const classGuards = Reflect.getMetadata('__guards__', CustomersController);
     expect(classGuards).toBeUndefined();
 
-    const userFacingMethods = [
-      'findAll',
-      'findOne',
-      'triggerCustomer360',
-    ] as const;
+    const userFacingMethods = ['findAll', 'triggerCustomer360'] as const;
     for (const method of userFacingMethods) {
       const handler = Object.getOwnPropertyDescriptor(
         CustomersController.prototype,
@@ -65,6 +61,7 @@ describe('API authentication guard coverage', () => {
     }
 
     const hybridMethods = [
+      'findOne',
       'getCustomer360',
       'getCustomerInteractions',
       'getCustomerIntelligence',
