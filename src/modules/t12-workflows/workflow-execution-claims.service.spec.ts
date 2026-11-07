@@ -166,7 +166,7 @@ describe('WorkflowExecutionClaimsService', () => {
   it.each([
     { label: 'WF01', workflowName: 'lead-qualification' },
     { label: 'WF08', workflowName: 'UC10_DATA_CLEANING' },
-  ])('records a pre-claim failure from $label using the persisted workflow name', async ({ workflowName }) => {
+  ] as const)('records a pre-claim failure from $label using the persisted workflow name', async ({ workflowName }) => {
     run.workflowName = workflowName;
     run.n8nExecutionId = null;
     run.claimExpiresAt = null;
