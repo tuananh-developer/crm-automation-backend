@@ -367,7 +367,7 @@
           "conditions": [
             {
               "id": "2ef052d7-3878-4565-bc6d-67facf8454e0",
-              "leftValue": "={ $json.requiresHumanApproval }",
+              "leftValue": "={{ $json.requiresHumanApproval }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
