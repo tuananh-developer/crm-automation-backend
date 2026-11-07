@@ -82,7 +82,7 @@
       ],
       "credentials": {
         "rabbitmq": {
-          "id": "GKnNmUH7wKGKSgzi",
+          "id": "CONFIGURE_AFTER_IMPORT",
           "name": "RabbitMQ account"
         }
       }
