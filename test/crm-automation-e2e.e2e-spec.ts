@@ -18,6 +18,9 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   let customerId: string;
   let sequenceId: string;
   let stepId: string;
+  let secondStepId: string;
+  let thirdStepId: string;
+  let fourthStepId: string;
   let enrollmentId: string;
   let reviewTaskId: string;
   let segmentId: string;
@@ -298,6 +301,49 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     expect([200, 201]).toContain(stepRes.status);
     stepId = stepRes.body.id;
 
+    // Additional steps let UC06 exercise pause/cancel races across progression.
+    const secondStepRes = await api
+      .post(`/api/v1/follow-up/sequences/${sequenceId}/steps`)
+      .send({
+        stepOrder: 2,
+        delayMinutes: 0,
+        channel: 'EMAIL',
+        actionType: 'SEND_EMAIL',
+        subjectTemplate: 'Follow-up step 2 for {{companyName}}',
+        contentTemplate: 'Second follow-up for {{firstName}}.',
+        isActive: true,
+      });
+    expect([200, 201]).toContain(secondStepRes.status);
+    secondStepId = secondStepRes.body.id;
+
+    const thirdStepRes = await api
+      .post(`/api/v1/follow-up/sequences/${sequenceId}/steps`)
+      .send({
+        stepOrder: 3,
+        delayMinutes: 0,
+        channel: 'EMAIL',
+        actionType: 'SEND_EMAIL',
+        subjectTemplate: 'Follow-up step 3 for {{companyName}}',
+        contentTemplate: 'Third follow-up for {{firstName}}.',
+        isActive: true,
+      });
+    expect([200, 201]).toContain(thirdStepRes.status);
+    thirdStepId = thirdStepRes.body.id;
+
+    const fourthStepRes = await api
+      .post(`/api/v1/follow-up/sequences/${sequenceId}/steps`)
+      .send({
+        stepOrder: 4,
+        delayMinutes: 0,
+        channel: 'EMAIL',
+        actionType: 'SEND_EMAIL',
+        subjectTemplate: 'Follow-up step 4 for {{companyName}}',
+        contentTemplate: 'Fourth follow-up for {{firstName}}.',
+        isActive: true,
+      });
+    expect([200, 201]).toContain(fourthStepRes.status);
+    fourthStepId = fourthStepRes.body.id;
+
     // 3. Enroll lead
     const enrollRes = await api
       .post(`/api/v1/follow-up/sequences/${sequenceId}/enroll`)
@@ -354,6 +400,136 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
       }),
     );
   });
+
+  it('UC06: should preserve pause/cancel state when in-flight delivery returns', async () => {
+    const holdNextDelivery = () => {
+      let release!: (result: {
+        success: true;
+        providerMessageId: string;
+        message: string;
+      }) => void;
+      let signalStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        signalStarted = resolve;
+      });
+      n8nTriggerWebhook.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+            signalStarted();
+          }),
+      );
+      return {
+        started,
+        complete: () =>
+          release({
+            success: true,
+            providerMessageId: 'e2e-held-provider-message-id',
+            message: 'Held delivery released by E2E test',
+          }),
+      };
+    };
+
+    // Step 1 succeeded in the previous UC06 test, so step 2 is pending.
+    const pausedDelivery = holdNextDelivery();
+    // Supertest requests are lazy until a then/catch/end handler is attached.
+    // Start the HTTP call before waiting for the mocked provider to signal entry.
+    const pausedRequest = api
+      .post('/api/v1/follow-ups/executions')
+      .send({ enrollmentId, stepId: secondStepId })
+      .then((response) => response);
+
+    await pausedDelivery.started;
+    const pauseResponse = await api
+      .post(`/api/v1/follow-ups/enrollments/${enrollmentId}/pause`)
+      .send({ reason: 'E2E pause while provider is processing' });
+    expect([200, 201]).toContain(pauseResponse.status);
+    expect(pauseResponse.body.status).toBe('PAUSED');
+
+    pausedDelivery.complete();
+    const pausedExecutionResponse = await pausedRequest;
+    expect(pausedExecutionResponse.status).toBe(200);
+    expect(pausedExecutionResponse.body.status).toBe('SUCCESS');
+
+    const [pausedState] = await dataSource.query(
+      `SELECT status, current_step_id
+       FROM lead_follow_up_enrollments
+       WHERE id = $1;`,
+      [enrollmentId],
+    );
+    expect(pausedState.status).toBe('PAUSED');
+    expect(pausedState.current_step_id).toBe(thirdStepId);
+
+    const [secondExecution] = await dataSource.query(
+      `SELECT status FROM follow_up_executions
+       WHERE enrollment_id = $1 AND step_id = $2
+       ORDER BY created_at DESC LIMIT 1;`,
+      [enrollmentId, secondStepId],
+    );
+    const [thirdExecution] = await dataSource.query(
+      `SELECT status FROM follow_up_executions
+       WHERE enrollment_id = $1 AND step_id = $2
+       ORDER BY created_at DESC LIMIT 1;`,
+      [enrollmentId, thirdStepId],
+    );
+    expect(secondExecution.status).toBe('SUCCESS');
+    expect(thirdExecution.status).toBe('PENDING');
+
+    const resumeResponse = await api
+      .post(`/api/v1/follow-ups/enrollments/${enrollmentId}/resume`)
+      .send({});
+    expect([200, 201]).toContain(resumeResponse.status);
+    expect(resumeResponse.body.status).toBe('ACTIVE');
+
+    // Complete step 3 normally to make step 4 the next in-flight delivery.
+    const thirdStepResponse = await api
+      .post('/api/v1/follow-ups/executions')
+      .send({ enrollmentId, stepId: thirdStepId });
+    expect(thirdStepResponse.status).toBe(200);
+    expect(thirdStepResponse.body.status).toBe('SUCCESS');
+
+    const cancelledDelivery = holdNextDelivery();
+    const cancelledRequest = api
+      .post('/api/v1/follow-ups/executions')
+      .send({ enrollmentId, stepId: fourthStepId })
+      .then((response) => response);
+
+    await cancelledDelivery.started;
+    const cancelResponse = await api
+      .post(`/api/v1/follow-ups/enrollments/${enrollmentId}/cancel`)
+      .send({ reason: 'E2E cancellation while provider is processing' });
+    expect([200, 201]).toContain(cancelResponse.status);
+    expect(cancelResponse.body.status).toBe('CANCELLED');
+
+    cancelledDelivery.complete();
+    const cancelledExecutionResponse = await cancelledRequest;
+    expect(cancelledExecutionResponse.status).toBe(200);
+    expect(cancelledExecutionResponse.body.status).toBe('SUCCESS');
+
+    const [cancelledState] = await dataSource.query(
+      `SELECT status, current_step_id
+       FROM lead_follow_up_enrollments
+       WHERE id = $1;`,
+      [enrollmentId],
+    );
+    expect(cancelledState.status).toBe('CANCELLED');
+    expect(cancelledState.current_step_id).toBe(fourthStepId);
+
+    const [fourthExecution] = await dataSource.query(
+      `SELECT status FROM follow_up_executions
+       WHERE enrollment_id = $1 AND step_id = $2
+       ORDER BY created_at DESC LIMIT 1;`,
+      [enrollmentId, fourthStepId],
+    );
+    expect(fourthExecution.status).toBe('SUCCESS');
+
+    const [unexpectedNextStep] = await dataSource.query(
+      `SELECT COUNT(*)::int AS count FROM follow_up_executions
+       WHERE enrollment_id = $1 AND step_id <> ALL($2::uuid[]);`,
+      [enrollmentId, [stepId, secondStepId, thirdStepId, fourthStepId]],
+    );
+    expect(unexpectedNextStep.count).toBe(0);
+  }, 15000);
 
   // ───────────────────────────────────────────────────────────────────────────
   // UC07: Human Review
