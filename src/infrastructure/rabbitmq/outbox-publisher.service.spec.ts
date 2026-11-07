@@ -146,6 +146,88 @@ describe('OutboxPublisher', () => {
     fetchSpy.mockRestore();
   });
 
+  it('does not send production webhooks over plaintext HTTP', async () => {
+    const workflowRunId = '11111111-1111-1111-1111-111111111111';
+    const httpEvent = {
+      ...event,
+      transport: OutboxTransport.HTTP,
+      destination: 'N8N_WF10_WEBHOOK_URL',
+      destinationPath: 'internal/t12-wf10-next-best-action',
+      payload: { workflowRunId, entityType: 'Lead', entityId: 'lead-1' },
+    };
+    manager.query.mockResolvedValueOnce([httpEvent]);
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'NODE_ENV') return 'production';
+        if (key === 'N8N_WF10_WEBHOOK_URL') return 'http://n8n.example/webhook';
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        return undefined;
+      }),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      config as unknown as ConfigService,
+    );
+
+    await publisher.publishPendingEvents();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repository.update).toHaveBeenCalledWith(
+      { id: httpEvent.id, lockToken: httpEvent.lockToken },
+      expect.objectContaining({
+        status: OutboxEventStatus.FAILED,
+        lastError: expect.stringContaining('must use https'),
+      }),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it('blocks production transcript dispatch until external processing is explicitly enabled', async () => {
+    const workflowRunId = '11111111-1111-1111-1111-111111111111';
+    const httpEvent = {
+      ...event,
+      transport: OutboxTransport.HTTP,
+      destination: 'N8N_WF11_WEBHOOK_URL',
+      destinationPath: 'internal/t12-wf11-sales-meeting',
+      payload: { workflowRunId, transcript: 'Sensitive meeting transcript' },
+    };
+    manager.query.mockResolvedValueOnce([httpEvent]);
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'NODE_ENV') return 'production';
+        if (key === 'N8N_WF11_WEBHOOK_URL') return 'https://n8n.example/webhook';
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        return undefined;
+      }),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      config as unknown as ConfigService,
+    );
+
+    await publisher.publishPendingEvents();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repository.update).toHaveBeenCalledWith(
+      { id: httpEvent.id, lockToken: httpEvent.lockToken },
+      expect.objectContaining({
+        status: OutboxEventStatus.FAILED,
+        lastError: expect.stringContaining('disabled by production policy'),
+      }),
+    );
+    fetchSpy.mockRestore();
+  });
+
   it('schedules an exponential retry when publication fails', async () => {
     (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
       new Error('broker unavailable'),
