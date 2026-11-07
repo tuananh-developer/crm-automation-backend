@@ -140,6 +140,40 @@ describe('WorkflowExecutionClaimsService', () => {
     }));
   });
 
+  it('records a sanitized failure when validation fails before the first execution claim', async () => {
+    run.n8nExecutionId = null;
+    run.claimExpiresAt = null;
+    run.status = WorkflowStatus.RUNNING;
+    const failure: FailWorkflowExecutionDto = {
+      ...request,
+      errorCategory: 'INVALID_INPUT',
+      failedNodeName: 'Code: Validate Entity Reference',
+    };
+
+    expect(await service.fail(failure)).toEqual({
+      failed: true,
+      duplicate: false,
+      status: WorkflowStatus.FAILED,
+    });
+    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({
+      n8nExecutionId: request.n8nExecutionId,
+      status: WorkflowStatus.FAILED,
+      claimExpiresAt: null,
+      errorMessage: 'N8N_EXECUTION_FAILED:INVALID_INPUT: Code: Validate Entity Reference',
+    }));
+  });
+
+  it('requires workflowRunId when reporting a failure before a run has been claimed', async () => {
+    run.n8nExecutionId = null;
+    run.status = WorkflowStatus.RUNNING;
+    await expect(service.fail({
+      workflowName: request.workflowName,
+      n8nExecutionId: request.n8nExecutionId,
+      errorCategory: 'INVALID_INPUT',
+    })).rejects.toBeInstanceOf(ConflictException);
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+
   it('rejects failure callbacks from stale execution owners', async () => {
     run.n8nExecutionId = 'execution-current';
     run.claimExpiresAt = new Date(Date.now() + 60_000);

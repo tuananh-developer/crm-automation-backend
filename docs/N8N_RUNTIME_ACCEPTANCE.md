@@ -27,7 +27,7 @@ Run with a disposable database, synthetic records and provider sandbox/test cred
 | WF11 | redacted transcript, summary and proposed action items | competing execution; provider failure | backend-redacted transcript, summary, pending action items, failure state |
 | WF12 | catalog-backed quote draft | invalid catalog item/quantity; provider failure; approval required | quote price snapshot, approval state and WorkflowRun state |
 
-For each case, record the workflow export version/commit, n8n workflow ID, execution ID, fixture name, expected/actual result and sanitized evidence link. Include one failure execution per WF10/WF11/WF12 and confirm the shared Error Handler callback marks the matching run `FAILED` without storing provider message text or stack traces.
+For each case, record the workflow export version/commit, n8n workflow ID, execution ID, fixture name, expected/actual result and sanitized evidence link. Include one failure execution per WF10/WF11/WF12 (including failures before the first execution claim) and confirm the shared Error Handler callback marks the matching run `FAILED` without storing provider message text or stack traces. Pre-claim failures must include the `workflowRunId`; failures from an execution that no longer owns a claimed run must be rejected.
 
 ## 3. Lease recovery checks
 

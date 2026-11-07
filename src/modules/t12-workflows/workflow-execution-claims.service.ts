@@ -158,11 +158,23 @@ export class WorkflowExecutionClaimsService {
       if (run.status === WorkflowStatus.FAILED && run.n8nExecutionId === n8nExecutionId) {
         return { failed: true, duplicate: true, status: run.status };
       }
-      if (
-        ![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status) ||
-        run.n8nExecutionId !== n8nExecutionId
-      ) {
+      const activeRun = [WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status);
+      const claimedByAnotherExecution =
+        run.n8nExecutionId !== null && run.n8nExecutionId !== n8nExecutionId;
+      if (!activeRun || claimedByAnotherExecution) {
         throw new ConflictException('Workflow execution no longer owns this claim');
+      }
+      // A workflow can fail before its first claim (for example, input validation
+      // or transcript minimization). The authenticated Error Handler may terminally
+      // close that still-unclaimed run. Once another execution has claimed it, the
+      // owner check above rejects this stale failure callback.
+      if (run.n8nExecutionId === null) {
+        if (!dto.workflowRunId) {
+          throw new ConflictException(
+            'workflowRunId is required to report a failure before execution claim',
+          );
+        }
+        run.n8nExecutionId = n8nExecutionId;
       }
       run.status = WorkflowStatus.FAILED;
       run.finishedAt = new Date();
