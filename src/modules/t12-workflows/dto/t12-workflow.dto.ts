@@ -379,6 +379,13 @@ export class QuotePricePreviewDto {
   @IsUUID()
   workflowRunId!: string;
 
+  @ApiProperty({ minLength: 1, maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  n8nExecutionId!: string;
+
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
   @IsUUID()
@@ -414,6 +421,13 @@ export class CreateQuoteInternalDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   workflowRunId!: string;
+
+  @ApiProperty({ minLength: 1, maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  n8nExecutionId!: string;
 
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
@@ -462,6 +476,13 @@ export class SubmitQuoteApprovalDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   workflowRunId!: string;
+
+  @ApiProperty({ minLength: 1, maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  n8nExecutionId!: string;
 
   @ApiProperty()
   @IsString()

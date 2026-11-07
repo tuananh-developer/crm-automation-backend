@@ -285,8 +285,9 @@ export class QuotesService {
     return context;
   }
 
-  async listCatalogForRun(workflowRunId: string) {
+  async listCatalogForRun(workflowRunId: string, n8nExecutionId: string) {
     await this.getRun(workflowRunId);
+    await this.executionClaims.heartbeat({ workflowRunId, workflowName: WF12_NAME, n8nExecutionId });
     return {
       items: await this.catalog.find({
         where: { isActive: true },
@@ -408,6 +409,7 @@ export class QuotesService {
   }
 
   async pricePreview(dto: QuotePricePreviewDto, headerKey?: string) {
+    await this.executionClaims.heartbeat({ workflowRunId: dto.workflowRunId, workflowName: WF12_NAME, n8nExecutionId: dto.n8nExecutionId });
     if (
       headerKey !== dto.idempotencyKey ||
       dto.idempotencyKey !== dto.workflowRunId
@@ -418,6 +420,7 @@ export class QuotesService {
   }
 
   async saveDraft(dto: CreateQuoteInternalDto) {
+    await this.executionClaims.heartbeat({ workflowRunId: dto.workflowRunId, workflowName: WF12_NAME, n8nExecutionId: dto.n8nExecutionId });
     return this.dataSource.transaction(async (manager) => {
       const { run, priced } = await this.canonicalPrice(
         { ...dto, idempotencyKey: dto.workflowRunId },
@@ -495,8 +498,9 @@ export class QuotesService {
       );
 
       run.status = priced.approvalRequired
-        ? WorkflowStatus.PARTIAL
+        ? WorkflowStatus.RUNNING
         : WorkflowStatus.SUCCESS;
+      if (!priced.approvalRequired) run.claimExpiresAt = null;
       run.outputPayload = {
         ...(run.outputPayload ?? {}),
         quoteId: quote.id,
@@ -541,11 +545,16 @@ export class QuotesService {
       const qRepo = manager.getRepository(Quote);
       const aRepo = manager.getRepository(QuoteApproval);
       const nRepo = manager.getRepository(Notification);
+      const runRepo = manager.getRepository(WorkflowRun);
       const current = await qRepo.findOne({
         where: { id: quoteId },
         lock: { mode: 'pessimistic_write' },
       });
       if (!current) throw new NotFoundException('Quote not found');
+      const run = await runRepo.findOne({ where: { id: dto.workflowRunId, workflowName: WF12_NAME }, lock: { mode: 'pessimistic_write' } });
+      if (!run || run.n8nExecutionId !== dto.n8nExecutionId || (run.claimExpiresAt && run.claimExpiresAt.getTime() <= Date.now())) {
+        throw new ConflictException('Workflow execution no longer owns this quote claim');
+      }
       let approval = await aRepo.findOne({ where: { quoteId } });
       const reused = Boolean(approval);
       if (!approval)
@@ -566,6 +575,11 @@ export class QuotesService {
       current.submittedForApprovalAt =
         current.submittedForApprovalAt ?? new Date();
       await qRepo.save(current);
+      run.status = WorkflowStatus.PARTIAL;
+      run.claimExpiresAt = null;
+      run.finishedAt = null;
+      run.outputPayload = { ...(run.outputPayload ?? {}), quoteId, quoteStatus: current.status, approvalId: approval.id };
+      await runRepo.save(run);
       const admins = await manager.getRepository(User).find({
         where: { role: UserRole.ADMIN, status: UserStatus.ACTIVE },
         select: { id: true },
@@ -717,6 +731,7 @@ export class QuotesService {
       if (!run) throw new NotFoundException('Quote WorkflowRun not found');
       // A rejected quote is a completed business decision, not a failed workflow execution.
       run.status = WorkflowStatus.SUCCESS;
+      run.claimExpiresAt = null;
       run.finishedAt = new Date();
       run.outputPayload = {
         ...(run.outputPayload ?? {}),
