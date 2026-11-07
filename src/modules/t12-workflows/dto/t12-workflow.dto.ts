@@ -190,6 +190,12 @@ export class SaveConversationTranscriptDto {
   @MinLength(8)
   @MaxLength(180)
   idempotencyKey!: string;
+
+  @ApiProperty({ minLength: 1, maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  n8nExecutionId!: string;
 }
 
 export class SaveMeetingSummaryDto {
@@ -549,4 +555,27 @@ export class ConfirmMeetingActionItemDto {
   @IsString()
   @MaxLength(2000)
   comment?: string;
+}
+
+
+export class ClaimQuoteEntityContextDto {
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  customerId?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  leadId?: string;
+
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID()
+  workflowRunId!: string;
+
+  @ApiProperty({ minLength: 1, maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  n8nExecutionId!: string;
 }
