@@ -48,21 +48,23 @@ For each row, verify the named JSON, exact trigger, all 12 nodes, branch connect
 
 | ID | Workflow | Owner | 12 nodes | Import/runtime | Integration tests |
 |---|---|---|---|---|---|
-| WF01 | Lead Qualification | Tuấn Anh | [ ] | [ ] | [ ] |
+| WF01 | Lead Qualification | Tuấn Anh | [x] | [ ] | [ ] |
 | WF02 | Lead Enrichment | Trường Linh | [ ] | [ ] | [ ] |
 | WF03 | Lead Scoring | Trường Linh | [ ] | [ ] | [ ] |
 | WF04 | Follow-up | Trọng | [ ] | [ ] | [ ] |
 | WF05 | Customer 360 | Trường Linh | [ ] | [ ] | [ ] |
 | WF06 | Churn Monitoring | Trọng | [ ] | [ ] | [ ] |
 | WF07 | Customer Segmentation | Trọng | [ ] | [ ] | [ ] |
-| WF08 | Data Cleaning | Tuấn Anh | [ ] | [ ] | [ ] |
+| WF08 | Data Cleaning | Tuấn Anh | [x] | [ ] | [ ] |
 | WF09 | Conversation Summarizer | Trường Linh | [ ] | [ ] | [ ] |
-| WF10 | Next Best Action | Tuấn Anh | [ ] | [ ] | [ ] |
-| WF11 | Sales Meeting | Tuấn Anh | [ ] | [ ] | [ ] |
-| WF12 | Quote & Proposal | Tuấn Anh | [ ] | [ ] | [ ] |
+| WF10 | Next Best Action | Tuấn Anh | [x] | [ ] | [ ] |
+| WF11 | Sales Meeting | Tuấn Anh | [x] | [ ] | [ ] |
+| WF12 | Quote & Proposal | Tuấn Anh | [x] | [ ] | [ ] |
 | WF13 | Renewal Management | Trọng | [ ] | [ ] | [ ] |
 | WF14 | Customer Feedback | Trường Linh | [ ] | [ ] | [ ] |
 | WF15 | Account Management | Trọng | [ ] | [ ] | [ ] |
+
+The structural Jest regression test at `src/modules/t12-workflows/t12-workflow-structure.spec.ts` verifies exactly 12 functional nodes, one trigger and trigger-to-node reachability for the five workflows owned by Tuấn Anh. This static source check does not substitute for the separate import/runtime and integration-test columns.
 
 Each JSON contains exactly 12 functional nodes including one trigger. IF/Switch counts; Sticky Notes do not; the shared Error Handler is separate. A workflow passes only when the exported JSON node graph and runtime behavior conform, not merely when its Activity Diagram has 12 numbered steps.
 
