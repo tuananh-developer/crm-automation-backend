@@ -107,8 +107,8 @@
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/next-best-actions/entity-context?entityType=' + $node['Code: Validate Entity Reference'].json.entityType + '&entityId=' + $node['Code: Validate Entity Reference'].json.entityId + '&workflowRunId=' + $node['Code: Validate Entity Reference'].json.workflowRunId }}",
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/next-best-actions/claim-and-entity-context' }}",
         "options": {
           "timeout": 20000
         },
@@ -124,7 +124,10 @@
               "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
-        }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { entityType: $node['Code: Validate Entity Reference'].json.entityType, entityId: $node['Code: Validate Entity Reference'].json.entityId, workflowRunId: $node['Code: Validate Entity Reference'].json.workflowRunId, n8nExecutionId: String($exec.id) } }}"
       },
       "id": "de268c41-2513-4c29-a572-1c08ee4cd83b",
       "name": "HTTP Request: Get Entity Profile",
@@ -427,60 +430,6 @@
       "waitBetweenTries": 5000,
       "notes": "PROVISIONAL API: backend must create/reuse ReviewTask. n8n never changes the CRM entity or executes the recommendation.",
       "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/workflow-executions/claim' }}",
-        "options": {
-          "timeout": 20000
-        },
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Accept",
-              "value": "application/json"
-            },
-            {
-              "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY }}"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: ($json.body || $json).workflowRunId, workflowName: 'T12-WF10_NEXT_BEST_ACTION', n8nExecutionId: String($exec.id) } }}"
-      },
-      "id": "a1100000-0000-4000-8000-000000000010",
-      "name": "HTTP Request: Claim Workflow Execution",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [
-        320,
-        160
-      ],
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 1000,
-      "notes": "Atomically claims this WorkflowRun before AI processing. A duplicate n8n execution receives claimed=false and is stopped by the next node.",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const claim = $input.first()?.json ?? {};\nif (claim.claimed !== true) {\n  return [];\n}\nreturn [{ json: $('Webhook Trigger').first().json }];"
-      },
-      "id": "a1100000-0000-4000-8000-000000000011",
-      "name": "Code: Stop Duplicate Execution",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        560,
-        160
-      ],
-      "notes": "Only the execution that atomically claimed the WorkflowRun may continue.",
-      "notesInFlow": true
     }
   ],
   "connections": {
@@ -488,7 +437,7 @@
       "main": [
         [
           {
-            "node": "HTTP Request: Claim Workflow Execution",
+            "node": "Code: Validate Entity Reference",
             "type": "main",
             "index": 0
           }
@@ -605,28 +554,6 @@
         ],
         []
       ]
-    },
-    "HTTP Request: Claim Workflow Execution": {
-      "main": [
-        [
-          {
-            "node": "Code: Stop Duplicate Execution",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code: Stop Duplicate Execution": {
-      "main": [
-        [
-          {
-            "node": "Code: Validate Entity Reference",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
     }
   },
   "settings": {
@@ -640,5 +567,5 @@
     "templateCredsSetupCompleted": false
   },
   "tags": [],
-  "description": "Owner: Tuấn Anh. Protected internal webhook. AI may only rank backend-allowlisted actions. Several dedicated internal APIs are provisional and require backend implementation before activation."
+  "description": "Owner: Tuấn Anh. Protected internal webhook. AI may only rank backend-allowlisted actions. Several dedicated internal APIs are provisional and require backend implementation before activation. Atomic WorkflowRun claim is folded into the entity-context request; the graph has exactly 12 functional nodes."
 }
