@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { assertUrlUsesScheme } from '../../config/environment.validation.js';
 import { Interval } from '@nestjs/schedule';
 import { DataSource } from 'typeorm';
 import { WorkflowRun } from '../../modules/workflow/entities/workflow-run.entity.js';
@@ -213,6 +214,32 @@ export class OutboxPublisher {
       throw new PermanentOutboxError(
         `Neither ${event.destination} nor N8N_BASE_URL is configured`,
       );
+    }
+
+    const nodeEnv = (
+      this.config.get<string>('NODE_ENV') || process.env.NODE_ENV || ''
+    )
+      .trim()
+      .toLowerCase();
+    if (nodeEnv === 'production') {
+      try {
+        assertUrlUsesScheme(url, 'https:', event.destination);
+      } catch (error) {
+        throw new PermanentOutboxError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+
+      if (
+        typeof event.payload.transcript === 'string' &&
+        (this.config.get<string>('TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED') || '')
+          .trim()
+          .toLowerCase() !== 'true'
+      ) {
+        throw new PermanentOutboxError(
+          'External transcript processing is disabled by production policy',
+        );
+      }
     }
 
     let response: Response;
