@@ -174,6 +174,23 @@ describe('WorkflowExecutionClaimsService', () => {
     expect(repository.save).not.toHaveBeenCalled();
   });
 
+  it('does not overwrite a successful result when the final callback response was lost', async () => {
+    run.n8nExecutionId = request.n8nExecutionId;
+    run.claimExpiresAt = null;
+    run.status = WorkflowStatus.SUCCESS;
+    const result = await service.fail({
+      ...request,
+      errorCategory: 'UPSTREAM_TIMEOUT',
+      failedNodeName: 'Create Review and Notification',
+    });
+    expect(result).toEqual({
+      failed: false,
+      alreadyFinalized: true,
+      status: WorkflowStatus.SUCCESS,
+    });
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+
   it('rejects failure callbacks from stale execution owners', async () => {
     run.n8nExecutionId = 'execution-current';
     run.claimExpiresAt = new Date(Date.now() + 60_000);
