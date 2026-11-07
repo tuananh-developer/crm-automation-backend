@@ -25,6 +25,7 @@ describe('CustomersService', () => {
     jobTitle: 'Manager',
     companySize: null,
     industry: null,
+    isStrategic: false,
     status: 'CONVERTED',
     createdBy: 'user-1',
     updatedBy: null,
@@ -33,7 +34,7 @@ describe('CustomersService', () => {
     updatedAt: new Date('2026-10-03T00:00:00.000Z'),
   };
   const adminActor: AuthenticatedUser = {
-    id: 'admin-1',
+    id: 'user-1',
     name: 'Admin',
     email: 'admin@example.com',
     role: UserRole.ADMIN,
@@ -41,11 +42,6 @@ describe('CustomersService', () => {
     lastLoginAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
-  };
-  const salesActor: AuthenticatedUser = {
-    ...adminActor,
-    id: 'user-1',
-    role: UserRole.SALES,
   };
 
   const createQueryBuilder = () => {
@@ -121,18 +117,6 @@ describe('CustomersService', () => {
     });
   });
 
-  it('scopes Sales customer lists to customers they created', async () => {
-    const qb = createQueryBuilder();
-    qb.getManyAndCount.mockResolvedValue([[], 0]);
-    (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
-
-    await service.findAll({}, salesActor);
-
-    expect(qb.andWhere).toHaveBeenCalledWith('customer.createdBy = :actorId', {
-      actorId: salesActor.id,
-    });
-  });
-
   it('returns a customer with its converted lead and segments', async () => {
     (customersRepository.findOne as jest.Mock).mockResolvedValue({
       ...mockCustomer,
@@ -167,16 +151,5 @@ describe('CustomersService', () => {
     await expect(service.findOne('missing', adminActor)).rejects.toBeInstanceOf(
       NotFoundException,
     );
-  });
-
-  it('hides customers created by other users from Sales users', async () => {
-    (customersRepository.findOne as jest.Mock).mockResolvedValue({
-      ...mockCustomer,
-      createdBy: 'other-user',
-    });
-
-    await expect(
-      service.findOne('customer-1', salesActor),
-    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });

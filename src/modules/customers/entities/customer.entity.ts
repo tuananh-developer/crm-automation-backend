@@ -57,6 +57,9 @@ export class Customer {
   @Column({ name: 'industry', type: 'varchar', length: 150, nullable: true })
   industry!: string | null;
 
+  @Column({ name: 'is_strategic', type: 'boolean', default: false })
+  isStrategic!: boolean;
+
   @Column({ name: 'status', type: 'varchar', length: 30, nullable: true })
   status!: string | null;
 
@@ -94,4 +97,5 @@ export class Customer {
 
   @OneToMany('Notification', 'customer')
   notifications?: Notification[];
+
 }
