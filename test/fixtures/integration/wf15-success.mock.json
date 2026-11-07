@@ -1,0 +1,25 @@
+{
+  "_mock": true,
+  "_workflow": "WF15",
+  "_scenario": "success",
+  "customerId": "550e8400-e29b-41d4-a716-446655440040",
+  "asOfDate": "2026-10-29",
+  "correlationId": "550e8400-e29b-41d4-a716-446655440041",
+  "workflowRunId": "550e8400-e29b-41d4-a716-446655440042",
+  "healthAssessment": {
+    "score": 82,
+    "level": "HEALTHY",
+    "sufficientData": true,
+    "components": {
+      "engagement": 30,
+      "feedback": 25,
+      "openIssues": 25,
+      "followUpCompletion": 20
+    }
+  },
+  "aiReview": {
+    "summary": "Account is healthy with strong engagement",
+    "risks": [],
+    "opportunities": ["Upsell opportunity in Q4"]
+  }
+}

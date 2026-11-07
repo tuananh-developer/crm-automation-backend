@@ -1,0 +1,20 @@
+{
+  "_mock": true,
+  "_workflow": "WF06",
+  "_scenario": "success",
+  "customerId": "550e8400-e29b-41d4-a716-446655440010",
+  "asOfDate": "2026-10-29",
+  "correlationId": "550e8400-e29b-41d4-a716-446655440011",
+  "workflowRunId": "550e8400-e29b-41d4-a716-446655440012",
+  "churnAssessment": {
+    "score": 75,
+    "level": "HIGH",
+    "sufficientData": true,
+    "explanation": "Customer has not interacted in 30 days"
+  },
+  "customerTask": {
+    "id": "550e8400-e29b-41d4-a716-446655440013",
+    "type": "RETENTION",
+    "status": "OPEN"
+  }
+}
