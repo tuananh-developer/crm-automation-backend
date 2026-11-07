@@ -36,6 +36,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
     id: 'run-1',
     workflowName: 'T12-WF11_SALES_MEETING',
     status: WorkflowStatus.RUNNING,
+    n8nExecutionId: null,
   } as WorkflowRun;
 
   let service: SalesMeetingsService;
@@ -97,6 +98,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
     transcript: 'We discussed the enterprise proposal and next steps for delivery.',
     redactionMode: 'N8N',
     idempotencyKey: 'run-1',
+    n8nExecutionId: 'execution-1',
   };
 
   it('saves the redacted transcript and meeting reference in one transaction', async () => {
@@ -106,6 +108,9 @@ describe('SalesMeetingsService persistence idempotency', () => {
     const result = await service.saveTranscript(transcriptDto);
 
     expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(repositories.WorkflowRun.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'run-1', n8nExecutionId: 'execution-1', status: WorkflowStatus.RUNNING }),
+    );
     expect(repositories.ConversationTranscript.save).toHaveBeenCalledWith(
       expect.objectContaining({
         meetingId: 'meeting-1',
@@ -123,6 +128,19 @@ describe('SalesMeetingsService persistence idempotency', () => {
       redacted: true,
       reused: false,
     });
+  });
+
+  it('rejects a different n8n execution before saving a transcript', async () => {
+    repositories.SalesMeeting.findOne.mockResolvedValue({ ...meeting });
+    repositories.WorkflowRun.findOne.mockResolvedValue({
+      ...workflowRun,
+      n8nExecutionId: 'execution-original',
+    });
+    await expect(service.saveTranscript(transcriptDto)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(repositories.ConversationTranscript.save).not.toHaveBeenCalled();
+    expect(repositories.WorkflowRun.save).not.toHaveBeenCalled();
   });
 
   it('rejects a transcript idempotency key reused with different content', async () => {
