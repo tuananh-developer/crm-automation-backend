@@ -178,8 +178,8 @@ describe('CustomersService', () => {
       customersRepository as Repository<Customer>,
       customerSegmentsRepository as Repository<CustomerSegment>,
       segmentsRepository as Repository<Segment>,
-      assessRepo as unknown as Repository<any>,
-      taskRepo as unknown as Repository<any>,
+      assessRepo,
+      taskRepo,
     );
 
     const task = await serviceWithRepos.ensureRetentionTask({
@@ -246,8 +246,8 @@ describe('CustomersService', () => {
       customersRepository as Repository<Customer>,
       customerSegmentsRepository as Repository<CustomerSegment>,
       segmentsRepository as Repository<Segment>,
-      assessRepo as unknown as Repository<any>,
-      taskRepo as unknown as Repository<any>,
+      assessRepo,
+      taskRepo,
     );
 
     const task = await serviceWithRepos.ensureRetentionTask({
