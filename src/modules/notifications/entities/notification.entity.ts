@@ -36,6 +36,9 @@ export class Notification {
   @Column({ name: 'content', type: 'text', nullable: true })
   content!: string | null;
 
+  @Column({ name: 'severity', type: 'varchar', length: 30, default: 'INFO' })
+  severity!: string;
+
   @Column({ name: 'lead_id', type: 'uuid', nullable: true })
   leadId!: string | null;
 

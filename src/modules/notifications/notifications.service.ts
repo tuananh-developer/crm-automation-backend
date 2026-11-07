@@ -1,14 +1,25 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Notification } from './entities/notification.entity.js';
+import { User } from '../users/entities/user.entity.js';
+import { Lead } from '../leads/entities/lead.entity.js';
 import {
   DEFAULT_NOTIFICATION_LIMIT,
   QueryNotificationsDto,
 } from './dto/index.js';
+import { NotificationSeverity } from './enums/notification.enum.js';
 import type { CreateNotificationInput } from './interfaces/index.js';
-import { hasSamePayload, isPostgresUniqueViolation } from '../../common/utils/idempotency.util.js';
+import {
+  hasSamePayload,
+  isPostgresUniqueViolation,
+} from '../../common/utils/idempotency.util.js';
 
 export type { CreateNotificationInput };
 
@@ -17,6 +28,12 @@ export class NotificationsService {
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepository: Repository<Notification>,
+    @Optional()
+    @InjectRepository(User)
+    private readonly usersRepository?: Repository<User>,
+    @Optional()
+    @InjectRepository(Lead)
+    private readonly leadsRepository?: Repository<Lead>,
   ) {}
 
   async findForUser(query: QueryNotificationsDto): Promise<Notification[]> {
@@ -66,25 +83,82 @@ export class NotificationsService {
 
   /** Used by other modules (UC06, UC07) to raise an in-app notification. */
   async create(input: CreateNotificationInput): Promise<Notification> {
-    const payload = { userId: input.userId, type: input.type, title: input.title, content: input.content ?? null, leadId: input.leadId ?? null, customerId: input.customerId ?? null, reviewTaskId: input.reviewTaskId ?? null };
+    let targetUserId = input.userId;
+
+    if (!targetUserId && input.leadId && this.leadsRepository) {
+      const lead = await this.leadsRepository.findOne({
+        where: { id: input.leadId },
+      });
+      if (lead?.ownerId) {
+        targetUserId = lead.ownerId;
+      }
+    }
+
+    if (!targetUserId) {
+      throw new BadRequestException(
+        'Notification recipient userId is required and could not be resolved from lead owner',
+      );
+    }
+
+    const payload = {
+      userId: targetUserId,
+      type: input.type,
+      title: input.title,
+      content: input.content ?? input.message ?? null,
+      leadId: input.leadId ?? null,
+      customerId: input.customerId ?? null,
+      reviewTaskId: input.reviewTaskId ?? null,
+      severity: input.severity ?? NotificationSeverity.INFO,
+    };
+
     const idempotencyKey = input.idempotencyKey?.trim() || null;
-    const findExisting = () => idempotencyKey ? this.notificationRepository.findOne({ where: { idempotencyKey } }) : Promise.resolve(null);
+    const findExisting = () =>
+      idempotencyKey
+        ? this.notificationRepository.findOne({ where: { idempotencyKey } })
+        : Promise.resolve(null);
+
     const reuseExisting = (existing: Notification) => {
-      const existingPayload = { userId: existing.userId, type: existing.type, title: existing.title, content: existing.content, leadId: existing.leadId, customerId: existing.customerId, reviewTaskId: existing.reviewTaskId };
-      if (!hasSamePayload(existingPayload, payload)) throw new ConflictException('Idempotency key was already used with a different notification payload');
+      const existingPayload = {
+        userId: existing.userId,
+        type: existing.type,
+        title: existing.title,
+        content: existing.content,
+        leadId: existing.leadId,
+        customerId: existing.customerId,
+        reviewTaskId: existing.reviewTaskId,
+        severity: existing.severity ?? NotificationSeverity.INFO,
+      };
+      if (!hasSamePayload(existingPayload, payload)) {
+        throw new ConflictException(
+          'Idempotency key was already used with a different notification payload',
+        );
+      }
       return existing;
     };
+
     const existing = await findExisting();
-    if (existing) return reuseExisting(existing);
+    if (existing) {
+      return reuseExisting(existing);
+    }
+
     try {
-      return await this.notificationRepository.save(this.notificationRepository.create({ ...payload, idempotencyKey, isRead: false, readAt: null }));
+      return await this.notificationRepository.save(
+        this.notificationRepository.create({
+          ...payload,
+          idempotencyKey,
+          isRead: false,
+          readAt: null,
+        }),
+      );
     } catch (error) {
-      if (!idempotencyKey || !isPostgresUniqueViolation(error)) throw error;
+      if (!idempotencyKey || !isPostgresUniqueViolation(error)) {
+        throw error;
+      }
       const concurrent = await findExisting();
-      if (!concurrent) throw error;
+      if (!concurrent) {
+        throw error;
+      }
       return reuseExisting(concurrent);
     }
   }
-
-
 }

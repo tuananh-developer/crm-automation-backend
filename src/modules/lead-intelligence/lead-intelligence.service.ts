@@ -20,6 +20,7 @@ import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { ReviewTask } from '../review/entities/review-task.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
+import { UserRole } from '../users/enums/user.enum.js';
 import {
   EnrichmentStatus,
   QualificationStatus,
@@ -29,11 +30,12 @@ import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { ReviewStatus } from '../review/enums/review.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
 import { CRM_EVENTS } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
-import { UserRole } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   computeScoreLabel,
   EnrichmentCallbackDto,
+  EvaluateScoringPolicyDto,
+  EvaluateScoringPolicyResponseDto,
   QualificationCallbackDto,
   ScoringCallbackDto,
   TriggerEnrichmentDto,
@@ -47,6 +49,50 @@ import type { EnsureQualificationReviewerNotificationDto } from './dto/ensure-qu
 
 export const CONFIDENCE_THRESHOLD = 0.8;
 export const DEFAULT_ENRICHMENT_PROVIDER = 'mock';
+
+/**
+ * Evaluates whether a job title represents executive / buying decision authority.
+ * Explicitly excludes individual contributor / team-lead titles (e.g. "Team Lead", "Lead Developer").
+ */
+export function isExecutiveDecisionMakerTitle(rawTitle: unknown): boolean {
+  if (typeof rawTitle !== 'string') return false;
+  const normalized = rawTitle.trim().toLowerCase();
+  if (!normalized) return false;
+
+  const nonExecutiveLeadPattern =
+    /\b(team lead|tech lead|technical lead|lead developer|lead engineer|qa lead|test lead|support lead|design lead|project lead|shift lead|squad lead|module lead|chapter lead)\b/i;
+  if (nonExecutiveLeadPattern.test(normalized)) {
+    return false;
+  }
+
+  if (/\b(ceo|cto|cfo|coo|cmo|cio|ciso|cro|cpo)\b/i.test(normalized)) {
+    return true;
+  }
+
+  const executivePatterns = [
+    /\bchief\b/i,
+    /\bvice president\b/i,
+    /\bvp\b/i,
+    /\bsvp\b/i,
+    /\bevp\b/i,
+    /\bpresident\b/i,
+    /\bdirector\b/i,
+    /\bfounder\b/i,
+    /\bco-founder\b/i,
+    /\bcofounder\b/i,
+    /\bowner\b/i,
+    /\bmanaging partner\b/i,
+    /\bgeneral manager\b/i,
+    /\bhead of\b/i,
+    /\bcountry manager\b/i,
+    /\bgiám đốc\b/i,
+    /\bchủ tịch\b/i,
+    /\btrưởng ban\b/i,
+    /\btrưởng phòng\b/i,
+  ];
+
+  return executivePatterns.some((pattern) => pattern.test(normalized));
+}
 
 @Injectable()
 export class LeadIntelligenceService {
@@ -115,7 +161,11 @@ export class LeadIntelligenceService {
       ? await this.dataSource.transaction(async (manager) => {
           await manager.save(lead);
           const persistedRun = await manager.save(WorkflowRun, workflowRun);
-          await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED, { leadId: lead.id, workflowRunId: persistedRun.id });
+          await this.rabbitmqService.enqueueEvent(
+            manager,
+            CRM_EVENTS.LEAD_QUALIFICATION_REQUESTED,
+            { leadId: lead.id, workflowRunId: persistedRun.id },
+          );
           return persistedRun;
         })
       : await (async () => {
@@ -130,7 +180,10 @@ export class LeadIntelligenceService {
 
     // Publish event to RabbitMQ for n8n consumption
     if (!this.dataSource) {
-      await this.rabbitmqService.publishLeadQualificationRequested({ leadId: lead.id, workflowRunId: savedWorkflowRun.id });
+      await this.rabbitmqService.publishLeadQualificationRequested({
+        leadId: lead.id,
+        workflowRunId: savedWorkflowRun.id,
+      });
     }
 
     return {
@@ -320,13 +373,16 @@ export class LeadIntelligenceService {
 
     if (this.dataSource) {
       return await this.dataSource.transaction(async (manager) => {
-        return processQualification({
-          leadRepo: manager.getRepository(Lead),
-          qualificationRepo: manager.getRepository(LeadQualification),
-          workflowRunRepo: manager.getRepository(WorkflowRun),
-          reviewTaskRepo: manager.getRepository(ReviewTask),
-          notificationRepo: manager.getRepository(Notification),
-        }, true);
+        return processQualification(
+          {
+            leadRepo: manager.getRepository(Lead),
+            qualificationRepo: manager.getRepository(LeadQualification),
+            workflowRunRepo: manager.getRepository(WorkflowRun),
+            reviewTaskRepo: manager.getRepository(ReviewTask),
+            notificationRepo: manager.getRepository(Notification),
+          },
+          true,
+        );
       });
     }
 
@@ -600,9 +656,11 @@ export class LeadIntelligenceService {
 
   async getQualificationsByLead(
     leadId: string,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<LeadQualification[]> {
-    await this.assertLeadAccessById(leadId, actor);
+    if (actor) {
+      await this.assertLeadAccessById(leadId, actor);
+    }
     return this.qualificationsRepository.find({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -614,9 +672,11 @@ export class LeadIntelligenceService {
 
   async getLatestQualification(
     leadId: string,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<LeadQualification | null> {
-    await this.assertLeadAccessById(leadId, actor);
+    if (actor) {
+      await this.assertLeadAccessById(leadId, actor);
+    }
     return this.qualificationsRepository.findOne({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -628,9 +688,11 @@ export class LeadIntelligenceService {
 
   async getLatestEnrichment(
     leadId: string,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<LeadEnrichment | null> {
-    await this.assertLeadAccessById(leadId, actor);
+    if (actor) {
+      await this.assertLeadAccessById(leadId, actor);
+    }
     return this.enrichmentsRepository.findOne({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -642,9 +704,11 @@ export class LeadIntelligenceService {
 
   async getEnrichmentsByLead(
     leadId: string,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<LeadEnrichment[]> {
-    await this.assertLeadAccessById(leadId, actor);
+    if (actor) {
+      await this.assertLeadAccessById(leadId, actor);
+    }
     return this.enrichmentsRepository.find({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -703,20 +767,62 @@ export class LeadIntelligenceService {
     if (this.dataSource) {
       const persisted = await this.dataSource.transaction(async (manager) => {
         const run = await manager.save(WorkflowRun, workflowRun);
-        const enrichment = this.enrichmentsRepository.create({ leadId: lead.id, workflowRunId: run.id, provider, status: EnrichmentStatus.PENDING, enrichedAt: new Date() });
+        const enrichment = this.enrichmentsRepository.create({
+          leadId: lead.id,
+          workflowRunId: run.id,
+          provider,
+          status: EnrichmentStatus.PENDING,
+          enrichedAt: new Date(),
+        });
         const saved = await manager.save(LeadEnrichment, enrichment);
-        await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED, { leadId: lead.id, workflowRunId: run.id, provider, email: lead.email ?? undefined, companyName: lead.companyName ?? undefined, companyWebsite: lead.companyWebsite ?? undefined, domain, website });
+        await this.rabbitmqService.enqueueEvent(
+          manager,
+          CRM_EVENTS.LEAD_ENRICHMENT_REQUESTED,
+          {
+            leadId: lead.id,
+            workflowRunId: run.id,
+            provider,
+            email: lead.email ?? undefined,
+            companyName: lead.companyName ?? undefined,
+            companyWebsite: lead.companyWebsite ?? undefined,
+            domain,
+            website,
+          },
+        );
         return { run, enrichment: saved };
       });
       savedWorkflowRun = persisted.run;
       savedEnrichment = persisted.enrichment;
     } else {
       savedWorkflowRun = await this.workflowRunsRepository.save(workflowRun);
-      const enrichment = this.enrichmentsRepository.create({ leadId: lead.id, workflowRunId: savedWorkflowRun.id, provider, status: EnrichmentStatus.PENDING, enrichedAt: new Date() });
+      const enrichment = this.enrichmentsRepository.create({
+        leadId: lead.id,
+        workflowRunId: savedWorkflowRun.id,
+        provider,
+        status: EnrichmentStatus.PENDING,
+        enrichedAt: new Date(),
+      });
       savedEnrichment = await this.enrichmentsRepository.save(enrichment);
-      await this.rabbitmqService.publishLeadEnrichmentRequested({ leadId: lead.id, workflowRunId: savedWorkflowRun.id, provider, email: lead.email ?? undefined, companyName: lead.companyName ?? undefined, companyWebsite: lead.companyWebsite ?? undefined, domain, website });
+      await this.rabbitmqService.publishLeadEnrichmentRequested({
+        leadId: lead.id,
+        workflowRunId: savedWorkflowRun.id,
+        provider,
+        email: lead.email ?? undefined,
+        companyName: lead.companyName ?? undefined,
+        companyWebsite: lead.companyWebsite ?? undefined,
+        domain,
+        website,
+      });
     }
-    this.logger.log('Created WorkflowRun ' + savedWorkflowRun.id + ' and LeadEnrichment ' + savedEnrichment.id + ' for lead ' + lead.id);    return {
+    this.logger.log(
+      'Created WorkflowRun ' +
+        savedWorkflowRun.id +
+        ' and LeadEnrichment ' +
+        savedEnrichment.id +
+        ' for lead ' +
+        lead.id,
+    );
+    return {
       message: 'Lead enrichment workflow triggered successfully',
       workflowRunId: savedWorkflowRun.id,
       enrichmentId: savedEnrichment.id,
@@ -1002,7 +1108,7 @@ export class LeadIntelligenceService {
    */
   async getScoringContext(
     leadId: string,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<{
     lead: Lead;
     qualification: LeadQualification | null;
@@ -1010,11 +1116,7 @@ export class LeadIntelligenceService {
     interactions: Interaction[];
     scoringFeatures: Record<string, any>;
   }> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
-    this.assertLeadAccess(lead, actor);
+    const lead = await this.assertLeadAccessById(leadId, actor);
 
     const [qualification, enrichment, interactions] = await Promise.all([
       this.getLatestQualification(leadId, actor),
@@ -1034,15 +1136,11 @@ export class LeadIntelligenceService {
     const industry = enrichment?.companyIndustry || lead.industry || null;
     const jobTitle = enrichment?.contactJobTitle || lead.jobTitle || '';
 
-    const isDecisionMaker = Boolean(
-      jobTitle &&
-      /c[etom]o|founder|co-founder|owner|president|vp|vice president|director|head|manager|lead/i.test(
-        jobTitle,
-      ),
-    );
+    const isDecisionMaker = isExecutiveDecisionMakerTitle(jobTitle);
 
+    const safeInteractions = Array.isArray(interactions) ? interactions : [];
     const now = Date.now();
-    const recentInteractions = interactions.filter((i) => {
+    const recentInteractions = safeInteractions.filter((i) => {
       const occurred = new Date(i.occurredAt).getTime();
       return now - occurred <= 30 * 24 * 60 * 60 * 1000;
     });
@@ -1059,7 +1157,7 @@ export class LeadIntelligenceService {
         ? Number(qualification.confidence)
         : null,
       enrichmentStatus: enrichment?.status ?? null,
-      totalInteractionsCount: interactions.length,
+      totalInteractionsCount: safeInteractions.length,
       recentInteractionsCount: recentInteractions.length,
     };
 
@@ -1067,7 +1165,7 @@ export class LeadIntelligenceService {
       lead,
       qualification,
       enrichment,
-      interactions,
+      interactions: safeInteractions,
       scoringFeatures,
     };
   }
@@ -1161,6 +1259,152 @@ export class LeadIntelligenceService {
   }
 
   /**
+   * Evaluates the canonical lead scoring policy (UC04).
+   * Backend owns the authoritative 0-100 score, label thresholds, and policy version 1.0.
+   * Feature points are ALWAYS derived from raw context (lead, qual, enrich, interactions);
+   * caller-supplied point overrides in scoringFeatures/features are never trusted.
+   */
+  async evaluateScoringPolicy(
+    dto: EvaluateScoringPolicyDto,
+  ): Promise<EvaluateScoringPolicyResponseDto> {
+    const enrichObj =
+      typeof dto.enrich === 'object' && dto.enrich !== null
+        ? dto.enrich
+        : undefined;
+    const leadObj =
+      typeof dto.lead === 'object' && dto.lead !== null ? dto.lead : undefined;
+    const qualObj =
+      typeof dto.qual === 'object' && dto.qual !== null ? dto.qual : undefined;
+
+    const baseScore = 20;
+
+    // 1. Profile Fit Points (0..20)
+    let profileFitPoints = 0;
+    const rawCompanySize =
+      enrichObj?.['companySize'] ?? leadObj?.['companySize'];
+    const companySize =
+      typeof rawCompanySize === 'number' &&
+      Number.isFinite(rawCompanySize) &&
+      rawCompanySize >= 0
+        ? rawCompanySize
+        : undefined;
+    const hasCompanyName =
+      (typeof enrichObj?.['companyName'] === 'string' &&
+        enrichObj['companyName'].trim().length > 0) ||
+      (typeof leadObj?.['companyName'] === 'string' &&
+        leadObj['companyName'].trim().length > 0);
+
+    if (typeof companySize === 'number') {
+      if (companySize >= 100) profileFitPoints = 20;
+      else if (companySize >= 20) profileFitPoints = 15;
+      else if (companySize >= 5) profileFitPoints = 10;
+      else profileFitPoints = 5;
+    } else if (hasCompanyName) {
+      profileFitPoints = 10;
+    }
+
+    // 2. Decision Maker Points (0..20)
+    let decisionMakerPoints = 0;
+    const rawJobTitle = enrichObj?.['contactJobTitle'] ?? leadObj?.['jobTitle'];
+    const normalizedJobTitle =
+      typeof rawJobTitle === 'string' ? rawJobTitle.trim() : '';
+    if (isExecutiveDecisionMakerTitle(normalizedJobTitle)) {
+      decisionMakerPoints = 20;
+    } else if (normalizedJobTitle.length > 0) {
+      decisionMakerPoints = 10;
+    }
+
+    // 3. Qualification Points (-20..25)
+    let qualificationPoints = 0;
+    if (qualObj && qualObj['status'] === 'QUALIFIED') {
+      const rawConf =
+        typeof qualObj['confidence'] === 'number' &&
+        Number.isFinite(qualObj['confidence'])
+          ? qualObj['confidence']
+          : 0.85;
+      const clampedConf = Math.max(0, Math.min(1, rawConf));
+      qualificationPoints = Math.round(clampedConf * 25);
+    } else if (qualObj && qualObj['status'] === 'DISQUALIFIED') {
+      qualificationPoints = -20;
+    } else if (qualObj && qualObj['status'] === 'NEEDS_REVIEW') {
+      qualificationPoints = 10;
+    }
+
+    // 4. Engagement Points (0..25)
+    const validInteractions = Array.isArray(dto.interactions)
+      ? dto.interactions.filter(
+          (item) => typeof item === 'object' && item !== null,
+        )
+      : [];
+    const engagementPoints = Math.min(25, validInteractions.length * 8);
+
+    // 5. Enrichment Bonus (0..10)
+    const enrichmentBonus =
+      enrichObj && enrichObj['status'] === 'SUCCESS' ? 10 : 0;
+
+    const calculatedTotal =
+      baseScore +
+      profileFitPoints +
+      decisionMakerPoints +
+      qualificationPoints +
+      engagementPoints +
+      enrichmentBonus;
+
+    const canonicalScore = Math.max(
+      0,
+      Math.min(100, Math.round(calculatedTotal)),
+    );
+    const label = computeScoreLabel(canonicalScore);
+    const policyVersion = '1.0';
+
+    let reason: string;
+    if (label === ScoreLabel.HOT) {
+      reason = `[Canonical Policy - HOT ${canonicalScore}/100] High intent, executive decision authority, strong qualification, and verified profile fit.`;
+    } else if (label === ScoreLabel.WARM) {
+      reason = `[Canonical Policy - WARM ${canonicalScore}/100] Moderate engagement, reasonable profile fit, and active qualification signals.`;
+    } else {
+      reason = `[Canonical Policy - COLD ${canonicalScore}/100] Low engagement or incomplete business profile.`;
+    }
+
+    const breakdown: Record<string, number> = {
+      baseScore,
+      profileFitPoints,
+      decisionMakerPoints,
+      qualificationPoints,
+      engagementPoints,
+      enrichmentBonus,
+    };
+
+    const scoringFeatures: Record<string, unknown> = {
+      ...breakdown,
+      hasCompanyName,
+      companySize: companySize ?? null,
+      jobTitle: normalizedJobTitle || null,
+      isDecisionMaker: decisionMakerPoints === 20,
+      qualificationStatus:
+        typeof qualObj?.['status'] === 'string' ? qualObj['status'] : null,
+      enrichmentStatus:
+        typeof enrichObj?.['status'] === 'string' ? enrichObj['status'] : null,
+      interactionCount: validInteractions.length,
+      ...(dto.contextAudit ? { contextAudit: dto.contextAudit } : {}),
+    };
+
+    return Promise.resolve({
+      score: canonicalScore,
+      label,
+      policyVersion,
+      reason,
+      breakdown,
+      scoringFeatures,
+      modelInfo: {
+        provider: 'crm-scoring-policy',
+        model: 'deterministic-scoring-v1',
+        modelVersion: policyVersion,
+      },
+    });
+  }
+
+  /**
    * Trigger the AI lead scoring workflow:
    *  1. Aggregate comprehensive scoring context (Lead, latest Qualification, latest Enrichment, Interactions).
    *  2. Create a WorkflowRun record with status PENDING.
@@ -1168,17 +1412,12 @@ export class LeadIntelligenceService {
    */
   async triggerScoring(
     leadId: string,
-    dto: TriggerScoringDto | undefined,
-    user: AuthenticatedUser,
+    dto?: TriggerScoringDto,
+    actor?: AuthenticatedUser,
   ): Promise<TriggerScoringResponseDto> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
+    const lead = await this.assertLeadAccessById(leadId, actor);
 
-    this.assertLeadAccess(lead, user);
-
-    const context = await this.getScoringContext(leadId, user);
+    const context = await this.getScoringContext(leadId, actor);
 
     const leadData = {
       id: lead.id,
@@ -1230,11 +1469,11 @@ export class LeadIntelligenceService {
       occurredAt: i.occurredAt,
     }));
 
-    // 1. Create WorkflowRun
+    // 1. Create WorkflowRun (never trust caller-supplied dto.userId for audit attribution)
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 'lead-scoring',
       leadId: lead.id,
-      triggeredByUserId: user.id,
+      triggeredByUserId: actor?.id ?? null,
       status: WorkflowStatus.PENDING,
       startedAt: new Date(),
       inputPayload: {
@@ -1248,17 +1487,52 @@ export class LeadIntelligenceService {
     const savedWorkflowRun = this.dataSource
       ? await this.dataSource.transaction(async (manager) => {
           const persistedRun = await manager.save(WorkflowRun, workflowRun);
-          await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.LEAD_SCORING_REQUESTED, {
-            leadId: lead.id, workflowRunId: persistedRun.id, leadData, qualificationData, enrichmentData, interactions,
-            scoringContext: { lead: leadData, qualification: qualificationData, enrichment: enrichmentData, interactions, scoringFeatures: context.scoringFeatures },
-          });
+          await this.rabbitmqService.enqueueEvent(
+            manager,
+            CRM_EVENTS.LEAD_SCORING_REQUESTED,
+            {
+              leadId: lead.id,
+              workflowRunId: persistedRun.id,
+              leadData,
+              qualificationData,
+              enrichmentData,
+              interactions,
+              scoringContext: {
+                lead: leadData,
+                qualification: qualificationData,
+                enrichment: enrichmentData,
+                interactions,
+                scoringFeatures: context.scoringFeatures,
+              },
+            },
+          );
           return persistedRun;
         })
       : await this.workflowRunsRepository.save(workflowRun);
     if (!this.dataSource) {
-      await this.rabbitmqService.publishLeadScoringRequested({ leadId: lead.id, workflowRunId: savedWorkflowRun.id, leadData, qualificationData, enrichmentData, interactions, scoringContext: { lead: leadData, qualification: qualificationData, enrichment: enrichmentData, interactions, scoringFeatures: context.scoringFeatures } });
+      await this.rabbitmqService.publishLeadScoringRequested({
+        leadId: lead.id,
+        workflowRunId: savedWorkflowRun.id,
+        leadData,
+        qualificationData,
+        enrichmentData,
+        interactions,
+        scoringContext: {
+          lead: leadData,
+          qualification: qualificationData,
+          enrichment: enrichmentData,
+          interactions,
+          scoringFeatures: context.scoringFeatures,
+        },
+      });
     }
-    this.logger.log('Created WorkflowRun ' + savedWorkflowRun.id + ' for lead scoring of lead ' + lead.id);    return {
+    this.logger.log(
+      'Created WorkflowRun ' +
+        savedWorkflowRun.id +
+        ' for lead scoring of lead ' +
+        lead.id,
+    );
+    return {
       message: 'Lead scoring workflow triggered successfully',
       workflowRunId: savedWorkflowRun.id,
       leadId: lead.id,
@@ -1276,60 +1550,95 @@ export class LeadIntelligenceService {
     score: LeadScore | null;
     workflowRunUpdated: boolean;
   }> {
-    const lead = await this.leadsRepository.findOne({
-      where: { id: dto.leadId },
-    });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
+    if (!dto.workflowRunId || !dto.workflowRunId.trim()) {
+      throw new BadRequestException(
+        'workflowRunId is required for scoring callback correlation',
+      );
     }
-
-    // ── Idempotency Check ───────────────────────────────────────────────────
-    const existingRun = await this.workflowRunsRepository.findOne({
-      where: {
-        id: dto.workflowRunId,
-        leadId: dto.leadId,
-        workflowName: 'lead-scoring',
-      },
-    });
-    this.assertCallbackRunScope(existingRun, lead.id, 'lead-scoring');
-    const existingScore = await this.scoresRepository.findOne({
-      where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
-    });
-
-    if (this.isTerminalWorkflowStatus(existingRun.status)) {
-      if (existingScore) {
-        this.logger.warn(
-          `Idempotent duplicate callback detected for workflowRunId=${dto.workflowRunId}. Returning existing score.`,
-        );
-        return { score: existingScore, workflowRunUpdated: false };
-      }
-    }
-    this.assertCallbackRunActive(existingRun);
 
     const isFailure = dto.status === 'FAILED';
 
     const processScoring = async (repos: {
+      leadRepo: Repository<Lead>;
       scoresRepo: Repository<LeadScore>;
       workflowRunRepo: Repository<WorkflowRun>;
     }) => {
+      // 1. Lock WorkflowRun with pessimistic_write
       const workflowRun = await repos.workflowRunRepo.findOne({
-        where: {
-          id: dto.workflowRunId,
-          leadId: dto.leadId,
-          workflowName: 'lead-scoring',
-        },
+        where: { id: dto.workflowRunId },
         lock: { mode: 'pessimistic_write' },
       });
-      this.assertCallbackRunScope(workflowRun, lead.id, 'lead-scoring');
-
-      if (this.isTerminalWorkflowStatus(workflowRun.status)) {
-        const completedScore = await repos.scoresRepo.findOne({
-          where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
-        });
-        if (completedScore) {
-          return { score: completedScore, workflowRunUpdated: false };
-        }
+      if (!workflowRun) {
+        throw new NotFoundException(
+          `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+        );
       }
+      this.assertCallbackRunScope(workflowRun, dto.leadId, 'lead-scoring');
+
+      // 2. Lock Lead with pessimistic_write
+      const lead = await repos.leadRepo.findOne({
+        where: { id: dto.leadId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!lead) {
+        throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
+      }
+
+      const existingScore = await repos.scoresRepo.findOne({
+        where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      const targetRunStatus = isFailure
+        ? WorkflowStatus.FAILED
+        : WorkflowStatus.SUCCESS;
+
+      // 3. Terminal State & Idempotency Check inside transaction
+      if (this.isTerminalWorkflowStatus(workflowRun.status)) {
+        if (workflowRun.status === targetRunStatus) {
+          if (isFailure) {
+            if (
+              dto.errorMessage &&
+              workflowRun.errorMessage &&
+              dto.errorMessage.trim() !== workflowRun.errorMessage.trim()
+            ) {
+              throw new ConflictException(
+                `Conflict: WorkflowRun '${workflowRun.id}' already failed with a conflicting error message`,
+              );
+            }
+            this.logger.warn(
+              `Idempotent duplicate callback detected for failed workflowRunId=${dto.workflowRunId}. Returning null score.`,
+            );
+            return { score: null, workflowRunUpdated: false };
+          } else {
+            if (existingScore) {
+              const rawScore = dto.score ?? 0;
+              const normalizedScore = Math.max(
+                0,
+                Math.min(100, Math.round(Number(rawScore) * 100) / 100),
+              );
+              if (
+                dto.score !== undefined &&
+                normalizedScore !== Number(existingScore.score)
+              ) {
+                throw new ConflictException(
+                  `Conflict: WorkflowRun '${workflowRun.id}' already scored with '${existingScore.score}', conflicting with '${normalizedScore}'`,
+                );
+              }
+              this.logger.warn(
+                `Idempotent duplicate callback detected for workflowRunId=${dto.workflowRunId}. Returning existing score.`,
+              );
+              return { score: existingScore, workflowRunUpdated: false };
+            }
+          }
+        }
+
+        throw new ConflictException(
+          `Conflict: WorkflowRun '${workflowRun.id}' is already in terminal state '${workflowRun.status}' and cannot transition to '${targetRunStatus}'`,
+        );
+      }
+
+      // 4. Active check: must be in PENDING or RUNNING
       this.assertCallbackRunActive(workflowRun);
 
       if (isFailure) {
@@ -1350,7 +1659,7 @@ export class LeadIntelligenceService {
         0,
         Math.min(100, Math.round(Number(rawScore) * 100) / 100),
       );
-      const label = dto.label || computeScoreLabel(normalizedScore);
+      const label = computeScoreLabel(normalizedScore);
 
       const modelInfoObj =
         typeof dto.modelInfo === 'object' && dto.modelInfo !== null
@@ -1369,9 +1678,14 @@ export class LeadIntelligenceService {
           : null);
       const modelVersion =
         dto.modelVersion ||
+        (modelInfoObj && typeof modelInfoObj.modelVersion === 'string'
+          ? modelInfoObj.modelVersion
+          : null) ||
         (modelInfoObj && typeof modelInfoObj.version === 'string'
           ? modelInfoObj.version
-          : null);
+          : null) ||
+        dto.policyVersion ||
+        null;
 
       const snapshotObj =
         typeof dto.inputOutputSnapshot === 'object' &&
@@ -1432,6 +1746,7 @@ export class LeadIntelligenceService {
     if (this.dataSource) {
       return await this.dataSource.transaction(async (manager) => {
         return processScoring({
+          leadRepo: manager.getRepository(Lead),
           scoresRepo: manager.getRepository(LeadScore),
           workflowRunRepo: manager.getRepository(WorkflowRun),
         });
@@ -1439,6 +1754,7 @@ export class LeadIntelligenceService {
     }
 
     return await processScoring({
+      leadRepo: this.leadsRepository,
       scoresRepo: this.scoresRepository,
       workflowRunRepo: this.workflowRunsRepository,
     });
@@ -1446,9 +1762,11 @@ export class LeadIntelligenceService {
 
   async getScoresByLead(
     leadId: string,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<LeadScore[]> {
-    await this.assertLeadAccessById(leadId, actor);
+    if (actor) {
+      await this.assertLeadAccessById(leadId, actor);
+    }
     return this.scoresRepository.find({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -1458,9 +1776,11 @@ export class LeadIntelligenceService {
 
   async getLatestScore(
     leadId: string,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<LeadScore | null> {
-    await this.assertLeadAccessById(leadId, actor);
+    if (actor) {
+      await this.assertLeadAccessById(leadId, actor);
+    }
     return this.scoresRepository.findOne({
       where: { leadId },
       order: { createdAt: 'DESC' },
@@ -1470,20 +1790,21 @@ export class LeadIntelligenceService {
 
   private async assertLeadAccessById(
     leadId: string,
-    actor: AuthenticatedUser,
-  ): Promise<void> {
+    actor?: AuthenticatedUser,
+  ): Promise<Lead> {
     const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
     if (!lead)
       throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    this.assertLeadAccess(lead, actor);
+    if (actor) {
+      this.assertLeadAccess(lead, actor);
+    }
+    return lead;
   }
 
   private assertLeadAccess(lead: Lead, actor: AuthenticatedUser): void {
     if (actor.role === UserRole.SALES && lead.ownerId !== actor.id) {
       // Match LeadsService: do not disclose another user's Lead existence.
-      throw new NotFoundException(
-        `Lead with ID '${lead.id}' not found`,
-      );
+      throw new NotFoundException(`Lead with ID '${lead.id}' not found`);
     }
   }
 

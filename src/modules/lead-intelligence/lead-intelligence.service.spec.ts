@@ -342,6 +342,7 @@ describe('LeadIntelligenceService', () => {
         type: 'REVIEW_REQUIRED',
         title: 'Review Required',
         content: 'Please review this Lead',
+        severity: 'INFO',
         leadId: 'lead-123',
         customerId: null,
         reviewTaskId: 'review-123',
@@ -844,8 +845,12 @@ describe('LeadIntelligenceService', () => {
         ...mockLead,
         status: LeadStatus.QUALIFYING,
       });
-      (qualificationsRepo.create as jest.Mock).mockReturnValue(mockQualification);
-      (qualificationsRepo.save as jest.Mock).mockResolvedValue(mockQualification);
+      (qualificationsRepo.create as jest.Mock).mockReturnValue(
+        mockQualification,
+      );
+      (qualificationsRepo.save as jest.Mock).mockResolvedValue(
+        mockQualification,
+      );
       (workflowRunsRepo.save as jest.Mock).mockImplementation((run) =>
         Promise.resolve(run),
       );
@@ -862,11 +867,14 @@ describe('LeadIntelligenceService', () => {
         Notification: notificationsRepo,
       };
       const manager = {
-        getRepository: jest.fn((entity: { name: string }) => repositories[entity.name]),
+        getRepository: jest.fn(
+          (entity: { name: string }) => repositories[entity.name],
+        ),
       };
       const transactionalDataSource = {
-        transaction: jest.fn((callback: (value: typeof manager) => Promise<unknown>) =>
-          callback(manager),
+        transaction: jest.fn(
+          (callback: (value: typeof manager) => Promise<unknown>) =>
+            callback(manager),
         ),
       };
       const transactionalService = new LeadIntelligenceService(
@@ -969,8 +977,37 @@ describe('LeadIntelligenceService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should reject a scoring callback for a different WorkflowRun', async () => {
+    it('should throw NotFoundException if workflowRun does not exist', async () => {
       (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.handleScoringCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'unknown-run',
+          status: 'SUCCESS',
+          score: 80,
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should reject a scoring callback for a different WorkflowRun or wrong workflowName/leadId', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'different-workflow',
+        leadId: 'lead-123',
+      });
+
+      await expect(
+        service.handleScoringCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: 'SUCCESS',
+          score: 80,
+        }),
+      ).rejects.toThrow(NotFoundException);
+
       (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
         ...mockWorkflowRun,
         workflowName: 'lead-scoring',
@@ -994,6 +1031,7 @@ describe('LeadIntelligenceService', () => {
       (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
         ...mockWorkflowRun,
         workflowName: 'lead-scoring',
+        leadId: 'lead-123',
         status: WorkflowStatus.SUCCESS,
       });
       (scoresRepo.findOne as jest.Mock).mockResolvedValue(mockScore);
@@ -1011,10 +1049,92 @@ describe('LeadIntelligenceService', () => {
       expect(scoresRepo.save).not.toHaveBeenCalled();
     });
 
+    it('should throw ConflictException (409) on duplicate callback with conflicting score', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'lead-scoring',
+        leadId: 'lead-123',
+        status: WorkflowStatus.SUCCESS,
+      });
+      (scoresRepo.findOne as jest.Mock).mockResolvedValue(mockScore);
+
+      await expect(
+        service.handleScoringCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: 'SUCCESS',
+          score: 50,
+          label: ScoreLabel.WARM,
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException (409) on duplicate FAILED callback with conflicting errorMessage', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'lead-scoring',
+        leadId: 'lead-123',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Original error message',
+      });
+      (scoresRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.handleScoringCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: 'FAILED',
+          errorMessage: 'Conflicting new error',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException (409) on late callback attempting transition from terminal state (e.g. FAILED after SUCCESS)', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'lead-scoring',
+        leadId: 'lead-123',
+        status: WorkflowStatus.SUCCESS,
+      });
+      (scoresRepo.findOne as jest.Mock).mockResolvedValue(mockScore);
+
+      await expect(
+        service.handleScoringCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: 'FAILED',
+          errorMessage: 'Late failure',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException (409) when workflowRun is not active', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'lead-scoring',
+        leadId: 'lead-123',
+        status: WorkflowStatus.CANCELLED,
+      });
+
+      await expect(
+        service.handleScoringCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: 'SUCCESS',
+          score: 85,
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
     it('should update WorkflowRun to FAILED and not create score when status is FAILED', async () => {
       const runningWorkflowRun = {
         ...mockWorkflowRun,
         workflowName: 'lead-scoring',
+        leadId: 'lead-123',
         status: WorkflowStatus.PENDING,
       };
       (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
@@ -1048,6 +1168,7 @@ describe('LeadIntelligenceService', () => {
       const runningWorkflowRun = {
         ...mockWorkflowRun,
         workflowName: 'lead-scoring',
+        leadId: 'lead-123',
         status: WorkflowStatus.PENDING,
       };
       (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
@@ -1109,17 +1230,28 @@ describe('LeadIntelligenceService', () => {
     it('should execute inside database transaction if dataSource is present', async () => {
       const mockSavedScore = { ...mockScore };
       const mockScoreRepo = {
+        findOne: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockReturnValue(mockSavedScore),
         save: jest.fn().mockResolvedValue(mockSavedScore),
       };
+      const mockLeadRepo = {
+        findOne: jest.fn().mockResolvedValue(mockLead),
+        save: jest.fn().mockResolvedValue(mockLead),
+      };
       const mockWfRepo = {
-        findOne: jest.fn().mockResolvedValue({
-          ...mockWorkflowRun,
-          workflowName: 'lead-scoring',
-        }),
+        findOne: jest.fn().mockImplementation((options: any) =>
+          Promise.resolve({
+            ...mockWorkflowRun,
+            id: options?.where?.id ?? mockWorkflowRun.id,
+            leadId: options?.where?.leadId ?? mockWorkflowRun.leadId,
+            workflowName: options?.where?.workflowName ?? 'lead-scoring',
+            status: WorkflowStatus.PENDING,
+          }),
+        ),
         save: jest.fn().mockResolvedValue({
           ...mockWorkflowRun,
           workflowName: 'lead-scoring',
+          leadId: 'lead-123',
           status: WorkflowStatus.SUCCESS,
         }),
       };
@@ -1140,6 +1272,9 @@ describe('LeadIntelligenceService', () => {
                     (entity as { name?: string }).name === 'LeadScore'
                   ) {
                     return mockScoreRepo;
+                  }
+                  if (entity && (entity as { name?: string }).name === 'Lead') {
+                    return mockLeadRepo;
                   }
                   return mockWfRepo;
                 }),
@@ -1165,6 +1300,8 @@ describe('LeadIntelligenceService', () => {
       (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
         ...mockWorkflowRun,
         workflowName: 'lead-scoring',
+        leadId: 'lead-123',
+        status: WorkflowStatus.PENDING,
       });
       (scoresRepo.findOne as jest.Mock).mockResolvedValue(null);
 
@@ -1644,6 +1781,8 @@ describe('LeadIntelligenceService', () => {
       (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
         ...mockWorkflowRun,
         workflowName: 'lead-enrichment',
+        leadId: 'lead-123',
+        status: WorkflowStatus.PENDING,
       });
       (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue(null);
 
