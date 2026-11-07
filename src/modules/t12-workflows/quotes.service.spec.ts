@@ -51,6 +51,46 @@ describe('QuotesService entity context', () => {
     }
   });
 
+  it('returns business-only Lead context without individual contact identifiers', async () => {
+    const leadId = '33333333-3333-4333-8333-333333333333';
+    runs.findOne.mockResolvedValue({
+      id: workflowRunId,
+      workflowName: WF12_NAME,
+      customerId: null,
+      leadId,
+    });
+    leads.findOne.mockResolvedValue({
+      id: leadId,
+      companyName: 'Acme',
+      companyWebsite: 'https://acme.example',
+      jobTitle: 'Buyer',
+      industry: 'Software',
+    });
+
+    await expect(service.getEntityContext(undefined, leadId, workflowRunId))
+      .resolves.toEqual({
+        entityType: 'Lead',
+        entity: {
+          id: leadId,
+          companyName: 'Acme',
+          companyWebsite: 'https://acme.example',
+          jobTitle: 'Buyer',
+          industry: 'Software',
+        },
+        workflowRunId,
+      });
+    expect(leads.findOne).toHaveBeenCalledWith({
+      where: { id: leadId },
+      select: {
+        id: true,
+        companyName: true,
+        companyWebsite: true,
+        jobTitle: true,
+        industry: true,
+      },
+    });
+  });
+
   it('claims an active run before returning customer context', async () => {
     const customer = {
       id: customerId,
