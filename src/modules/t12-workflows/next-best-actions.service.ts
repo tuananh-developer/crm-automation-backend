@@ -605,9 +605,17 @@ export class NextBestActionsService {
           reviewTaskId: null,
         }),
       );
-      run.status = WorkflowStatus.SUCCESS;
-      run.claimExpiresAt = null;
-      run.finishedAt = new Date();
+      // Keep the execution claim alive until the approval/notification
+      // gate has also completed. The workflow's final callback releases it.
+      run.status = requiresHumanApproval
+        ? WorkflowStatus.RUNNING
+        : WorkflowStatus.SUCCESS;
+      if (!requiresHumanApproval) {
+        run.claimExpiresAt = null;
+        run.finishedAt = new Date();
+      } else {
+        run.finishedAt = null;
+      }
       run.outputPayload = {
         ...(run.outputPayload ?? {}),
         recommendationId: saved.id,
@@ -719,16 +727,11 @@ export class NextBestActionsService {
         entityType: dto.entityType,
       },
     });
-    if (!recommendation)
+    if (!recommendation) {
       throw new NotFoundException(
         'Recommendation not found for this WorkflowRun',
       );
-    if (!recommendation.requiresHumanApproval)
-      return {
-        approvalRequired: false,
-        reviewTaskId: null,
-        notificationFound: false,
-      };
+    }
 
     return this.dataSource.transaction(async (manager) => {
       const runRepo = manager.getRepository(WorkflowRun);
@@ -738,7 +741,7 @@ export class NextBestActionsService {
       const notificationRepo = manager.getRepository(Notification);
       const reviewTaskRepo = manager.getRepository(ReviewTask);
       const run = await runRepo.findOne({
-        where: { id: dto.workflowRunId },
+        where: { id: dto.workflowRunId, workflowName: WF10_NAME },
         lock: { mode: 'pessimistic_write' },
       });
       if (!run) throw new NotFoundException('WorkflowRun not found');
@@ -746,6 +749,40 @@ export class NextBestActionsService {
         where: { id: recommendation.id },
       });
       if (!current) throw new NotFoundException('Recommendation not found');
+
+      const ownsLiveLease =
+        run.n8nExecutionId === dto.n8nExecutionId &&
+        [WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status) &&
+        Boolean(run.claimExpiresAt) &&
+        run.claimExpiresAt!.getTime() > Date.now();
+      const completedReplay =
+        run.n8nExecutionId === dto.n8nExecutionId &&
+        [WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL].includes(run.status);
+      if (!ownsLiveLease && !completedReplay) {
+        throw new ConflictException(
+          'Workflow execution no longer owns this finalization request',
+        );
+      }
+
+      if (!current.requiresHumanApproval) {
+        if (ownsLiveLease) {
+          run.status = WorkflowStatus.SUCCESS;
+          run.claimExpiresAt = null;
+          run.finishedAt = new Date();
+          run.outputPayload = {
+            ...(run.outputPayload ?? {}),
+            reviewTaskId: null,
+            notificationFound: false,
+          };
+          await runRepo.save(run);
+        }
+        return {
+          approvalRequired: false,
+          reviewTaskId: null,
+          notificationFound: false,
+          reused: completedReplay,
+        };
+      }
 
       let ownerId: string | null;
       let leadId: string | null = null;
@@ -812,6 +849,9 @@ export class NextBestActionsService {
       }
       current.status = 'PENDING_APPROVAL';
       await recommendationRepo.save(current);
+      run.status = WorkflowStatus.PARTIAL;
+      run.claimExpiresAt = null;
+      run.finishedAt = null;
       run.outputPayload = {
         ...(run.outputPayload ?? {}),
         reviewTaskId: current.reviewTaskId,
@@ -826,6 +866,7 @@ export class NextBestActionsService {
           dto.entityType === 'Lead'
             ? 'REVIEW_TASK_AND_NOTIFICATION'
             : 'OWNER_NOTIFICATION',
+        reused: completedReplay,
       };
     });
   }
