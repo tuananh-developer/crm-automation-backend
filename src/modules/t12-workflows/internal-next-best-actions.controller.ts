@@ -1,6 +1,5 @@
 import {
   Body,
-  ConflictException,
   Controller,
   Get,
   Headers,
@@ -18,8 +17,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
-import { NextBestActionsService, WF10_NAME } from './next-best-actions.service.js';
-import { WorkflowExecutionClaimsService } from './workflow-execution-claims.service.js';
+import { NextBestActionsService } from './next-best-actions.service.js';
 import {
   NextBestActionCallbackDto,
   NextBestActionReviewDto,
@@ -33,7 +31,6 @@ import {
 export class InternalNextBestActionsController {
   constructor(
     private readonly service: NextBestActionsService,
-    private readonly claims: WorkflowExecutionClaimsService,
   ) {}
 
   @Get('entity-context')
@@ -57,23 +54,8 @@ export class InternalNextBestActionsController {
       'A competing execution receives HTTP 409 before AI processing. Retrying the claim from the winning execution is idempotent.',
   })
   @ApiBody({ type: ClaimNextBestActionContextDto })
-  async claimAndGetEntityContext(@Body() dto: ClaimNextBestActionContextDto) {
-    const context = await this.service.getEntityProfile(
-      dto.entityType,
-      dto.entityId,
-      dto.workflowRunId,
-    );
-    const claim = await this.claims.claim({
-      workflowRunId: dto.workflowRunId,
-      workflowName: WF10_NAME,
-      n8nExecutionId: dto.n8nExecutionId,
-    });
-    if (!claim.claimed) {
-      throw new ConflictException(
-        'WorkflowRun is already claimed by another n8n execution or is no longer active',
-      );
-    }
-    return context;
+  claimAndGetEntityContext(@Body() dto: ClaimNextBestActionContextDto) {
+    return this.service.claimAndGetEntityContext(dto);
   }
 
   @Get('intelligence-context')
