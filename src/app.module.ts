@@ -27,7 +27,6 @@ import { validateEnvironmentConfiguration } from './config/environment.validatio
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      validate: validateEnvironmentConfiguration,
       envFilePath: [
         `.env.${process.env.NODE_ENV || 'development'}.local`,
         `.env.${process.env.NODE_ENV || 'development'}`,
@@ -41,6 +40,10 @@ import { validateEnvironmentConfiguration } from './config/environment.validatio
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
+        // Validate at provider initialization rather than ConfigModule import time.
+        // This preserves runtime env overrides used by E2E fixtures and test harnesses.
+        validateEnvironmentConfiguration(process.env);
+
         const isProd =
           (config.get<string>('NODE_ENV') || '').trim().toLowerCase() ===
           'production';
