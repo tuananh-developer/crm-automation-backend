@@ -9,6 +9,9 @@ type WorkflowNode = {
     url?: string;
     jsonBody?: string;
     options?: { timeout?: number };
+    conditions?: {
+      conditions?: Array<{ leftValue?: string }>;
+    };
   };
   retryOnFail?: boolean;
   maxTries?: number;
@@ -81,11 +84,19 @@ describe('Tuấn Anh T12 workflow exports', () => {
       }
 
       for (const node of functionalNodes) {
-        if (node.type !== 'n8n-nodes-base.httpRequest') continue;
-        expect(node.parameters?.options?.timeout).toBeGreaterThan(0);
-        expect(node.retryOnFail).toBe(true);
-        expect(node.maxTries).toBeGreaterThanOrEqual(3);
-        expect(node.waitBetweenTries).toBeGreaterThan(0);
+        if (node.type === 'n8n-nodes-base.httpRequest') {
+          expect(node.parameters?.options?.timeout).toBeGreaterThan(0);
+          expect(node.retryOnFail).toBe(true);
+          expect(node.maxTries).toBeGreaterThanOrEqual(3);
+          expect(node.waitBetweenTries).toBeGreaterThan(0);
+        }
+        if (node.type === 'n8n-nodes-base.if') {
+          const conditions = node.parameters?.conditions?.conditions ?? [];
+          expect(conditions.length).toBeGreaterThan(0);
+          for (const condition of conditions) {
+            expect(condition.leftValue).toMatch(/^=\\{\\{.+\\}\\}$/);
+          }
+        }
       }
     },
   );
