@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
@@ -9,6 +9,14 @@ export class WorkflowExecutionClaimsService {
   constructor(private readonly dataSource: DataSource) {}
 
   async claim(dto: ClaimWorkflowExecutionDto) {
+    const n8nExecutionId =
+      typeof dto.n8nExecutionId === 'string' ? dto.n8nExecutionId.trim() : '';
+    if (!n8nExecutionId || n8nExecutionId.length > 255) {
+      throw new BadRequestException(
+        'n8nExecutionId must contain 1..255 non-whitespace characters',
+      );
+    }
+
     return this.dataSource.transaction(async (manager) => {
       const repository = manager.getRepository(WorkflowRun);
       const run = await repository.findOne({
@@ -39,7 +47,7 @@ export class WorkflowExecutionClaimsService {
 
       // A retry of the claim request from the same n8n execution is safe.
       // A different execution must stop before performing AI or side effects.
-      if (run.n8nExecutionId === dto.n8nExecutionId) {
+      if (run.n8nExecutionId === n8nExecutionId) {
         return {
           claimed: true,
           duplicate: true,
@@ -56,7 +64,7 @@ export class WorkflowExecutionClaimsService {
         };
       }
 
-      run.n8nExecutionId = dto.n8nExecutionId;
+      run.n8nExecutionId = n8nExecutionId;
       run.status = WorkflowStatus.RUNNING;
       await repository.save(run);
 
