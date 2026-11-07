@@ -228,34 +228,42 @@ describe('OutboxPublisher', () => {
     fetchSpy.mockRestore();
   });
 
-  it('schedules an exponential retry when publication fails', async () => {
+  it.each([
+    { attempts: 1, delayMs: 60_000 },
+    { attempts: 2, delayMs: 5 * 60_000 },
+    { attempts: 3, delayMs: 15 * 60_000 },
+  ])(
+    'schedules attempt $attempts retry according to the 1/5/15-minute policy',
+    async ({ attempts, delayMs }) => {
+      manager.query.mockResolvedValueOnce([{ ...event, attempts }]);
+      (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
+        new Error('broker unavailable'),
+      );
+
+      const before = Date.now();
+      await publisher.publishPendingEvents();
+
+      const update = (repository.update as jest.Mock).mock.calls[0][1] as {
+        status: OutboxEventStatus;
+        lastError: string;
+        nextAttemptAt: Date;
+      };
+      expect(update.status).toBe(OutboxEventStatus.PENDING);
+      expect(update.lastError).toBe('broker unavailable');
+      expect(update.nextAttemptAt).toBeInstanceOf(Date);
+      expect(update.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(
+        before + delayMs,
+      );
+      expect(update.nextAttemptAt.getTime()).toBeLessThanOrEqual(
+        Date.now() + delayMs,
+      );
+    },
+  );
+
+  it('moves an event to terminal failure on the fourth total attempt', async () => {
+    manager.query.mockResolvedValueOnce([{ ...event, attempts: 4 }]);
     (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
       new Error('broker unavailable'),
-    );
-
-    const before = Date.now();
-    await publisher.publishPendingEvents();
-
-    const update = (repository.update as jest.Mock).mock.calls[0][1] as {
-      status: OutboxEventStatus;
-      lastError: string;
-      nextAttemptAt: Date;
-    };
-    expect(update.status).toBe(OutboxEventStatus.PENDING);
-    expect(update.lastError).toBe('broker unavailable');
-    expect(update.nextAttemptAt).toBeInstanceOf(Date);
-    expect(update.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(
-      before + 60_000,
-    );
-    expect(update.nextAttemptAt.getTime()).toBeLessThanOrEqual(
-      Date.now() + 60_000,
-    );
-  });
-
-  it('moves an event to terminal failure after the retry limit', async () => {
-    manager.query.mockResolvedValueOnce([{ ...event, attempts: 10 }]);
-    (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
-      new Error('permanent broker failure'),
     );
 
     await publisher.publishPendingEvents();
@@ -264,7 +272,7 @@ describe('OutboxPublisher', () => {
       { id: event.id, lockToken: event.lockToken },
       expect.objectContaining({
         status: OutboxEventStatus.FAILED,
-        lastError: 'permanent broker failure',
+        lastError: 'broker unavailable',
         nextAttemptAt: null,
         lockedUntil: null,
         lockToken: null,

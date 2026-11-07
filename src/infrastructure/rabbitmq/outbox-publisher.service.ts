@@ -124,12 +124,11 @@ export class OutboxPublisher {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const retryDelaysMs = [60_000, 5 * 60_000, 15 * 60_000] as const;
       const terminal =
-        error instanceof PermanentOutboxError || event.attempts >= 10;
-      const delay = Math.min(
-        60_000 * 2 ** Math.min(event.attempts - 1, 6),
-        3_600_000,
-      );
+        error instanceof PermanentOutboxError || event.attempts >= 4;
+      const retryDelayMs =
+        retryDelaysMs[Math.min(Math.max(event.attempts - 1, 0), retryDelaysMs.length - 1)];
       await this.dataSource.transaction(async (manager) => {
         const updated = await manager.getRepository(OutboxEvent).update(
           { id: event.id, lockToken: event.lockToken },
@@ -138,7 +137,7 @@ export class OutboxPublisher {
               ? OutboxEventStatus.FAILED
               : OutboxEventStatus.PENDING,
             lastError: message.slice(0, 4000),
-            nextAttemptAt: terminal ? null : new Date(Date.now() + delay),
+            nextAttemptAt: terminal ? null : new Date(Date.now() + retryDelayMs),
             lockedUntil: null,
             lockToken: null,
           },
