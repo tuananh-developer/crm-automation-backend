@@ -9,7 +9,11 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import {
+  hasSamePayload,
+  isPostgresUniqueViolation,
+} from '../../common/utils/idempotency.util.js';
 import { ConversationTranscript } from './entities/conversation-transcript.entity.js';
 import { ConversationSummary } from './entities/conversation-summary.entity.js';
 import {
@@ -35,6 +39,16 @@ import {
 import { N8nWorkflowDispatchService } from './n8n-workflow-dispatch.service.js';
 
 export const WF09_NAME = 't12-wf09-conversation-summarizer';
+
+export interface IngestTranscriptResult {
+  message: string;
+  transcriptId: string;
+  workflowRunId: string;
+  processingStatus: WorkflowStatus;
+  redactedContent: string;
+  createdAt: Date | null;
+  reused?: boolean;
+}
 
 export enum TranscriptProcessingStatus {
   PENDING = 'PENDING',
@@ -179,7 +193,10 @@ export class ConversationsService {
    * Ingests a new conversation transcript and triggers AI Summarizer workflow (T12-WF09).
    * Atomically persists WorkflowRun, ConversationTranscript and OutboxEvent in one transaction.
    */
-  async createTranscript(dto: CreateTranscriptDto, user: AuthenticatedUser) {
+  async createTranscript(
+    dto: CreateTranscriptDto,
+    user: AuthenticatedUser,
+  ): Promise<IngestTranscriptResult> {
     const rawContent = dto.rawTranscript || dto.content;
     if (!rawContent || !rawContent.trim()) {
       throw new BadRequestException('Transcript content cannot be empty');
@@ -197,64 +214,121 @@ export class ConversationsService {
     const contentHash = createHash('sha256')
       .update(safeTranscript)
       .digest('hex');
-    const idempotencyKey = `wf09:${user.id}:${dto.idempotencyKey || randomUUID()}`;
+
+    // Deterministic client key: prefer explicitly passed key; fallback to content hash so repeated submissions without key are replay-safe
+    const clientKey = dto.idempotencyKey?.trim() || `content:${contentHash}`;
+    const idempotencyKey = `wf09:${user.id}:${clientKey}`;
+
+    const inputPayload = {
+      sourceType: dto.sourceType || 'CALL',
+      customerId: dto.customerId || null,
+      leadId: dto.leadId || null,
+      contentLength: safeTranscript.length,
+      contentHash,
+    };
 
     return this.dataSource.transaction(async (manager) => {
       const runRepo = manager.getRepository(WorkflowRun);
       const transcriptRepo = manager.getRepository(ConversationTranscript);
 
-      const workflowRun = runRepo.create({
-        workflowName: WF09_NAME,
-        status: WorkflowStatus.PENDING,
-        leadId: dto.leadId || null,
-        customerId: dto.customerId || null,
-        triggeredByUserId: user.id,
-        idempotencyKey,
-        inputPayload: {
-          sourceType: dto.sourceType || 'CALL',
-          customerId: dto.customerId || null,
+      const reuseExisting = async (existing: WorkflowRun) => {
+        if (existing.workflowName !== WF09_NAME) {
+          throw new ConflictException(
+            `Idempotency key is already used by another workflow: ${existing.workflowName}`,
+          );
+        }
+        if (!hasSamePayload(existing.inputPayload, inputPayload)) {
+          throw new ConflictException(
+            'Idempotency key was already used with a different transcript payload',
+          );
+        }
+        const existingTranscript = await transcriptRepo.findOne({
+          where: { workflowRunId: existing.id },
+        });
+
+        this.logger.log(
+          `Replaying existing transcript for idempotencyKey=${idempotencyKey}`,
+        );
+
+        return {
+          message: 'Transcript ingested and AI summarization initiated',
+          transcriptId: existingTranscript?.id || existing.id,
+          workflowRunId: existing.id,
+          processingStatus: existing.status,
+          redactedContent: existingTranscript?.redactedText || safeTranscript,
+          createdAt: existingTranscript?.createdAt || existing.startedAt,
+          reused: true,
+        };
+      };
+
+      const existingRun = await runRepo.findOne({
+        where: { idempotencyKey },
+      });
+      if (existingRun) {
+        return await reuseExisting(existingRun);
+      }
+
+      try {
+        const workflowRun = runRepo.create({
+          workflowName: WF09_NAME,
+          status: WorkflowStatus.PENDING,
           leadId: dto.leadId || null,
-          contentLength: safeTranscript.length,
-        },
-      });
-      const savedRun = await runRepo.save(workflowRun);
+          customerId: dto.customerId || null,
+          triggeredByUserId: user.id,
+          idempotencyKey,
+          inputPayload,
+        });
+        const savedRun = await runRepo.save(workflowRun);
 
-      const transcript = transcriptRepo.create({
-        meetingId: dto.meetingId || null,
-        workflowRunId: savedRun.id,
-        sourceType: dto.sourceType || 'CALL',
-        redactedText: safeTranscript,
-        redactionMode: 'PII_REDACTION+backend',
-        contentHash,
-        idempotencyKey,
-      });
-      const savedTranscript = await transcriptRepo.save(transcript);
+        const transcript = transcriptRepo.create({
+          meetingId: dto.meetingId || null,
+          workflowRunId: savedRun.id,
+          sourceType: dto.sourceType || 'CALL',
+          redactedText: safeTranscript,
+          redactionMode: 'PII_REDACTION+backend',
+          contentHash,
+          idempotencyKey,
+        });
+        const savedTranscript = await transcriptRepo.save(transcript);
 
-      // Persist durable HTTP outbox event in the same transaction
-      await this.dispatcher.enqueue(
-        manager,
-        'N8N_WF09_WEBHOOK_URL',
-        'internal/t12-wf09-conversation-summarizer',
-        {
+        // Persist durable HTTP outbox event in the same transaction
+        await this.dispatcher.enqueue(
+          manager,
+          'N8N_WF09_WEBHOOK_URL',
+          'internal/t12-wf09-conversation-summarizer',
+          {
+            transcriptId: savedTranscript.id,
+            workflowRunId: savedRun.id,
+            customerId: dto.customerId || null,
+            leadId: dto.leadId || null,
+            sourceType: savedTranscript.sourceType,
+            redactedContent: safeTranscript,
+            createdBy: user.id,
+            timestamp: new Date().toISOString(),
+          },
+        );
+
+        return {
+          message: 'Transcript ingested and AI summarization initiated',
           transcriptId: savedTranscript.id,
           workflowRunId: savedRun.id,
-          customerId: dto.customerId || null,
-          leadId: dto.leadId || null,
-          sourceType: savedTranscript.sourceType,
-          redactedContent: safeTranscript,
-          createdBy: user.id,
-          timestamp: new Date().toISOString(),
-        },
-      );
-
-      return {
-        message: 'Transcript ingested and AI summarization initiated',
-        transcriptId: savedTranscript.id,
-        workflowRunId: savedRun.id,
-        processingStatus: savedRun.status,
-        redactedContent: savedTranscript.redactedText,
-        createdAt: savedTranscript.createdAt,
-      };
+          processingStatus: savedRun.status,
+          redactedContent: savedTranscript.redactedText,
+          createdAt: savedTranscript.createdAt,
+          reused: false,
+        };
+      } catch (error) {
+        if (!isPostgresUniqueViolation(error)) {
+          throw error;
+        }
+        const concurrent = await runRepo.findOne({
+          where: { idempotencyKey },
+        });
+        if (!concurrent) {
+          throw error;
+        }
+        return await reuseExisting(concurrent);
+      }
     });
   }
 

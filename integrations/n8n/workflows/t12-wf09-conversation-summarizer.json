@@ -4,7 +4,8 @@
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "t12-wf09-conversation-summarizer",
+        "path": "internal/t12-wf09-conversation-summarizer",
+        "authentication": "headerAuth",
         "responseMode": "onReceived",
         "responseData": "firstEntryJson",
         "options": {}
@@ -16,7 +17,15 @@
       "position": [
         100,
         300
-      ]
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_AFTER_IMPORT",
+          "name": "CRM Internal Webhook Header"
+        }
+      },
+      "notes": "The webhook must use the CRM Internal Webhook Header credential. Only NestJS outbox publisher may dispatch; browsers must never call it.",
+      "notesInFlow": true
     },
     {
       "parameters": {
@@ -239,40 +248,6 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/notifications/internal/create' }}",
-        "method": "POST",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            },
-            {
-              "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY }}"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"userId\": {{ JSON.stringify($('Code: Validate Transcript').first().json.createdBy || $('HTTP Request: Save Conversation Summary').first().json.ownerId || $('HTTP Request: Save Conversation Summary').first().json.createdBy || $('HTTP Request: Get CRM Context').first().json.ownerId || $('HTTP Request: Get CRM Context').first().json.createdBy) }},\n  \"type\": \"WORKFLOW_COMPLETED\",\n  \"severity\": \"INFO\",\n  \"title\": \"Conversation Summarized\",\n  \"message\": \"AI summary and action items are available for transcript.\",\n  \"customerId\": {{ JSON.stringify($('Code: Validate Transcript').first().json.customerId || undefined) }},\n  \"leadId\": {{ JSON.stringify($('Code: Validate Transcript').first().json.leadId || undefined) }}\n}",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "onError": "continueRegularOutput",
-      "id": "node-11-notify-owner",
-      "name": "HTTP Request: Notify Owner",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [
-        2300,
-        300
-      ]
-    },
-    {
-      "parameters": {
         "jsCode": "// 12. Code: Build Final Summary — return result IDs and final status\nconst parsed = $('Code: Parse and Validate Summary/Actions').first().json;\nconst callbackRes = $('HTTP Request: Save Conversation Summary').first().json;\n\nreturn [{\n  json: {\n    status: parsed.status,\n    transcriptId: parsed.transcriptId,\n    workflowRunId: parsed.workflowRunId,\n    summaryId: callbackRes.summaryId || null,\n    actionItemCount: parsed.actionItems ? parsed.actionItems.length : 0,\n    sentiment: parsed.sentiment,\n    intent: parsed.intent,\n    completedAt: new Date().toISOString()\n  }\n}];"
       },
       "id": "node-12-build-final-summary",
@@ -280,7 +255,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2520,
+        2300,
         300
       ]
     }
@@ -386,17 +361,6 @@
       ]
     },
     "HTTP Request: Save Pending Action Items": {
-      "main": [
-        [
-          {
-            "node": "HTTP Request: Notify Owner",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HTTP Request: Notify Owner": {
       "main": [
         [
           {
