@@ -146,6 +146,9 @@ Apply DTO cannot force safety/approval; the backend reloads each target and enfo
 - `GET/POST /api/v1/customer-contracts`; `GET/PATCH /api/v1/customer-contracts/:contractId`.
 - `GET /api/v1/customer-contracts/due-for-renewal`.
 - `POST /api/v1/internal/n8n/workflow-executions/claim` — machine-authenticated, atomic WorkflowRun execution claim. Requires `workflowRunId`, an allowlisted T12 `workflowName`, and the n8n `n8nExecutionId`; only the first distinct active execution may continue to AI processing, while retries from that same execution are idempotent.
+- `POST /api/v1/internal/n8n/next-best-actions/claim-and-entity-context` — validate WF10 entity/run scope, atomically claim the run, then return its context; a competing execution receives HTTP 409.
+- `POST /api/v1/internal/n8n/quotes/claim-and-entity-context` — validate WF12 entity/run scope, atomically claim the run, then return its context; a competing execution receives HTTP 409.
+- `POST /api/v1/internal/n8n/conversation-transcripts` — WF11 transcript requests include `n8nExecutionId`; the backend claims the run and saves the redacted transcript in one locked transaction, rejecting a different execution before AI processing.
 - `GET/POST /api/v1/customer-contracts/:contractId/renewal-attempts`; `GET /api/v1/renewal-attempts/:attemptId`.
 
 ## 10. Dashboard, workflow runs, notification and Communication APIs
