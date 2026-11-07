@@ -682,7 +682,7 @@ describe('FollowUpService', () => {
 
     it('should throw BadRequestException when the email channel needs an address that the lead does not have', async () => {
       (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(
-        buildEnrollment({ lead: buildLead({ email: null }) }),
+        buildEnrollment({ lead: buildLead({ email: undefined }) }),
       );
       (stepsRepository.findOne as jest.Mock).mockResolvedValue(
         buildStep({ channel: 'EMAIL', actionType: 'SEND_EMAIL' }),
