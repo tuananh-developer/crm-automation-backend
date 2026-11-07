@@ -134,7 +134,7 @@ describe('QuotesService workflow execution ownership', () => {
       subtotal: '200.00',
       taxTotal: '20.00',
       totalAmount: '220.00',
-      pricingSnapshot: expect.objectContaining({ pricingSource: undefined }),
+      pricingSnapshot: expect.objectContaining({ currency: 'VND', subtotal: '200.00', totalAmount: '220.00' }),
     }));
     expect(quoteItemRepository.save).toHaveBeenCalledWith([
       expect.objectContaining({
