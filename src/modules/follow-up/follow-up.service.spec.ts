@@ -250,7 +250,12 @@ describe('FollowUpService', () => {
         channel: 'PHONE',
         actionType: 'SCHEDULE_CALL',
       });
-      (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(unsupportedStep);
+      (stepsRepository.findOne as jest.Mock)
+        .mockReset()
+        .mockResolvedValueOnce(unsupportedStep)
+        .mockResolvedValueOnce(
+          buildStep({ id: 'step-2', stepOrder: 2 }),
+        );
 
       const result = await service.execute(dto);
 
@@ -264,6 +269,19 @@ describe('FollowUpService', () => {
           responsePayload: expect.objectContaining({
             code: 'FOLLOW_UP_ACTION_UNSUPPORTED',
           }),
+        }),
+      );
+      expect(executionsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enrollmentId: 'enrollment-1',
+          stepId: 'step-2',
+          status: ExecutionStatus.PENDING,
+        }),
+      );
+      expect(enrollmentsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentStepId: 'step-2',
+          status: EnrollmentStatus.ACTIVE,
         }),
       );
       expect(auditLogRepository.save).toHaveBeenCalledWith(
