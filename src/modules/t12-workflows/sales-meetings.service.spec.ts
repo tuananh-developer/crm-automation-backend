@@ -1,8 +1,10 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import type { DataSource, Repository } from 'typeorm';
 import { SalesMeetingsService } from './sales-meetings.service.js';
+import { redactMeetingTranscript } from './utils/transcript-redaction.util.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import type { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import type { Lead } from '../leads/entities/lead.entity.js';
@@ -141,6 +143,46 @@ describe('SalesMeetingsService persistence idempotency', () => {
     );
     expect(repositories.ConversationTranscript.save).not.toHaveBeenCalled();
     expect(repositories.WorkflowRun.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blank n8n execution ID before opening a transaction', async () => {
+    await expect(
+      service.saveTranscript({ ...transcriptDto, n8nExecutionId: '   ' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('reuses a transcript when the winning n8n execution retries the same payload', async () => {
+    const redactedText = redactMeetingTranscript(transcriptDto.transcript);
+    const contentHash = createHash('sha256').update(redactedText).digest('hex');
+
+    repositories.SalesMeeting.findOne.mockResolvedValue({
+      ...meeting,
+      transcriptId: 'transcript-1',
+    });
+    repositories.WorkflowRun.findOne.mockResolvedValue({
+      ...workflowRun,
+      n8nExecutionId: transcriptDto.n8nExecutionId,
+    });
+    repositories.ConversationTranscript.findOne.mockResolvedValue({
+      id: 'transcript-1',
+      meetingId: 'meeting-1',
+      workflowRunId: 'run-1',
+      sourceType: transcriptDto.sourceType,
+      contentHash,
+      idempotencyKey: 'wf11:run-1:transcript',
+    });
+
+    await expect(service.saveTranscript(transcriptDto)).resolves.toMatchObject({
+      id: 'transcript-1',
+      workflowRunId: 'run-1',
+      reused: true,
+    });
+
+    expect(repositories.WorkflowRun.save).not.toHaveBeenCalled();
+    expect(repositories.ConversationTranscript.save).not.toHaveBeenCalled();
+    expect(repositories.SalesMeeting.save).not.toHaveBeenCalled();
   });
 
   it('rejects a transcript idempotency key reused with different content', async () => {
