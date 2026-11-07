@@ -88,6 +88,7 @@ export class InternalNextBestActionsController {
       query.entityType,
       query.entityId,
       query.workflowRunId,
+      query.n8nExecutionId,
     );
   }
 
