@@ -149,6 +149,18 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
       expect(apiKeyHeader).toBeDefined();
       expect(apiKeyHeader.value).toBe('={{ $env.N8N_API_KEY }}');
     });
+
+    it('includes stable idempotencyKey in hot-lead notification payload matching wf04:<workflowRunId>:hot:<userId>', () => {
+      const wf = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+      const notifyNode = wf.nodes.find(
+        (n: { name: string }) =>
+          n.name === 'HTTP Request: Backend Next-Action/Notification',
+      );
+      expect(notifyNode).toBeDefined();
+      expect(notifyNode.parameters.jsonBody).toContain('idempotencyKey');
+      expect(notifyNode.parameters.jsonBody).toContain('wf04:');
+      expect(notifyNode.parameters.jsonBody).toContain(':hot:');
+    });
   });
 
   describe('n8n Runtime Execution: Aggregate Features & Degraded Read Policy', () => {
@@ -840,6 +852,118 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
           leadId: 'lead-unowned',
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('deduplicates duplicate scoring redelivery and creates only 1 notification using idempotencyKey wf04:<workflowRunId>:hot:<userId>', async () => {
+      const storedNotifications: Notification[] = [];
+      (notificationsRepo.findOne as jest.Mock) = jest
+        .fn()
+        .mockImplementation(
+          ({ where }: { where: { idempotencyKey?: string } }) => {
+            if (!where?.idempotencyKey) return Promise.resolve(null);
+            return Promise.resolve(
+              storedNotifications.find(
+                (n) => n.idempotencyKey === where.idempotencyKey,
+              ) ?? null,
+            );
+          },
+        );
+      (notificationsRepo.save as jest.Mock) = jest
+        .fn()
+        .mockImplementation((entity: Notification) => {
+          const saved: Notification = {
+            ...entity,
+            id: entity.id || 'notif-saved-1',
+            createdAt: entity.createdAt || new Date(),
+          };
+          storedNotifications.push(saved);
+          return Promise.resolve(saved);
+        });
+
+      const workflowRunId = 'run-scoring-hot-123';
+      const userId = 'owner-uuid-123';
+      const idempotencyKey = `wf04:${workflowRunId}:hot:${userId}`;
+
+      const payload = {
+        userId,
+        type: NotificationType.WORKFLOW_COMPLETED,
+        title: '🔥 Hot Lead Opportunity',
+        message: 'Lead scored 90 (HOT). Immediate sales outreach recommended.',
+        severity: 'HIGH',
+        leadId: 'lead-hot-1',
+        idempotencyKey,
+      };
+
+      // First delivery from n8n workflow
+      const notif1 = await notificationsService.create(payload);
+      expect(notif1).toBeDefined();
+      expect(notif1.idempotencyKey).toBe(idempotencyKey);
+      expect(storedNotifications).toHaveLength(1);
+
+      // Replay / redelivery with duplicate payload & identical idempotency key
+      const notif2 = await notificationsService.create(payload);
+      expect(notif2).toBeDefined();
+      expect(notif2.id).toBe(notif1.id);
+      expect(storedNotifications).toHaveLength(1);
+      expect(notificationsRepo.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('handles concurrent race condition during duplicate redelivery via unique constraint violation', async () => {
+      const workflowRunId = 'run-scoring-race-456';
+      const userId = 'owner-uuid-456';
+      const idempotencyKey = `wf04:${workflowRunId}:hot:${userId}`;
+
+      const existingNotif: Notification = {
+        id: 'notif-race-1',
+        userId,
+        type: NotificationType.WORKFLOW_COMPLETED,
+        title: '🔥 Hot Lead Opportunity',
+        content: 'Lead scored 90 (HOT). Immediate sales outreach recommended.',
+        leadId: 'lead-hot-1',
+        customerId: null,
+        reviewTaskId: null,
+        isRead: false,
+        readAt: null,
+        severity: 'HIGH',
+        idempotencyKey,
+        createdAt: new Date(),
+      };
+
+      let findCount = 0;
+      (notificationsRepo.findOne as jest.Mock) = jest
+        .fn()
+        .mockImplementation(() => {
+          findCount++;
+          // On first lookup before save, entity is not found yet
+          if (findCount === 1) return Promise.resolve(null);
+          // On race recovery lookup after unique constraint violation, existing entity is returned
+          return Promise.resolve(existingNotif);
+        });
+
+      // Simulate Postgres UQ_notifications_idempotency_key conflict
+      const uniqueError = Object.assign(
+        new Error(
+          'duplicate key value violates unique constraint "UQ_notifications_idempotency_key"',
+        ),
+        { code: '23505', constraint: 'UQ_notifications_idempotency_key' },
+      );
+      (notificationsRepo.save as jest.Mock) = jest
+        .fn()
+        .mockRejectedValue(uniqueError);
+
+      const notif = await notificationsService.create({
+        userId,
+        type: NotificationType.WORKFLOW_COMPLETED,
+        title: '🔥 Hot Lead Opportunity',
+        message: 'Lead scored 90 (HOT). Immediate sales outreach recommended.',
+        severity: 'HIGH',
+        leadId: 'lead-hot-1',
+        idempotencyKey,
+      });
+
+      expect(notif.id).toBe('notif-race-1');
+      expect(notif.idempotencyKey).toBe(idempotencyKey);
+      expect(notificationsRepo.findOne).toHaveBeenCalledTimes(2);
     });
   });
 });

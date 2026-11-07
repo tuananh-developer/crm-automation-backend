@@ -306,7 +306,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  type: 'WORKFLOW_COMPLETED',\n  title: '🔥 Hot Lead Opportunity',\n  message: 'Lead scored ' + $('Code: Validate Canonical Score').item.json.score + ' (HOT). Immediate sales outreach recommended.',\n  severity: 'HIGH',\n  leadId: $('Code: Validate Canonical Score').item.json.leadId,\n  userId: $('HTTP Request: Get Lead').item.json.ownerId || $('Code: Aggregate Features').item.json.lead?.ownerId || undefined\n}) }}",
+        "jsonBody": "={{ JSON.stringify({\n  type: 'WORKFLOW_COMPLETED',\n  title: '🔥 Hot Lead Opportunity',\n  message: 'Lead scored ' + $('Code: Validate Canonical Score').item.json.score + ' (HOT). Immediate sales outreach recommended.',\n  severity: 'HIGH',\n  leadId: $('Code: Validate Canonical Score').item.json.leadId,\n  userId: $('HTTP Request: Get Lead').item.json.ownerId || $('Code: Aggregate Features').item.json.lead?.ownerId || undefined,\n  idempotencyKey: 'wf04:' + $('Code: Validate Canonical Score').item.json.workflowRunId + ':hot:' + ($('HTTP Request: Get Lead').item.json.ownerId || $('Code: Aggregate Features').item.json.lead?.ownerId || '')\n}) }}",
         "options": {
           "timeout": 10000
         }
