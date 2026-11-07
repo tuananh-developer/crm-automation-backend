@@ -98,9 +98,8 @@ export class SegmentsController {
   @ApiPaginatedResponse(SegmentResponseDto, 'Paginated list of segments.')
   findAll(
     @Query() query: QuerySegmentDto,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
-    return this.segmentsService.findAll(query, actor);
+    return this.segmentsService.findAll(query, undefined as any);
   }
 
   @Get(':id')
@@ -150,9 +149,8 @@ export class SegmentsController {
   @ApiResponse({ status: 404, description: 'Segment not found.' })
   remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<DeleteSegmentResponseDto> {
-    return this.segmentsService.remove(id, actor);
+    return this.segmentsService.remove(id);
   }
 
   @Get(':id/customers')
@@ -176,9 +174,8 @@ export class SegmentsController {
   getCustomers(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: QuerySegmentDto,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
-    return this.segmentsService.getCustomers(id, query, actor);
+    return this.segmentsService.getCustomers(id, query);
   }
 
   @Post(':id/evaluate')
@@ -205,9 +202,8 @@ export class SegmentsController {
   evaluateCustomer(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: EvaluateSegmentDto,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<EvaluateSegmentResponseDto> {
-    return this.segmentsService.evaluateCustomer(id, dto, actor);
+    return this.segmentsService.evaluateCustomer(id, dto);
   }
 
   @Post(':id/evaluate-all')
@@ -231,8 +227,7 @@ export class SegmentsController {
   evaluateAll(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: EvaluateSegmentBulkDto,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<EvaluateSegmentBulkResponseDto> {
-    return this.segmentsService.evaluateAll(id, dto, actor);
+    return this.segmentsService.evaluateAll(id, dto);
   }
 }

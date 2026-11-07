@@ -1,3 +1,4 @@
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   BadRequestException,
   ConflictException,
@@ -50,13 +51,13 @@ export class SegmentsService {
     private readonly workflowRunRepository: Repository<WorkflowRun>,
   ) {}
 
-  async create(dto: CreateSegmentDto): Promise<SegmentResponseDto> {
+  async create(dto: CreateSegmentDto, actor: AuthenticatedUser): Promise<SegmentResponseDto> {
     const user = await this.usersRepository.findOne({
-      where: { id: dto.createdBy },
+      where: { id: actor.id },
     });
 
     if (!user) {
-      throw new NotFoundException(`User with ID '${dto.createdBy}' not found`);
+      throw new NotFoundException(`User with ID '${actor.id}' not found`);
     }
 
     const existing = await this.segmentsRepository.findOne({
@@ -74,7 +75,7 @@ export class SegmentsService {
       description: dto.description ?? null,
       criteria: dto.criteria,
       isActive: dto.isActive ?? true,
-      createdBy: dto.createdBy,
+      createdBy: actor.id,
       updatedBy: null,
     });
 
@@ -87,6 +88,7 @@ export class SegmentsService {
 
   async findAll(
     query: QuerySegmentDto,
+    actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -147,7 +149,7 @@ export class SegmentsService {
     };
   }
 
-  async findOne(id: string): Promise<SegmentResponseDto> {
+  async findOne(id: string, actor: AuthenticatedUser): Promise<SegmentResponseDto> {
     const segment = await this.segmentsRepository.findOne({
       where: { id },
       relations: {
@@ -169,7 +171,7 @@ export class SegmentsService {
     );
   }
 
-  async update(id: string, dto: UpdateSegmentDto): Promise<SegmentResponseDto> {
+  async update(id: string, dto: UpdateSegmentDto, actor: AuthenticatedUser): Promise<SegmentResponseDto> {
     const segment = await this.segmentsRepository.findOne({
       where: { id },
       relations: {
@@ -196,18 +198,18 @@ export class SegmentsService {
 
     let updater: User | null = segment.updater ?? null;
 
-    if (dto.createdBy) {
+    if (true) {
       const user = await this.usersRepository.findOne({
-        where: { id: dto.createdBy },
+        where: { id: actor.id },
       });
 
       if (!user) {
         throw new NotFoundException(
-          `User with ID '${dto.createdBy}' not found`,
+          `User with ID '${actor.id}' not found`,
         );
       }
 
-      segment.updatedBy = dto.createdBy;
+      segment.updatedBy = actor.id;
       updater = user;
     }
 
