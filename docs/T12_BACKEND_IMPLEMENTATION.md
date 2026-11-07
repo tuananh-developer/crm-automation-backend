@@ -54,7 +54,7 @@ Internal n8n routes (`N8nAuthGuard`):
 - `POST /api/v1/internal/n8n/conversation-summaries/:summaryId/action-items`
 - `POST /api/v1/internal/n8n/sales-meetings/notify`
 
-Transcript is redacted once by NestJS before dispatch and again by the n8n minimization node. Redaction is conservative pattern-based minimization (email/phone/common ID patterns), not certified DLP. Do not send regulated/highly sensitive recordings until a vetted DLP/retention policy is approved. This patch receives transcript text from an authorized API caller; it does not implement calendar/recording provider connectors.
+Transcript is redacted by NestJS before dispatch and again by the n8n minimization node. The backend redactor covers email, phone/identifier, credential key/value, account-number, address and names exposed by common honorific/label patterns. This remains heuristic pattern-based minimization, not certified DLP: names without identifying context and arbitrary sensitive prose may remain. In production, WF11 transcript processing is blocked unless `TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED=true` is explicitly set after data classification, provider terms and retention policy are approved; the default is false. Do not send regulated/highly sensitive recordings without a vetted DLP/retention policy. This patch receives transcript text from an authorized API caller; it does not implement calendar/recording provider connectors.
 
 AI-proposed action items are always saved as `PENDING_CONFIRMATION`; an authorized user must confirm/reject them. Summary notifications are in-app and idempotent.
 
@@ -94,7 +94,9 @@ Before running `pnpm migration:run`, back up the target database and confirm the
 
 - `BACKEND_INTERNAL_URL` — n8n URL used by HTTP Request nodes, e.g. `http://host.docker.internal:3000` when n8n runs in Docker and backend runs on host; choose a reachable URL for your deployment.
 - `N8N_API_KEY` (or `N8N_WEBHOOK_SECRET`) — shared secret. Internal HTTP Request nodes send `X-N8N-API-KEY`; dispatch sends same header to protected n8n webhook.
-- `N8N_BASE_URL` or per-flow `N8N_WF10_WEBHOOK_URL`, `N8N_WF11_WEBHOOK_URL`, `N8N_WF12_WEBHOOK_URL` — n8n webhook dispatch destination.
+- `N8N_BASE_URL` or per-flow `N8N_WF10_WEBHOOK_URL`, `N8N_WF11_WEBHOOK_URL`, `N8N_WF12_WEBHOOK_URL` — n8n webhook dispatch destination. Production requires HTTPS for these URLs and `N8N_WEBHOOK_BASE_URL`.
+- `TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED` — defaults to `false`; set to `true` only after the WF11 transcript-to-AI data-processing policy is approved. Production requests are rejected with HTTP 503 while disabled, and transcript-bearing outbox deliveries are blocked.
+- Production requires `DATABASE_URL` with `USE_LOCAL_DB=false` and `RABBITMQ_URL` using `amqps://`; startup fails closed instead of falling back to local DB/broker defaults.
 - `GEMINI_API_KEY`, optional `GEMINI_MODEL` — configured in n8n for Gemini nodes.
 - `QUOTE_APPROVAL_THRESHOLD` — monetary approval threshold; `0`/unset means all quotes require approval.
 
