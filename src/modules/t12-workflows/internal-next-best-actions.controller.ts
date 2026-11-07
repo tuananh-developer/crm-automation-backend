@@ -1,5 +1,6 @@
 import {
   Body,
+  ConflictException,
   Controller,
   Get,
   Headers,
@@ -17,18 +18,23 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
-import { NextBestActionsService } from './next-best-actions.service.js';
+import { NextBestActionsService, WF10_NAME } from './next-best-actions.service.js';
+import { WorkflowExecutionClaimsService } from './workflow-execution-claims.service.js';
 import {
   NextBestActionCallbackDto,
   NextBestActionReviewDto,
   NextBestActionContextQueryDto,
+  ClaimNextBestActionContextDto,
 } from './dto/index.js';
 
 @ApiTags('Internal n8n — WF10 Next Best Action')
 @Controller('internal/n8n/next-best-actions')
 @UseGuards(N8nAuthGuard)
 export class InternalNextBestActionsController {
-  constructor(private readonly service: NextBestActionsService) {}
+  constructor(
+    private readonly service: NextBestActionsService,
+    private readonly claims: WorkflowExecutionClaimsService,
+  ) {}
 
   @Get('entity-context')
   @ApiOperation({ summary: 'Read scoped Lead/Customer profile for WF10' })
@@ -41,6 +47,33 @@ export class InternalNextBestActionsController {
       query.entityId,
       query.workflowRunId,
     );
+  }
+
+  @Post('claim-and-entity-context')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Atomically claim a WF10 execution and return its scoped entity profile',
+    description:
+      'A competing execution receives HTTP 409 before AI processing. Retrying the claim from the winning execution is idempotent.',
+  })
+  @ApiBody({ type: ClaimNextBestActionContextDto })
+  async claimAndGetEntityContext(@Body() dto: ClaimNextBestActionContextDto) {
+    const context = await this.service.getEntityProfile(
+      dto.entityType,
+      dto.entityId,
+      dto.workflowRunId,
+    );
+    const claim = await this.claims.claim({
+      workflowRunId: dto.workflowRunId,
+      workflowName: WF10_NAME,
+      n8nExecutionId: dto.n8nExecutionId,
+    });
+    if (!claim.claimed) {
+      throw new ConflictException(
+        'WorkflowRun is already claimed by another n8n execution or is no longer active',
+      );
+    }
+    return context;
   }
 
   @Get('intelligence-context')
