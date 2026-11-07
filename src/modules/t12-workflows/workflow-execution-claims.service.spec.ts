@@ -110,7 +110,10 @@ describe('WorkflowExecutionClaimsService', () => {
     run.n8nExecutionId = request.n8nExecutionId;
     run.status = WorkflowStatus.RUNNING;
 
-    const result = await service.claim({ ...request, n8nExecutionId: '  execution-1  ' });
+    const result = await service.claim({
+      ...request,
+      n8nExecutionId: '  execution-1  ',
+    });
 
     expect(result).toEqual({
       claimed: true,
