@@ -236,14 +236,10 @@ export class QuotesService {
         where: { id: leadId },
         select: {
           id: true,
-          firstName: true,
-          lastName: true,
-          email: true,
           companyName: true,
           companyWebsite: true,
           jobTitle: true,
           industry: true,
-          ownerId: true,
         },
       });
       if (!lead) throw new NotFoundException('Lead not found');
@@ -253,13 +249,10 @@ export class QuotesService {
       where: { id: customerId! },
       select: {
         id: true,
-        name: true,
-        email: true,
         companyName: true,
         companyWebsite: true,
         jobTitle: true,
         industry: true,
-        createdBy: true,
       },
     });
     if (!customer) throw new NotFoundException('Customer not found');
