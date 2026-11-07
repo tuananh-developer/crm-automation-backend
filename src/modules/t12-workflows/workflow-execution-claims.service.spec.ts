@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
@@ -78,11 +79,38 @@ describe('WorkflowExecutionClaimsService', () => {
     });
   });
 
+  it('rejects a whitespace-only execution ID before opening a transaction', async () => {
+    await expect(
+      service.claim({ ...request, n8nExecutionId: '  \n\t ' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('trims the execution ID before persisting the claim', async () => {
+    const result = await service.claim({
+      ...request,
+      n8nExecutionId: '  execution-1  ',
+    });
+
+    expect(result).toEqual({
+      claimed: true,
+      duplicate: false,
+      status: WorkflowStatus.RUNNING,
+    });
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        n8nExecutionId: 'execution-1',
+        status: WorkflowStatus.RUNNING,
+      }),
+    );
+  });
+
   it('allows an idempotent retry from the same n8n execution', async () => {
     run.n8nExecutionId = request.n8nExecutionId;
     run.status = WorkflowStatus.RUNNING;
 
-    const result = await service.claim(request);
+    const result = await service.claim({ ...request, n8nExecutionId: '  execution-1  ' });
 
     expect(result).toEqual({
       claimed: true,
