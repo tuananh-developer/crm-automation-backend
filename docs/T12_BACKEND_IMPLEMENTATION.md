@@ -87,6 +87,10 @@ The quote entity-context endpoint returns only company/profile attributes (no co
 
 WF10/WF12 use an atomic execution claim with a 20-minute default lease. WF10 renews while fetching final context before AI; WF12 renews when loading the catalog. WF11 claims and sets the lease in the same locked transaction that persists the backend-redacted transcript, then renews when fetching meeting context. The lease is configurable with `N8N_WORKFLOW_CLAIM_LEASE_SECONDS` (60–3600 seconds). An expired claim can be recovered by a new n8n execution under a row lock. The shared Error Trigger export is `integrations/n8n/workflows/t12-error-handler.json`; transactional outbox dispatch uses the common 1/5/15-minute retry delays and four total attempts before terminal failure. after import, select it as the Error Workflow in each WF10/WF11/WF12 workflow. It records only an allowlisted error category and failed-node label; it never sends raw provider errors or stack traces to NestJS. A failure before the first claim can terminally fail an unclaimed active run when the Error Handler recovers its `workflowRunId`; a stale failure from an execution that has been replaced is rejected. The error handler must not be assigned to itself.
 
+## Shared execution failure handling
+
+The shared n8n Error Trigger export is used by WF01/WF08/WF10/WF11/WF12. It maps the display workflow name to the persisted backend workflow name and posts only `workflowRunId`, `workflowName`, `n8nExecutionId`, a stable `errorCategory` and the failed node label. It never forwards the provider error message, stack trace or request payload. WF01/WF08 can fail before any execution claim; WF10/WF11/WF12 require the current claim owner after they have claimed a run. An Error Handler association is still an instance-level n8n setting and must be recorded during runtime acceptance.
+
 ## Shared persistence and migration
 
 - `WorkflowRun.idempotencyKey` and `Notification.idempotencyKey` are nullable with unique partial indexes.
