@@ -3,7 +3,9 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
 import { DataSource, In, Repository, type EntityManager } from 'typeorm';
@@ -53,7 +55,26 @@ export class SalesMeetingsService {
     private readonly actionItems: Repository<ConversationActionItem>,
     private readonly dataSource: DataSource,
     private readonly dispatcher: N8nWorkflowDispatchService,
+    private readonly config: ConfigService,
   ) {}
+
+  private assertTranscriptExternalProcessingAllowed(): void {
+    const nodeEnv = (
+      this.config.get<string>('NODE_ENV') || process.env.NODE_ENV || ''
+    )
+      .trim()
+      .toLowerCase();
+    const explicitlyEnabled =
+      (this.config.get<string>('TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED') || '')
+        .trim()
+        .toLowerCase() === 'true';
+
+    if (nodeEnv === 'production' && !explicitlyEnabled) {
+      throw new ServiceUnavailableException(
+        'External transcript processing is disabled by production policy',
+      );
+    }
+  }
 
   private requireKey(key?: string): string {
     if (!key || key.length < 8 || key.length > 180)
@@ -66,6 +87,7 @@ export class SalesMeetingsService {
     actor: AuthenticatedUser,
     rawKey?: string,
   ) {
+    this.assertTranscriptExternalProcessingAllowed();
     const key = 'WF11:' + actor.id + ':' + this.requireKey(rawKey);
     const safeTranscript = redactMeetingTranscript(dto.transcript);
     if (safeTranscript.length < 20 || safeTranscript.length > 120000) {
