@@ -170,6 +170,30 @@ describe('Tuấn Anh T12 workflow exports', () => {
     expect(wf11Url).toMatch(/^=\{=?.*\}\}$/);
   });
 
+  it('keeps WF10 AI context free of free-form CRM explanations and labels', () => {
+    const workflow = readWorkflow(
+      'integrations/n8n/workflows/t12-wf10-next-best-action.json',
+    );
+    const builder = workflow.nodes.find(
+      (node) => node.name === 'Code: Generate Candidate Actions',
+    )?.parameters?.jsCode ?? '';
+    for (const field of [
+      'qualification.reason',
+      'qualification.intent',
+      'score.reason',
+      'sequenceName',
+      'segmentName',
+      'subject',
+      'content',
+    ]) {
+      expect(builder).not.toContain(field);
+    }
+    expect(builder).toContain('qualificationStatus');
+    expect(builder).toContain('scoreLabel');
+    expect(builder).toContain('sequenceId');
+    expect(builder).toContain('segmentId');
+  });
+
   it('routes WF10 approval using the backend policy and forwards the execution identity', () => {
     const workflow = readWorkflow(
       'integrations/n8n/workflows/t12-wf10-next-best-action.json',
