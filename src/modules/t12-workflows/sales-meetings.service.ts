@@ -126,6 +126,11 @@ export class SalesMeetingsService {
       );
     }
     const transcriptHash = createHash('sha256').update(safeTranscript).digest('hex');
+    // Meeting-purpose text is also user supplied and can contain contact data.
+    // Store and dispatch only the backend-minimized representation.
+    const safeMeetingPurpose = dto.meetingPurpose
+      ? redactMeetingTranscript(dto.meetingPurpose).slice(0, 500) || null
+      : null;
     if (Boolean(dto.leadId) === Boolean(dto.customerId)) {
       throw new BadRequestException(
         'Exactly one of leadId or customerId is required',
@@ -173,7 +178,7 @@ export class SalesMeetingsService {
       leadId: lead?.id ?? null,
       customerId: customer?.id ?? null,
       attendeeIds: [...dto.attendeeIds].sort(),
-      meetingPurpose: dto.meetingPurpose ?? null,
+      meetingPurpose: safeMeetingPurpose,
       scheduledAt: dto.scheduledAt ?? null,
       sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT',
       transcriptHash,
@@ -226,7 +231,7 @@ export class SalesMeetingsService {
             leadId: lead?.id ?? null,
             customerId: customer?.id ?? null,
             attendeeIds: [...new Set(dto.attendeeIds)],
-            meetingPurpose: dto.meetingPurpose ?? null,
+            meetingPurpose: safeMeetingPurpose,
             scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
             sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT',
             status: 'PROCESSING',
@@ -246,7 +251,7 @@ export class SalesMeetingsService {
             meetingId: meeting.id,
             workflowRunId: run.id,
             attendeeIds: [...new Set(dto.attendeeIds)],
-            meetingPurpose: dto.meetingPurpose ?? null,
+            meetingPurpose: safeMeetingPurpose,
             transcript: safeTranscript,
             sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT',
             requestedBy: actor.id,
@@ -358,7 +363,7 @@ export class SalesMeetingsService {
       meeting: {
         id: meeting.id,
         workflowRunId: meeting.workflowRunId,
-        meetingPurpose: meeting.meetingPurpose,
+        meetingPurpose: meeting.meetingPurpose ? redactMeetingTranscript(meeting.meetingPurpose).slice(0, 500) : null,
         scheduledAt: meeting.scheduledAt,
       },
       lead,
