@@ -40,7 +40,7 @@ User management routes are protected by JWT and Admin role checks. Sales assignm
 | **UC02** | **AI Lead Qualification** | `lead-intelligence` | Đánh giá sơ bộ chất lượng Lead tự động bằng Google Gemini theo tiêu chuẩn BANT/CHAMP qua n8n. Tự duyệt nếu điểm $\ge 0.8$, chuyển Review nếu $< 0.8$. |
 | **UC03** | **AI Lead Enrichment** | `lead-intelligence` | Tự động làm giàu hồ sơ doanh nghiệp (quy mô, website, ngành nghề) và người liên hệ qua external providers. |
 | **UC04** | **AI Lead Scoring** | `lead-intelligence` | Chấm điểm tiềm năng Lead theo thang 0 - 100, phân loại nhãn `HOT`, `WARM`, `COLD` dựa trên dữ liệu nhân khẩu học và lịch sử tương tác. |
-| **UC05** | **Enroll Follow-up Cadence** | `follow-up` | Định nghĩa chuỗi kịch bản nuôi dưỡng nhiều bước (Email/SMS/Webhook) và ghi danh Lead vào kịch bản. |
+| **UC05** | **Enroll Follow-up Cadence** | `follow-up` | Định nghĩa chuỗi chăm sóc nhiều bước; phiên bản hiện tại chỉ kích hoạt được `EMAIL / SEND_EMAIL` cho đến khi có adapter cho các kênh khác. |
 | **UC06** | **Execute Follow-up** | `follow-up` | Cron job & Webhook thực thi tự động các bước chăm sóc đến hạn, quản lý lịch sử gửi, cơ chế Retry lũy tiến khi gặp sự cố. |
 | **UC07** | **Human-in-the-Loop Review** | `review`, `notifications` | Hộp thư cho nhân viên kinh doanh xét duyệt quyết định AI (`APPROVE`, `REJECT`, `MODIFY`) và gửi thông báo Notification. |
 | **UC08** | **Convert Lead to Customer** | `leads`, `customers` | Chuyển đổi Lead đủ điều kiện sang Khách hàng, tự động chống trùng lặp theo Email/SĐT và ghi Audit Log. |
@@ -121,6 +121,27 @@ cp .env.example .env
 Both the NestJS runtime connection and the TypeORM migration CLI use the same PostgreSQL SSL configuration helper. SSL-related query parameters in `DATABASE_URL` (`ssl`, `sslmode`, `sslrootcert`, `sslcert`, and `sslkey`) are extracted before the URL is passed to node-postgres, preventing them from replacing the explicit TLS options. Other query parameters, such as `application_name` and `channel_binding`, are preserved.
 
 When TLS is enabled, certificate-chain and hostname verification remain enabled. `sslrootcert`, `sslcert`, and `sslkey` may contain file paths; alternatively, `DB_SSL_CA` accepts PEM-encoded CA certificate content. Set `DB_SSL=true` for a custom database host that requires TLS but does not advertise it through the URL.
+
+### Follow-up Email Delivery (UC06)
+
+The backend owns SMTP delivery. The n8n workflow only forwards the persisted execution ID to the internal Communication endpoint; it must not contain SMTP credentials or recipient/message content.
+
+Configure these values in the **backend** environment:
+
+| Variable | Purpose |
+| --- | --- |
+| `SMTP_HOST` | SMTP server hostname |
+| `SMTP_PORT` | SMTP port (commonly `587` for STARTTLS or `465` for implicit TLS) |
+| `SMTP_SECURE` | `true` for implicit TLS; `false` for STARTTLS |
+| `SMTP_FROM_EMAIL` | Sender address |
+| `SMTP_USER` / `SMTP_PASS` | SMTP authentication credentials |
+| `N8N_API_KEY` | Shared secret used by the backend to call the protected n8n webhook |
+
+Configure the same `N8N_API_KEY` in the n8n runtime environment, and set `BACKEND_INTERNAL_URL` there to a URL reachable from the n8n process. Import `integrations/n8n/workflows/uc06-follow-up-execution.json` after configuring those variables. Do not commit actual credentials.
+
+**Channel support:** active `EMAIL / SEND_EMAIL` steps are the only supported delivery action in this release. Creating/updating an active step or enrolling into a sequence with unsupported active actions is rejected. Legacy scheduled steps for unsupported channels are marked `SKIPPED`; the enrollment advances to the next step or completes.
+
+**Retry and duplicate-send safety:** definite retryable failures are bounded to four delivery attempts, with follow-up delays of 1, 5, and 15 minutes. A timeout, connection reset, or lost acknowledgement can mean the SMTP server accepted the message even when the backend did not receive confirmation. Such deliveries are marked `UNKNOWN` and are not automatically resent. Check the SMTP provider's delivery logs before any operator-led reconciliation; do not blindly reset an `UNKNOWN` delivery to a retryable state.
 
 ### Bước 4: Chạy Migration & Nạp dữ liệu mẫu
 ```bash
