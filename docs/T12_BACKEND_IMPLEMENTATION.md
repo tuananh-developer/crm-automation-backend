@@ -28,6 +28,7 @@ User routes:
 
 Internal n8n routes (`N8nAuthGuard`):
 
+- `POST /api/v1/internal/n8n/next-best-actions/claim-and-entity-context` — validates entity/run scope and claims the active WorkflowRun before returning context; competing executions receive HTTP 409.
 - `GET /api/v1/internal/n8n/next-best-actions/entity-context`
 - `GET /api/v1/internal/n8n/next-best-actions/intelligence-context`
 - `GET /api/v1/internal/n8n/next-best-actions/interactions`
@@ -47,7 +48,7 @@ User routes:
 
 Internal n8n routes (`N8nAuthGuard`):
 
-- `POST /api/v1/internal/n8n/conversation-transcripts`
+- `POST /api/v1/internal/n8n/conversation-transcripts` — requires the current `n8nExecutionId`; atomically claims the WorkflowRun and persists the redacted transcript in one locked transaction.
 - `GET /api/v1/internal/n8n/sales-meetings/:meetingId/context`
 - `POST /api/v1/internal/n8n/sales-meetings/:meetingId/summary`
 - `POST /api/v1/internal/n8n/conversation-summaries/:summaryId/action-items`
@@ -71,6 +72,7 @@ User routes:
 
 Internal n8n routes (`N8nAuthGuard`):
 
+- `POST /api/v1/internal/n8n/quotes/claim-and-entity-context` — validates quote entity/run scope and claims the active WorkflowRun before returning context; competing executions receive HTTP 409.
 - `GET /api/v1/internal/n8n/quotes/entity-context`
 - `GET /api/v1/internal/n8n/catalog/items`
 - `POST /api/v1/internal/n8n/quotes/price-preview`
