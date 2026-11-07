@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ObserveModule } from './observe.js';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -24,6 +25,16 @@ import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
 
 @Module({
   imports: [
+    ObserveModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        appKey: config.get<string>('OBSERVE_APP_KEY'),
+        appSecret: config.get<string>('OBSERVE_APP_SECRET'),
+        serviceId: 'crm-automation-backend',
+        enabled: config.get<string>('NODE_ENV') === 'production',
+      }),
+    }),
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: [
