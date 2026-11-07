@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
+import nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
 
 import { SendCommunicationDto } from './dto/send-communication.dto.js';
 
@@ -23,7 +24,7 @@ interface IdempotencyRecord {
 @Injectable()
 export class CommunicationService {
   private readonly logger = new Logger(CommunicationService.name);
-  private transporter: nodemailer.Transporter | null = null;
+  private transporter: Transporter | null = null;
   private readonly isProd: boolean;
   private readonly idempotencyStore = new Map<string, IdempotencyRecord>();
   private readonly inFlight = new Map<
