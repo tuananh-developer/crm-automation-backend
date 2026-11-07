@@ -78,7 +78,7 @@ export class SequencesService {
       );
     }
 
-    let createdBy = dto.createdBy;
+    let createdBy: string | null = null;
     if (!createdBy) {
       // Find a default user (admin / first user)
       const [defaultUser] = await this.usersRepository.find({
@@ -191,8 +191,8 @@ export class SequencesService {
         ? FollowUpSequenceStatus.ACTIVE
         : FollowUpSequenceStatus.PAUSED;
     }
-    if (dto.updatedBy !== undefined) {
-      sequence.updatedBy = dto.updatedBy ?? null;
+    if (true) {
+      sequence.updatedBy = null;
     }
 
     const updated = await this.sequencesRepository.save(sequence);

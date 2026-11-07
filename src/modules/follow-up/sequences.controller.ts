@@ -70,9 +70,8 @@ export class SequencesController {
   })
   createSequence(
     @Body() dto: CreateSequenceDto,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<FollowUpSequenceResponseDto> {
-    return this.sequencesService.createSequence(dto, actor);
+    return this.sequencesService.createSequence(dto);
   }
 
   @Get(['sequences', ''])
@@ -130,7 +129,6 @@ export class SequencesController {
     isArray: true,
   })
   findAllEnrollments(
-    @CurrentUser() actor: AuthenticatedUser,
     @Query('leadId') leadId?: string,
     @Query('sequenceId') sequenceId?: string,
     @Query('status') status?: EnrollmentStatus,
@@ -141,7 +139,6 @@ export class SequencesController {
         sequenceId,
         status,
       },
-      actor,
     );
   }
 
@@ -160,9 +157,8 @@ export class SequencesController {
   @ApiResponse({ status: 404, description: 'Lead not found.' })
   findEnrollmentsByLead(
     @Param('leadId', ParseUUIDPipe) leadId: string,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto[]> {
-    return this.sequencesService.findEnrollmentsByLead(leadId, actor);
+    return this.sequencesService.findEnrollmentsByLead(leadId);
   }
 
   @Get('enrollments/:id')
@@ -180,9 +176,8 @@ export class SequencesController {
   @ApiResponse({ status: 404, description: 'Enrollment not found.' })
   findEnrollmentById(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
-    return this.sequencesService.findEnrollmentById(id, actor);
+    return this.sequencesService.findEnrollmentById(id);
   }
 
   @Patch('enrollments/:id/cancel')
@@ -205,10 +200,9 @@ export class SequencesController {
   @ApiResponse({ status: 404, description: 'Enrollment not found.' })
   cancelEnrollment(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() actor: AuthenticatedUser,
     @Body() dto?: CancelEnrollmentDto,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
-    return this.sequencesService.cancelEnrollment(id, dto, actor);
+    return this.sequencesService.cancelEnrollment(id, dto);
   }
 
   @Patch('enrollments/:id/pause')
@@ -229,9 +223,8 @@ export class SequencesController {
   @ApiResponse({ status: 404, description: 'Enrollment not found.' })
   pauseEnrollment(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
-    return this.sequencesService.pauseEnrollment(id, actor);
+    return this.sequencesService.pauseEnrollment(id);
   }
 
   @Patch('enrollments/:id/resume')
@@ -253,9 +246,8 @@ export class SequencesController {
   @ApiResponse({ status: 404, description: 'Enrollment not found.' })
   resumeEnrollment(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto> {
-    return this.sequencesService.resumeEnrollment(id, actor);
+    return this.sequencesService.resumeEnrollment(id);
   }
 
   @Post('enroll')
@@ -281,9 +273,8 @@ export class SequencesController {
   })
   enrollLeadDirect(
     @Body() dto: EnrollLeadDto,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<SequenceLeadEnrollmentResponseDto> {
-    return this.sequencesService.enrollLead(dto, actor);
+    return this.sequencesService.enrollLead(dto);
   }
 
   // ── Sequence By ID & Steps Endpoints ────────────────────────────────────────
@@ -322,9 +313,8 @@ export class SequencesController {
   updateSequence(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSequenceDto,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<FollowUpSequenceResponseDto> {
-    return this.sequencesService.updateSequence(id, dto, actor);
+    return this.sequencesService.updateSequence(id, dto);
   }
 
   @Delete(['sequences/:id', ':id'])
@@ -341,7 +331,6 @@ export class SequencesController {
   @ApiResponse({ status: 404, description: 'Sequence not found.' })
   deleteSequence(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<FollowUpSequenceResponseDto> {
     return this.sequencesService.updateSequence(
       id,
@@ -349,7 +338,6 @@ export class SequencesController {
         status: FollowUpSequenceStatus.ARCHIVED,
         isActive: false,
       },
-      actor,
     );
   }
 
@@ -461,14 +449,12 @@ export class SequencesController {
   enrollLead(
     @Param('id', ParseUUIDPipe) sequenceId: string,
     @Body() dto: EnrollLeadDto,
-    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<SequenceLeadEnrollmentResponseDto> {
     return this.sequencesService.enrollLead(
       {
         ...dto,
         sequenceId,
       },
-      actor,
     );
   }
 }
