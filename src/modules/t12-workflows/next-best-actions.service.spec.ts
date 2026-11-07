@@ -182,6 +182,88 @@ describe('NextBestActionsService entity context', () => {
     expect(emptyRepository.find).not.toHaveBeenCalled();
   });
 
+  it('returns company-only Customer context without contact identifiers', async () => {
+    const customerId = '33333333-3333-4333-8333-333333333333';
+    workflowRuns.findOne.mockResolvedValue({
+      id: workflowRunId,
+      workflowName: WF10_NAME,
+      customerId,
+      leadId: null,
+      status: WorkflowStatus.PENDING,
+    });
+    customers.findOne.mockResolvedValue({
+      id: customerId,
+      companyName: 'Acme',
+      companyWebsite: 'https://acme.example',
+      jobTitle: 'CFO',
+      companySize: 80,
+      industry: 'Software',
+      status: 'ACTIVE',
+    });
+
+    await expect(service.getEntityProfile('Customer', customerId, workflowRunId))
+      .resolves.toEqual({
+        data: {
+          id: customerId,
+          companyName: 'Acme',
+          companyWebsite: 'https://acme.example',
+          jobTitle: 'CFO',
+          companySize: 80,
+          industry: 'Software',
+          status: 'ACTIVE',
+          entityType: 'Customer',
+        },
+      });
+    expect(customers.findOne).toHaveBeenCalledWith({
+      where: { id: customerId },
+      select: {
+        id: true,
+        companyName: true,
+        companyWebsite: true,
+        jobTitle: true,
+        companySize: true,
+        industry: true,
+        status: true,
+      },
+    });
+  });
+
+  it('returns interaction evidence metadata without subjects or message contents', async () => {
+    workflowRuns.findOne.mockResolvedValue({
+      id: workflowRunId,
+      workflowName: WF10_NAME,
+      leadId,
+      customerId: null,
+      status: WorkflowStatus.RUNNING,
+    });
+    emptyRepository.find.mockResolvedValue([{
+      id: 'interaction-1',
+      leadId,
+      type: 'CALL',
+      channel: 'PHONE',
+      subject: 'Sensitive subject',
+      content: 'Sensitive customer conversation',
+      occurredAt: new Date(),
+    }]);
+
+    const result = await service.getInteractionHistory('Lead', leadId, workflowRunId);
+
+    expect(result.items).toEqual([{
+      id: 'interaction-1',
+      type: 'CALL',
+      channel: 'PHONE',
+      occurredAt: expect.any(Date),
+    }]);
+    expect(emptyRepository.find).toHaveBeenCalledWith(expect.objectContaining({
+      select: {
+        id: true,
+        type: true,
+        channel: true,
+        occurredAt: true,
+      },
+    }));
+  });
+
   it('rejects context reads for terminal workflow runs', async () => {
     workflowRuns.findOne.mockResolvedValue({ id: workflowRunId, workflowName: WF10_NAME, leadId, customerId: null, status: WorkflowStatus.SUCCESS });
     await expect(service.getEntityProfile('Lead', leadId, workflowRunId))
