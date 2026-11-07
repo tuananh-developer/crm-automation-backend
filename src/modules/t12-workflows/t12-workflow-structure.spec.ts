@@ -94,7 +94,8 @@ describe('Tuấn Anh T12 workflow exports', () => {
           const conditions = node.parameters?.conditions?.conditions ?? [];
           expect(conditions.length).toBeGreaterThan(0);
           for (const condition of conditions) {
-            expect(condition.leftValue).toMatch(/^=\\{\\{.+\\}\\}$/);
+            expect(condition.leftValue?.startsWith('={{')).toBe(true);
+            expect(condition.leftValue?.endsWith('}}')).toBe(true);
           }
         }
       }
