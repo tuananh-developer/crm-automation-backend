@@ -1,5 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
+import {
+  IsIn,
+  IsString,
+  IsUUID,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class NextBestActionContextQueryDto {
   @ApiProperty({ enum: ['Lead', 'Customer'] })
@@ -21,6 +28,6 @@ export class ClaimNextBestActionContextDto extends NextBestActionContextQueryDto
   @IsString()
   @MinLength(1)
   @MaxLength(255)
-  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  @Matches(/\S/, { message: 'n8nExecutionId must not be blank' })
   n8nExecutionId!: string;
 }
