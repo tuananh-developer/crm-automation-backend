@@ -316,6 +316,10 @@ export class SalesMeetingsService {
 
     const redactedText = redactMeetingTranscript(dto.transcript);
     const hash = createHash('sha256').update(redactedText).digest('hex');
+    const n8nExecutionId = dto.n8nExecutionId?.trim();
+    if (!n8nExecutionId || n8nExecutionId.length > 255) {
+      throw new BadRequestException('A valid n8nExecutionId is required');
+    }
     const idempotencyKey = `wf11:${dto.workflowRunId}:transcript`;
 
     return this.dataSource.transaction(async (manager) => {
@@ -324,6 +328,17 @@ export class SalesMeetingsService {
         dto.meetingId,
         dto.workflowRunId,
       );
+      if (run.n8nExecutionId && run.n8nExecutionId !== n8nExecutionId) {
+        throw new ConflictException(
+          'WorkflowRun is already claimed by another n8n execution',
+        );
+      }
+      if (!run.n8nExecutionId) {
+        run.n8nExecutionId = n8nExecutionId;
+        run.status = WorkflowStatus.RUNNING;
+        await manager.getRepository(WorkflowRun).save(run);
+      }
+
       const transcriptRepository = manager.getRepository(ConversationTranscript);
       const existing = await transcriptRepository.findOne({
         where: { idempotencyKey },
