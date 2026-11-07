@@ -89,6 +89,7 @@ Each JSON contains exactly 12 functional nodes including one trigger. IF/Switch 
 - [ ] Pending reviews/tasks, partial/failure state, retry, DLQ and mock-source provenance are visible to permitted roles.
 - [ ] Unit, API/contract, integration, authorization, privacy and end-to-end test suites pass.
 - [ ] Migrations/recovery procedures are documented and exercised in a disposable environment.
+- [ ] Shared n8n Error Trigger is imported and assigned to WF10/WF11/WF12; failure callbacks mark the owning WorkflowRun terminal without storing raw errors.
 - [ ] All 15 workflow owners provide runtime evidence and the team reviews all cross-workflow contracts.
 - [ ] PlantUML sources render successfully in the team's tooling and match the written contracts.
 

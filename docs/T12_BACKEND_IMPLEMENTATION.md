@@ -81,11 +81,15 @@ Internal n8n routes (`N8nAuthGuard`):
 
 NestJS recomputes all prices/taxes from the active catalog and the original WorkflowRun request. Model-provided prices/discounts are ignored. V1 does not support discounts. `QUOTE_APPROVAL_THRESHOLD` defaults to `0`, which intentionally requires approval for every quote until a business threshold is formally agreed. Quote approvals are stored in a dedicated `quote_approvals` table because existing ReviewTask requires a Lead. Admin approval/rejection finalizes the quote WorkflowRun.
 
+## Shared execution recovery
+
+WF10/WF12 use an atomic execution claim with a 20-minute default lease. WF10 renews while fetching final context before AI; WF12 renews when loading the catalog. WF11 claims and sets the lease in the same locked transaction that persists the backend-redacted transcript, then renews when fetching meeting context. The lease is configurable with `N8N_WORKFLOW_CLAIM_LEASE_SECONDS` (60–3600 seconds). An expired claim can be recovered by a new n8n execution under a row lock. The shared Error Trigger export is `integrations/n8n/workflows/t12-error-handler.json`; after import, select it as the Error Workflow in each WF10/WF11/WF12 workflow. It records only an allowlisted error category and failed-node label; it never sends raw provider errors or stack traces to NestJS. The error handler must not be assigned to itself.
+
 ## Shared persistence and migration
 
 - `WorkflowRun.idempotencyKey` and `Notification.idempotencyKey` are nullable with unique partial indexes.
 - New domain tables: next_best_action_recommendations, sales_meetings, conversation_transcripts, conversation_summaries, conversation_action_items, product_catalog_items, quotes, quote_items, quote_approvals.
-- Migration: `1793476800000-AddT12WorkflowDomains`.
+- Migrations: `1793476800000-AddT12WorkflowDomains` and `1793477100000-AddWorkflowExecutionClaimLease`.
 - The migration is registered in `src/data-source.ts`. `AppModule` registers `T12WorkflowsModule`.
 
 Before running `pnpm migration:run`, back up the target database and confirm the correct environment/database URL. The shell installer does not run migrations or touch the database.
@@ -99,11 +103,13 @@ Before running `pnpm migration:run`, back up the target database and confirm the
 - Production requires `DATABASE_URL` with `USE_LOCAL_DB=false` and `RABBITMQ_URL` using `amqps://`; startup fails closed instead of falling back to local DB/broker defaults.
 - `GEMINI_API_KEY`, optional `GEMINI_MODEL` — configured in n8n for Gemini nodes.
 - `QUOTE_APPROVAL_THRESHOLD` — monetary approval threshold; `0`/unset means all quotes require approval.
+- `N8N_WORKFLOW_CLAIM_LEASE_SECONDS` — execution claim lease duration, default `1200`, minimum `60`, maximum `3600`.
 
 ## Workflow exports included
 
 - WF08 `uc10-ai-crm-data-cleaning.json` — callback corrected to the existing `/api/v1/data-cleaning/callback` route.
 - WF11 `t12-wf11-sales-meeting.json` and WF12 `t12-wf12-quote-proposal.json` — updated to match internal routes in this patch.
 - WF01 is intentionally not overwritten; retain the already-installed WF01 backend patch.
-- WF10 workflow JSON already matches internal route names in the current five-workflow bundle.
+- WF10 workflow JSON matches internal route names and sends its n8n execution ID for claim-lease renewal.
+- `t12-error-handler.json` is the shared failure callback workflow; it must be imported and selected manually as each business workflow's Error Workflow after import.
 - WF02/WF03/WF04 workflows are untouched.
