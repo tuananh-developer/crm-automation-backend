@@ -1,5 +1,6 @@
 import {
   Body,
+  ConflictException,
   Controller,
   Get,
   Headers,
@@ -13,18 +14,23 @@ import {
 } from '@nestjs/common';
 import { ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
-import { QuotesService } from './quotes.service.js';
+import { QuotesService, WF12_NAME } from './quotes.service.js';
+import { WorkflowExecutionClaimsService } from './workflow-execution-claims.service.js';
 import {
   CreateQuoteInternalDto,
   QuotePricePreviewDto,
   SubmitQuoteApprovalDto,
+  ClaimQuoteEntityContextDto,
 } from './dto/index.js';
 
 @ApiTags('Internal n8n — WF12 Quote & Proposal')
 @Controller('internal/n8n/quotes')
 @UseGuards(N8nAuthGuard)
 export class InternalQuotesController {
-  constructor(private readonly service: QuotesService) {}
+  constructor(
+    private readonly service: QuotesService,
+    private readonly claims: WorkflowExecutionClaimsService,
+  ) {}
 
   @Get('entity-context')
   @ApiOperation({
@@ -36,6 +42,32 @@ export class InternalQuotesController {
     @Query('workflowRunId') workflowRunId?: string,
   ) {
     return this.service.getEntityContext(customerId, leadId, workflowRunId);
+  }
+
+  @Post('claim-and-entity-context')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Validate quote context and atomically claim the WF12 execution',
+    description:
+      'A competing execution receives HTTP 409 before AI proposal generation. A retry from the winning execution is idempotent.',
+  })
+  async claimAndGetEntityContext(@Body() dto: ClaimQuoteEntityContextDto) {
+    const context = await this.service.getEntityContext(
+      dto.customerId,
+      dto.leadId,
+      dto.workflowRunId,
+    );
+    const claim = await this.claims.claim({
+      workflowRunId: dto.workflowRunId,
+      workflowName: WF12_NAME,
+      n8nExecutionId: dto.n8nExecutionId,
+    });
+    if (!claim.claimed) {
+      throw new ConflictException(
+        'WorkflowRun is already claimed by another n8n execution or is no longer active',
+      );
+    }
+    return context;
   }
 
   @Post('price-preview')
