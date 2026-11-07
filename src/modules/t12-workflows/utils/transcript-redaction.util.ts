@@ -13,6 +13,10 @@ export function redactMeetingTranscript(input: string): string {
       '$1=[REDACTED_SECRET]',
     )
     .replace(/\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]){11,30}\b/giu, '[REDACTED_IDENTIFIER]')
+    .replace(
+      /\b(?:bank\s+account|account(?:\s+(?:number|no\.?))?|acct|routing(?:\s+number)?|số\s+tài\s+khoản|stk)\s*[:#-]?\s*(?:[A-Z]{2}\d{2}[A-Z0-9 ]{10,30}|(?:\d[ -]?){7,34})/giu,
+      '[REDACTED_IDENTIFIER]',
+    )
     .replace(/(?:\+?\d[\d .()-]{7,}\d)/g, '[REDACTED_PHONE]')
     .replace(/(?<!\d)(?:\d[ -]?){8,34}(?!\d)/g, '[REDACTED_IDENTIFIER]')
     .replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED_IDENTIFIER]')
