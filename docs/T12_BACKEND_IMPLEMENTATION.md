@@ -4,7 +4,7 @@ This patch implements backend API and persistence support for the five workflows
 
 ## Existing prerequisites
 
-- WF01 Lead Intelligence internal routes/controller/service were delivered in the earlier `wf01-backend-patch`. Keep that code; this patch does not overwrite it. The user previously reported 56/56 passing tests for the two WF01 target suites.
+- WF01 Lead Intelligence internal routes/controller/service were delivered in the earlier `wf01-backend-patch`. Keep that code; this patch does not overwrite it. The user previously reported 56/56 passing tests for the two WF01 target suites. The current WF01 internal context APIs return only company/profile attributes and interaction metadata (IDs, type, channel and time); contact names, email, phone, notes, interaction subjects and message bodies are not copied into n8n execution data.
 - Existing Data Cleaning routes remain authoritative: `GET /api/v1/data-cleaning/scans/:workflowRunId/leads` and `POST /api/v1/data-cleaning/callback` are already guarded by `N8nAuthGuard`.
 - Root API prefix is `/api/v1`.
 
@@ -18,6 +18,8 @@ New internal routes:
 Both use `N8nAuthGuard`. The existing callback stays at `/api/v1/data-cleaning/callback`; the workflow export in this bundle is corrected to that actual route. Scan notification is idempotent and targets the requesting user only when persisted findings include human-review items. It does not apply data changes or create ReviewTask. Actual data changes still occur only through existing user-authenticated `applyCleaning()` after backend freshness/allowlist/transaction checks.
 
 The patch mutates the existing `DataCleaningService` and DTO barrel through an idempotent Python mutator to preserve local uncommitted changes; it does not replace the entire service file.
+
+WF08's Gemini prompt receives only company/profile fields and duplicate-candidate IDs/match metadata. Deterministic findings retain the source values in the backend report for authorized human review; those values are not included in the AI prompt.
 
 ## WF10 — Next Best Action
 
@@ -36,7 +38,7 @@ Internal n8n routes (`N8nAuthGuard`):
 - `POST /api/v1/internal/n8n/next-best-actions/callback`
 - `POST /api/v1/internal/n8n/next-best-actions/review`
 
-Backend allowlist is authoritative. The backend overwrites `requiresApproval` based on the allowlist and confidence; the model cannot downgrade an action's approval requirement. The recommendation callback keeps the execution claim active when approval is needed; the IF node reads the backend `requiresHumanApproval` field, and the review callback records the `n8nExecutionId`, creates/reuses the review or notification, then releases the claim. The non-approval path finalizes the run in the recommendation callback. Evidence IDs are verified against the authorized entity. Existing ReviewTask schema requires a Lead; Lead recommendations requiring review create/reuse a ReviewTask, while Customer recommendations create an owner notification and remain pending approval. No action is executed automatically.
+The WF10 profile endpoint returns only company/profile attributes; interaction context contains IDs, type, channel and timestamps, not message subjects/bodies or contact identifiers. Backend allowlist is authoritative. The backend overwrites `requiresApproval` based on the allowlist and confidence; the model cannot downgrade an action's approval requirement. The recommendation callback keeps the execution claim active when approval is needed; the IF node reads the backend `requiresHumanApproval` field, and the review callback records the `n8nExecutionId`, creates/reuses the review or notification, then releases the claim. The non-approval path finalizes the run in the recommendation callback. Evidence IDs are verified against the authorized entity. Existing ReviewTask schema requires a Lead; Lead recommendations requiring review create/reuse a ReviewTask, while Customer recommendations create an owner notification and remain pending approval. No action is executed automatically.
 
 ## WF11 — Sales Meeting
 
@@ -54,7 +56,7 @@ Internal n8n routes (`N8nAuthGuard`):
 - `POST /api/v1/internal/n8n/conversation-summaries/:summaryId/action-items`
 - `POST /api/v1/internal/n8n/sales-meetings/notify`
 
-Transcript is redacted by NestJS before dispatch and again by the n8n minimization node. The backend redactor covers email, phone/identifier, credential key/value, account-number, address and names exposed by common honorific/label patterns. This remains heuristic pattern-based minimization, not certified DLP: names without identifying context and arbitrary sensitive prose may remain. In production, WF11 transcript processing is blocked unless `TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED=true` is explicitly set after data classification, provider terms and retention policy are approved; the default is false. Do not send regulated/highly sensitive recordings without a vetted DLP/retention policy. This patch receives transcript text from an authorized API caller; it does not implement calendar/recording provider connectors.
+Transcript and meeting-purpose text are redacted by NestJS before dispatch and again minimized in n8n. Internal attendee context exposes only attendee IDs/roles and non-identifying company attributes; attendee names/emails are not included. Transcript is redacted by NestJS before dispatch and again by the n8n minimization node. The backend redactor covers email, phone/identifier, credential key/value, account-number, address and names exposed by common honorific/label patterns. This remains heuristic pattern-based minimization, not certified DLP: names without identifying context and arbitrary sensitive prose may remain. In production, WF11 transcript processing is blocked unless `TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED=true` is explicitly set after data classification, provider terms and retention policy are approved; the default is false. Do not send regulated/highly sensitive recordings without a vetted DLP/retention policy. This patch receives transcript text from an authorized API caller; it does not implement calendar/recording provider connectors.
 
 AI-proposed action items are always saved as `PENDING_CONFIRMATION`; an authorized user must confirm/reject them. Summary notifications are in-app and idempotent.
 
@@ -79,7 +81,7 @@ Internal n8n routes (`N8nAuthGuard`):
 - `POST /api/v1/internal/n8n/quotes`
 - `POST /api/v1/internal/n8n/quotes/:quoteId/submit-for-approval`
 
-NestJS recomputes all prices/taxes from the active catalog and the original WorkflowRun request. Model-provided prices/discounts are ignored. V1 does not support discounts. `QUOTE_APPROVAL_THRESHOLD` defaults to `0`, which intentionally requires approval for every quote until a business threshold is formally agreed. Quote approvals are stored in a dedicated `quote_approvals` table because existing ReviewTask requires a Lead. Admin approval/rejection finalizes the quote WorkflowRun.
+The quote entity-context endpoint returns only company/profile attributes (no contact name, email or phone), and free-form requirements are pattern-redacted before Gemini. NestJS recomputes all prices/taxes from the active catalog and the original WorkflowRun request. Model-provided prices/discounts are ignored. V1 does not support discounts. `QUOTE_APPROVAL_THRESHOLD` defaults to `0`, which intentionally requires approval for every quote until a business threshold is formally agreed. Quote approvals are stored in a dedicated `quote_approvals` table because existing ReviewTask requires a Lead. Admin approval/rejection finalizes the quote WorkflowRun.
 
 ## Shared execution recovery
 
