@@ -25,9 +25,7 @@ import {
 @Controller('internal/n8n/quotes')
 @UseGuards(N8nAuthGuard)
 export class InternalQuotesController {
-  constructor(
-    private readonly service: QuotesService,
-  ) {}
+  constructor(private readonly service: QuotesService) {}
 
   @Get('entity-context')
   @ApiOperation({
