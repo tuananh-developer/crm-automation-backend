@@ -135,7 +135,7 @@ describe('Tuấn Anh T12 workflow exports', () => {
       (node) => node.name === 'HTTP Request: Get Product and Pricing Catalog',
     )?.parameters?.url;
     expect(catalogUrl).toContain('&n8nExecutionId=');
-    expect(catalogUrl).toMatch(/^=\{=?.*\}\$/);
+    expect(catalogUrl).toMatch(/^=\{=?.*\}\}$/);
   });
 
   it('keeps direct contact identifiers and free-form communication content out of AI prompts', () => {
