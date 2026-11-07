@@ -1106,15 +1106,17 @@ export async function runSeed(options?: { fresh?: boolean }): Promise<void> {
     const exec = executionRepository.create({
       enrollmentId: seededEnrollments[i].id,
       stepId: seededSteps[i].id,
+      // Seed rows must be terminal: workers must never send messages to
+      // placeholder/demo lead addresses during startup or after a fresh seed.
       status:
         i % 3 === 0
           ? ExecutionStatus.SUCCESS
           : i % 3 === 1
-            ? ExecutionStatus.PENDING
-            : ExecutionStatus.RUNNING,
+            ? ExecutionStatus.FAILED
+            : ExecutionStatus.SKIPPED,
       scheduledAt: new Date(Date.now() + i * 3600000),
       startedAt: new Date(),
-      completedAt: i % 3 === 0 ? new Date() : null,
+      completedAt: new Date(),
       providerMessageId: `msg_provider_id_${Date.now()}_${i + 1}`,
       requestPayload: {
         recipient: seededLeads[i].email,
