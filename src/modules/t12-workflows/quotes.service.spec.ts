@@ -7,6 +7,7 @@ describe('QuotesService entity context', () => {
   const runs = { findOne: jest.fn() };
   const leads = { findOne: jest.fn() };
   const customers = { findOne: jest.fn() };
+  const executionClaims = { claim: jest.fn() };
   const emptyRepository = { find: jest.fn().mockResolvedValue([]), findOne: jest.fn().mockResolvedValue(null) };
   let service: QuotesService;
 
@@ -17,6 +18,7 @@ describe('QuotesService entity context', () => {
       emptyRepository as never, emptyRepository as never, emptyRepository as never,
       emptyRepository as never, emptyRepository as never, emptyRepository as never,
       {} as never, {} as never, { get: jest.fn().mockReturnValue('0') } as never,
+      executionClaims as never,
     );
   });
 
@@ -31,6 +33,36 @@ describe('QuotesService entity context', () => {
       where: { id: customerId },
       select: expect.objectContaining({ id: true, email: true, createdBy: true }),
     }));
+  });
+
+  it('claims an active run before returning customer context', async () => {
+    const customer = { id: customerId, name: 'Acme Ltd', email: 'buyer@example.test' };
+    runs.findOne.mockResolvedValue({
+      id: workflowRunId, workflowName: WF12_NAME, customerId, leadId: null,
+    });
+    customers.findOne.mockResolvedValue(customer);
+    executionClaims.claim.mockResolvedValue({ claimed: true });
+
+    await expect(service.claimAndGetEntityContext({
+      customerId, workflowRunId, n8nExecutionId: 'n8n-execution-1',
+    })).resolves.toEqual({ entityType: 'Customer', entity: customer, workflowRunId });
+    expect(executionClaims.claim).toHaveBeenCalledWith({
+      workflowRunId, workflowName: WF12_NAME, n8nExecutionId: 'n8n-execution-1',
+    });
+  });
+
+  it('rejects a competing execution before returning customer context', async () => {
+    runs.findOne.mockResolvedValue({
+      id: workflowRunId, workflowName: WF12_NAME, customerId, leadId: null,
+    });
+    customers.findOne.mockResolvedValue({ id: customerId, name: 'Acme Ltd' });
+    executionClaims.claim.mockResolvedValue({ claimed: false });
+
+    await expect(service.claimAndGetEntityContext({
+      customerId, workflowRunId, n8nExecutionId: 'n8n-execution-2',
+    })).rejects.toThrow(
+      'WorkflowRun is already claimed by another n8n execution or is no longer active',
+    );
   });
 
   it('does not load a customer for a WorkflowRun owned by another entity', async () => {
