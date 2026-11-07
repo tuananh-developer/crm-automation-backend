@@ -680,12 +680,12 @@ describe('FollowUpService', () => {
       expect(n8nClientService.triggerWebhook).not.toHaveBeenCalled();
     });
 
-    it('should throw BadRequestException when the channel needs a phone number that the lead does not have', async () => {
+    it('should throw BadRequestException when the email channel needs an address that the lead does not have', async () => {
       (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(
-        buildEnrollment({ lead: buildLead({ phone: null }) }),
+        buildEnrollment({ lead: buildLead({ email: null }) }),
       );
       (stepsRepository.findOne as jest.Mock).mockResolvedValue(
-        buildStep({ channel: 'SMS' }),
+        buildStep({ channel: 'EMAIL', actionType: 'SEND_EMAIL' }),
       );
 
       await expect(service.execute(dto)).rejects.toThrow(BadRequestException);
