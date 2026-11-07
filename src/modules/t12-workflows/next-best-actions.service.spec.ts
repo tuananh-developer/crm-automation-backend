@@ -228,6 +228,80 @@ describe('NextBestActionsService entity context', () => {
     });
   });
 
+  it('returns only structured qualification and score signals, not free-form reasons', async () => {
+    workflowRuns.findOne.mockResolvedValue({
+      id: workflowRunId,
+      workflowName: WF10_NAME,
+      leadId,
+      customerId: null,
+      status: WorkflowStatus.RUNNING,
+    });
+    const createdAt = new Date();
+    emptyRepository.findOne
+      .mockResolvedValueOnce({
+        id: 'qualification-1',
+        status: 'QUALIFIED',
+        confidence: 0.86,
+        intent: 'Email alex@example.test about the private deal',
+        reason: 'Contact Alice on +1 415 555 0123',
+        createdAt,
+      })
+      .mockResolvedValueOnce({
+        id: 'score-1',
+        score: 88,
+        label: 'HOT',
+        reason: 'Sensitive private conversation details',
+        createdAt,
+      });
+
+    await expect(service.getIntelligenceContext('Lead', leadId, workflowRunId))
+      .resolves.toEqual({
+        qualificationId: 'qualification-1',
+        qualification: {
+          status: 'QUALIFIED',
+          confidence: 0.86,
+          createdAt,
+        },
+        scoreId: 'score-1',
+        score: {
+          score: 88,
+          label: 'HOT',
+          createdAt,
+        },
+      });
+  });
+
+  it('returns follow-up identifiers and states without user-defined sequence names', async () => {
+    workflowRuns.findOne.mockResolvedValue({
+      id: workflowRunId,
+      workflowName: WF10_NAME,
+      leadId,
+      customerId: null,
+      status: WorkflowStatus.RUNNING,
+    });
+    emptyRepository.find.mockResolvedValue([{
+      id: 'enrollment-1',
+      status: 'ACTIVE',
+      sequenceId: 'sequence-1',
+      sequence: { name: 'Sensitive contact sequence Alice Smith' },
+      startedAt: new Date(),
+    }]);
+
+    const result = await service.getFollowUpSegmentContext(
+      'Lead',
+      leadId,
+      workflowRunId,
+      'n8n-execution-1',
+    );
+
+    expect(result.followUps).toEqual([expect.objectContaining({
+      id: 'enrollment-1',
+      status: 'ACTIVE',
+      sequenceId: 'sequence-1',
+    })]);
+    expect(result.followUps[0]).not.toHaveProperty('sequenceName');
+  });
+
   it('returns interaction evidence metadata without subjects or message contents', async () => {
     workflowRuns.findOne.mockResolvedValue({
       id: workflowRunId,
