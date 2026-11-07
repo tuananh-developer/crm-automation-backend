@@ -257,6 +257,30 @@ describe('SalesMeetingsService persistence idempotency', () => {
     });
   });
 
+  it('rejects a summary callback from an execution that no longer owns the lease', async () => {
+    repositories.SalesMeeting.findOne.mockResolvedValue({
+      ...meeting,
+      transcriptId: 'transcript-1',
+    });
+    repositories.WorkflowRun.findOne.mockResolvedValue({
+      ...workflowRun,
+      n8nExecutionId: 'newer-execution',
+      claimExpiresAt: new Date(Date.now() + 60_000),
+    });
+
+    await expect(service.saveSummary('meeting-1', {
+      workflowRunId: 'run-1',
+      n8nExecutionId: 'execution-1',
+      transcriptId: 'transcript-1',
+      summary: 'An old execution must not overwrite this meeting.',
+      decisions: [],
+      risks: [],
+      idempotencyKey: 'run-1',
+    })).rejects.toBeInstanceOf(ConflictException);
+
+    expect(repositories.ConversationSummary.save).not.toHaveBeenCalled();
+  });
+
   it('rejects reuse of a summary workflow key with a different summary', async () => {
     repositories.SalesMeeting.findOne.mockResolvedValue({
       ...meeting,
