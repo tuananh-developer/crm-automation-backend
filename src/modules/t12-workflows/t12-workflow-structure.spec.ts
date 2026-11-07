@@ -152,6 +152,34 @@ describe('Tuấn Anh T12 workflow exports', () => {
     expect(wf11Url).toMatch(/^=\{=?.*\}\}$/);
   });
 
+  it('routes WF10 approval using the backend policy and forwards the execution identity', () => {
+    const workflow = readWorkflow(
+      'integrations/n8n/workflows/t12-wf10-next-best-action.json',
+    );
+    const condition = workflow.nodes.find(
+      (node) => node.name === 'IF: Human Approval Required',
+    )?.parameters?.conditions?.conditions?.[0]?.leftValue;
+    expect(condition).toContain('requiresHumanApproval');
+
+    const callback = workflow.nodes.find(
+      (node) => node.name === 'Code: Validate Action',
+    )?.parameters?.jsCode ?? '';
+    expect(callback).toContain('n8nExecutionId:String($exec.id)');
+
+    const review = workflow.nodes.find(
+      (node) => node.name === 'HTTP Request: Create Review and Notification',
+    );
+    expect(review?.parameters?.jsonBody).toContain('n8nExecutionId: String($exec.id)');
+
+    const trueBranch =
+      workflow.connections['IF: Human Approval Required']?.main?.[0] ?? [];
+    expect(trueBranch).toContainEqual(
+      expect.objectContaining({
+        node: 'HTTP Request: Create Review and Notification',
+      }),
+    );
+  });
+
   it('keeps the WF12 catalog lease heartbeat URL inside one n8n expression', () => {
     const wf12 = readWorkflow(
       'integrations/n8n/workflows/t12-wf12-quote-proposal.json',
