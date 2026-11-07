@@ -222,7 +222,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       ...meeting,
       transcriptId: 'transcript-1',
     });
-    repositories.WorkflowRun.findOne.mockResolvedValue({ ...workflowRun });
+    repositories.WorkflowRun.findOne.mockResolvedValue({ ...workflowRun, n8nExecutionId: 'execution-1', claimExpiresAt: new Date(Date.now() + 60_000) });
     repositories.ConversationTranscript.findOne.mockResolvedValue({
       id: 'transcript-1',
       meetingId: 'meeting-1',
@@ -236,6 +236,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       decisions: [],
       risks: [],
       idempotencyKey: 'run-1',
+      n8nExecutionId: 'execution-1',
     };
     const result = await service.saveSummary('meeting-1', dto);
 
@@ -285,6 +286,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
         decisions: [],
         risks: [],
         idempotencyKey: 'run-1',
+        n8nExecutionId: 'execution-1',
       }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
@@ -296,6 +298,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       meetingId: 'meeting-1',
     });
     repositories.SalesMeeting.findOne.mockResolvedValue({ ...meeting });
+    repositories.WorkflowRun.findOne.mockResolvedValue({ ...workflowRun, n8nExecutionId: 'execution-1', claimExpiresAt: new Date(Date.now() + 60_000) });
     repositories.ConversationActionItem.findOne.mockResolvedValue({
       id: 'action-existing',
       summaryId: 'summary-1',
@@ -313,6 +316,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
     const dto: SaveMeetingActionItemsDto = {
       workflowRunId: 'run-1',
       idempotencyKey: 'run-1',
+      n8nExecutionId: 'execution-1',
       actionItems: [{
         title: 'Send proposal',
         ownerAttendeeId: 'attendee-1',
@@ -354,6 +358,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       service.saveActionItems('summary-1', {
         workflowRunId: 'run-1',
         idempotencyKey: 'run-1',
+        n8nExecutionId: 'execution-1',
         actionItems: [{
           title: 'Changed title',
           confidence: 0.9,
@@ -424,6 +429,8 @@ describe('SalesMeetingsService persistence idempotency', () => {
     });
     repositories.WorkflowRun.findOne.mockResolvedValue({
       ...workflowRun,
+      n8nExecutionId: 'execution-1',
+      claimExpiresAt: new Date(Date.now() + 60_000),
       status: WorkflowStatus.RUNNING,
       outputPayload: {},
     });
@@ -440,6 +447,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       summaryId: 'summary-1',
       attendeeIds: ['attendee-1'],
       idempotencyKey: 'run-1',
+      n8nExecutionId: 'execution-1',
     };
     const result = await service.notify(dto);
 
@@ -455,6 +463,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       expect.objectContaining({
         status: WorkflowStatus.SUCCESS,
         finishedAt: expect.any(Date),
+        claimExpiresAt: null,
       }),
     );
     expect(result).toMatchObject({

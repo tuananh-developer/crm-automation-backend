@@ -76,6 +76,34 @@ export class SalesMeetingsService {
     }
   }
 
+  private renewOwnedExecutionLease(
+    run: WorkflowRun,
+    n8nExecutionId: string,
+    allowCompletedReplay = false,
+  ): boolean {
+    const executionId = n8nExecutionId?.trim();
+    if (!executionId || run.n8nExecutionId !== executionId) {
+      throw new ConflictException('Workflow execution no longer owns this claim');
+    }
+    if (allowCompletedReplay && run.status === WorkflowStatus.SUCCESS) {
+      return false;
+    }
+    if (![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status)) {
+      throw new ConflictException('WorkflowRun is not active');
+    }
+    const now = new Date();
+    if (!run.claimExpiresAt || run.claimExpiresAt.getTime() <= now.getTime()) {
+      throw new ConflictException('Workflow execution claim lease has expired');
+    }
+    const rawLease = Number(process.env.N8N_WORKFLOW_CLAIM_LEASE_SECONDS);
+    const leaseSeconds =
+      Number.isInteger(rawLease) && rawLease >= 60 && rawLease <= 3600
+        ? rawLease
+        : 1200;
+    run.claimExpiresAt = new Date(now.getTime() + leaseSeconds * 1000);
+    return true;
+  }
+
   private requireKey(key?: string): string {
     if (!key || key.length < 8 || key.length > 180)
       throw new BadRequestException('Idempotency-Key header is required');
@@ -290,8 +318,12 @@ export class SalesMeetingsService {
         throw new ConflictException('Workflow execution no longer owns this claim');
       }
       const now = new Date();
-      if (run.claimExpiresAt && run.claimExpiresAt.getTime() <= now.getTime()) {
-        throw new ConflictException('Workflow execution claim lease has expired');
+      if (
+        ![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status) ||
+        !run.claimExpiresAt ||
+        run.claimExpiresAt.getTime() <= now.getTime()
+      ) {
+        throw new ConflictException('Workflow execution claim lease has expired or is no longer active');
       }
       const rawLease = Number(process.env.N8N_WORKFLOW_CLAIM_LEASE_SECONDS);
       const leaseSeconds = Number.isInteger(rawLease) && rawLease >= 60 && rawLease <= 3600 ? rawLease : 1200;
@@ -445,6 +477,8 @@ export class SalesMeetingsService {
         meetingId,
         dto.workflowRunId,
       );
+      this.renewOwnedExecutionLease(run, dto.n8nExecutionId);
+      await manager.getRepository(WorkflowRun).save(run);
       if (!meeting.transcriptId || meeting.transcriptId !== dto.transcriptId) {
         throw new ConflictException('Transcript must be saved before summary');
       }
@@ -546,6 +580,14 @@ export class SalesMeetingsService {
       if (!meeting) {
         throw new NotFoundException('Meeting not found');
       }
+
+      const run = await manager.getRepository(WorkflowRun).findOne({
+        where: { id: dto.workflowRunId, workflowName: WF11_NAME },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!run) throw new NotFoundException('Meeting WorkflowRun not found');
+      this.renewOwnedExecutionLease(run, dto.n8nExecutionId);
+      await manager.getRepository(WorkflowRun).save(run);
 
       const attendeeSet = new Set(meeting.attendeeIds);
       const result: Array<{
@@ -731,6 +773,7 @@ export class SalesMeetingsService {
         dto.workflowRunId,
         true,
       );
+      this.renewOwnedExecutionLease(run, dto.n8nExecutionId, true);
       if (
         ![
           WorkflowStatus.PENDING,
@@ -788,6 +831,7 @@ export class SalesMeetingsService {
       meeting.notificationSentAt = meeting.notificationSentAt ?? new Date();
       run.status = WorkflowStatus.SUCCESS;
       run.finishedAt = run.finishedAt ?? new Date();
+      run.claimExpiresAt = null;
       run.outputPayload = {
         ...(run.outputPayload ?? {}),
         transcriptId: meeting.transcriptId,

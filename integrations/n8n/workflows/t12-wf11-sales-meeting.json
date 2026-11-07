@@ -290,7 +290,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $json.workflowRunId, transcriptId: $json.transcriptId, summary: $json.meetingAnalysis.summary, decisions: $json.meetingAnalysis.decisions, risks: $json.meetingAnalysis.risks, idempotencyKey: $json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $json.workflowRunId , n8nExecutionId: String($exec.id), transcriptId: $json.transcriptId, summary: $json.meetingAnalysis.summary, decisions: $json.meetingAnalysis.decisions, risks: $json.meetingAnalysis.risks, idempotencyKey: $json.workflowRunId } }}"
       },
       "id": "f4533007-7404-4b7c-bd4d-3c1be4e40def",
       "name": "HTTP Request: Save Meeting Summary",
@@ -332,7 +332,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId, actionItems: $node['Code: Parse and Validate Meeting Output'].json.meetingAnalysis.actionItems, idempotencyKey: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId , n8nExecutionId: String($exec.id), actionItems: $node['Code: Parse and Validate Meeting Output'].json.meetingAnalysis.actionItems, idempotencyKey: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId } }}"
       },
       "id": "a1c6b578-2514-4673-a98a-eb6de7d0dfdb",
       "name": "HTTP Request: Save Meeting Action Items",
@@ -372,7 +372,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId, meetingId: $node['Code: Parse and Validate Meeting Output'].json.meetingId, summaryId: $node['HTTP Request: Save Meeting Summary'].json.id || $node['HTTP Request: Save Meeting Summary'].json.data?.id, attendeeIds: $node['Code: Parse and Validate Meeting Output'].json.attendeeIds, idempotencyKey: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId , n8nExecutionId: String($exec.id), meetingId: $node['Code: Parse and Validate Meeting Output'].json.meetingId, summaryId: $node['HTTP Request: Save Meeting Summary'].json.id || $node['HTTP Request: Save Meeting Summary'].json.data?.id, attendeeIds: $node['Code: Parse and Validate Meeting Output'].json.attendeeIds, idempotencyKey: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId } }}"
       },
       "id": "4aed7fd9-438b-4b57-ae89-a756ce9bde9c",
       "name": "HTTP Request: Notify Owner and Attendees",
