@@ -35,9 +35,10 @@ export class ClaimWorkflowExecutionDto {
 }
 
 export class FailWorkflowExecutionDto {
-  @ApiProperty({ format: 'uuid' })
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
   @IsUUID()
-  workflowRunId!: string;
+  workflowRunId?: string;
 
   @ApiProperty({ enum: CLAIMABLE_T12_WORKFLOWS })
   @IsIn(CLAIMABLE_T12_WORKFLOWS)

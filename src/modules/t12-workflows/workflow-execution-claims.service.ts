@@ -7,6 +7,7 @@ import {
 import { DataSource } from 'typeorm';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
+import { SalesMeeting } from './entities/sales-meeting.entity.js';
 import type {
   ClaimWorkflowExecutionDto,
   FailWorkflowExecutionDto,
@@ -148,10 +149,12 @@ export class WorkflowExecutionClaimsService {
     return this.dataSource.transaction(async (manager) => {
       const repository = manager.getRepository(WorkflowRun);
       const run = await repository.findOne({
-        where: { id: dto.workflowRunId, workflowName: dto.workflowName },
+        where: dto.workflowRunId
+          ? { id: dto.workflowRunId, workflowName: dto.workflowName }
+          : { workflowName: dto.workflowName, n8nExecutionId },
         lock: { mode: 'pessimistic_write' },
       });
-      if (!run) throw new NotFoundException('WorkflowRun not found for this workflow');
+      if (!run) throw new NotFoundException('WorkflowRun not found for this workflow execution');
       if (run.status === WorkflowStatus.FAILED && run.n8nExecutionId === n8nExecutionId) {
         return { failed: true, duplicate: true, status: run.status };
       }
@@ -167,6 +170,12 @@ export class WorkflowExecutionClaimsService {
       // Never persist provider messages, stack traces, headers or raw inputs.
       run.errorMessage = `N8N_EXECUTION_FAILED:${errorCategory}: ${failedNodeName}`.slice(0, 500);
       await repository.save(run);
+      if (dto.workflowName === 'T12-WF11_SALES_MEETING') {
+        await manager.getRepository(SalesMeeting).update(
+          { workflowRunId: run.id, status: 'PROCESSING' },
+          { status: 'FAILED', updatedAt: new Date() },
+        );
+      }
       return { failed: true, duplicate: false, status: run.status };
     });
   }
