@@ -33,6 +33,7 @@ import {
   StartSalesMeetingDto,
 } from './dto/index.js';
 import { redactMeetingTranscript } from './utils/transcript-redaction.util.js';
+import { WorkflowExecutionClaimsService } from './workflow-execution-claims.service.js';
 
 export const WF11_NAME = 'T12-WF11_SALES_MEETING';
 
@@ -56,6 +57,7 @@ export class SalesMeetingsService {
     private readonly dataSource: DataSource,
     private readonly dispatcher: N8nWorkflowDispatchService,
     private readonly config: ConfigService,
+    private readonly executionClaims: WorkflowExecutionClaimsService,
   ) {}
 
   private assertTranscriptExternalProcessingAllowed(): void {
@@ -313,8 +315,13 @@ export class SalesMeetingsService {
 
   async getContext(meetingId: string, n8nExecutionId: string) {
     const { meeting, run } = await this.getMeetingRun(meetingId);
-    this.renewOwnedExecutionLease(run, n8nExecutionId);
-    await this.runs.save(run);
+    // Re-read and renew under the shared WorkflowRun row lock. This prevents
+    // a stale context read from overwriting a claim recovered by another run.
+    await this.executionClaims.heartbeat({
+      workflowRunId: run.id,
+      workflowName: WF11_NAME,
+      n8nExecutionId,
+    });
     const [lead, customer, attendees] = await Promise.all([
       meeting.leadId
         ? this.leads.findOne({

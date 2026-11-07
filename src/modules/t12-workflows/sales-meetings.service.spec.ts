@@ -52,6 +52,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
   let manager: { getRepository: jest.Mock };
   let dispatcher: { enqueue: jest.Mock };
   let configService: { get: jest.Mock };
+  let executionClaims: { heartbeat: jest.Mock };
 
   beforeEach(() => {
     const makeRepository = (id: string) => ({
@@ -87,6 +88,9 @@ describe('SalesMeetingsService persistence idempotency', () => {
     configService = {
       get: jest.fn((key: string) => (key === 'NODE_ENV' ? 'test' : undefined)),
     };
+    executionClaims = {
+      heartbeat: jest.fn().mockResolvedValue({ renewed: true }),
+    };
 
     service = new SalesMeetingsService(
       repositories.WorkflowRun as Repository<WorkflowRun>,
@@ -100,6 +104,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       dataSource as unknown as DataSource,
       dispatcher,
       configService as unknown as ConfigService,
+      executionClaims as never,
     );
   });
 
@@ -124,12 +129,11 @@ describe('SalesMeetingsService persistence idempotency', () => {
     const result = await service.getContext('meeting-1', 'execution-1');
 
     expect(result.meeting.id).toBe('meeting-1');
-    expect(repositories.WorkflowRun.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        n8nExecutionId: 'execution-1',
-        claimExpiresAt: expect.any(Date),
-      }),
-    );
+    expect(executionClaims.heartbeat).toHaveBeenCalledWith({
+      workflowRunId: 'run-1',
+      workflowName: 'T12-WF11_SALES_MEETING',
+      n8nExecutionId: 'execution-1',
+    });
   });
 
   it('rejects WF11 meeting context reads from a stale execution owner', async () => {
