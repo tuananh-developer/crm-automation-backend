@@ -184,6 +184,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       id: 'transcript-1',
       workflowRunId: 'run-1',
       redacted: true,
+      redactedTranscript: redactMeetingTranscript(transcriptDto.transcript),
       reused: false,
     });
   });
