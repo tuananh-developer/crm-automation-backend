@@ -3,7 +3,9 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
 import { DataSource, In, Repository, type EntityManager } from 'typeorm';
@@ -31,6 +33,7 @@ import {
   StartSalesMeetingDto,
 } from './dto/index.js';
 import { redactMeetingTranscript } from './utils/transcript-redaction.util.js';
+import { WorkflowExecutionClaimsService } from './workflow-execution-claims.service.js';
 
 export const WF11_NAME = 'T12-WF11_SALES_MEETING';
 
@@ -53,7 +56,55 @@ export class SalesMeetingsService {
     private readonly actionItems: Repository<ConversationActionItem>,
     private readonly dataSource: DataSource,
     private readonly dispatcher: N8nWorkflowDispatchService,
+    private readonly config: ConfigService,
+    private readonly executionClaims: WorkflowExecutionClaimsService,
   ) {}
+
+  private assertTranscriptExternalProcessingAllowed(): void {
+    const nodeEnv = (
+      this.config.get<string>('NODE_ENV') || process.env.NODE_ENV || ''
+    )
+      .trim()
+      .toLowerCase();
+    const explicitlyEnabled =
+      (this.config.get<string>('TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED') || '')
+        .trim()
+        .toLowerCase() === 'true';
+
+    if (nodeEnv === 'production' && !explicitlyEnabled) {
+      throw new ServiceUnavailableException(
+        'External transcript processing is disabled by production policy',
+      );
+    }
+  }
+
+  private renewOwnedExecutionLease(
+    run: WorkflowRun,
+    n8nExecutionId: string,
+    allowCompletedReplay = false,
+  ): boolean {
+    const executionId = n8nExecutionId?.trim();
+    if (!executionId || run.n8nExecutionId !== executionId) {
+      throw new ConflictException('Workflow execution no longer owns this claim');
+    }
+    if (allowCompletedReplay && run.status === WorkflowStatus.SUCCESS) {
+      return false;
+    }
+    if (![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status)) {
+      throw new ConflictException('WorkflowRun is not active');
+    }
+    const now = new Date();
+    if (!run.claimExpiresAt || run.claimExpiresAt.getTime() <= now.getTime()) {
+      throw new ConflictException('Workflow execution claim lease has expired');
+    }
+    const rawLease = Number(process.env.N8N_WORKFLOW_CLAIM_LEASE_SECONDS);
+    const leaseSeconds =
+      Number.isInteger(rawLease) && rawLease >= 60 && rawLease <= 3600
+        ? rawLease
+        : 1200;
+    run.claimExpiresAt = new Date(now.getTime() + leaseSeconds * 1000);
+    return true;
+  }
 
   private requireKey(key?: string): string {
     if (!key || key.length < 8 || key.length > 180)
@@ -66,6 +117,7 @@ export class SalesMeetingsService {
     actor: AuthenticatedUser,
     rawKey?: string,
   ) {
+    this.assertTranscriptExternalProcessingAllowed();
     const key = 'WF11:' + actor.id + ':' + this.requireKey(rawKey);
     const safeTranscript = redactMeetingTranscript(dto.transcript);
     if (safeTranscript.length < 20 || safeTranscript.length > 120000) {
@@ -74,6 +126,11 @@ export class SalesMeetingsService {
       );
     }
     const transcriptHash = createHash('sha256').update(safeTranscript).digest('hex');
+    // Meeting-purpose text is also user supplied and can contain contact data.
+    // Store and dispatch only the backend-minimized representation.
+    const safeMeetingPurpose = dto.meetingPurpose
+      ? redactMeetingTranscript(dto.meetingPurpose).slice(0, 500) || null
+      : null;
     if (Boolean(dto.leadId) === Boolean(dto.customerId)) {
       throw new BadRequestException(
         'Exactly one of leadId or customerId is required',
@@ -121,7 +178,7 @@ export class SalesMeetingsService {
       leadId: lead?.id ?? null,
       customerId: customer?.id ?? null,
       attendeeIds: [...dto.attendeeIds].sort(),
-      meetingPurpose: dto.meetingPurpose ?? null,
+      meetingPurpose: safeMeetingPurpose,
       scheduledAt: dto.scheduledAt ?? null,
       sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT',
       transcriptHash,
@@ -174,7 +231,7 @@ export class SalesMeetingsService {
             leadId: lead?.id ?? null,
             customerId: customer?.id ?? null,
             attendeeIds: [...new Set(dto.attendeeIds)],
-            meetingPurpose: dto.meetingPurpose ?? null,
+            meetingPurpose: safeMeetingPurpose,
             scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
             sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT',
             status: 'PROCESSING',
@@ -194,7 +251,7 @@ export class SalesMeetingsService {
             meetingId: meeting.id,
             workflowRunId: run.id,
             attendeeIds: [...new Set(dto.attendeeIds)],
-            meetingPurpose: dto.meetingPurpose ?? null,
+            meetingPurpose: safeMeetingPurpose,
             transcript: safeTranscript,
             sourceType: dto.sourceType ?? 'MEETING_TRANSCRIPT',
             requestedBy: actor.id,
@@ -261,19 +318,25 @@ export class SalesMeetingsService {
     return { meeting, run };
   }
 
-  async getContext(meetingId: string) {
-    const { meeting } = await this.getMeetingRun(meetingId);
+  async getContext(meetingId: string, n8nExecutionId: string) {
+    const { meeting, run } = await this.getMeetingRun(meetingId);
+    // Re-read and renew under the shared WorkflowRun row lock. This prevents
+    // a stale context read from overwriting a claim recovered by another run.
+    await this.executionClaims.heartbeat({
+      workflowRunId: run.id,
+      workflowName: WF11_NAME,
+      n8nExecutionId,
+    });
     const [lead, customer, attendees] = await Promise.all([
       meeting.leadId
         ? this.leads.findOne({
             where: { id: meeting.leadId },
             select: {
               id: true,
-              firstName: true,
-              lastName: true,
-              email: true,
               companyName: true,
+              companyWebsite: true,
               jobTitle: true,
+              industry: true,
             },
           })
         : Promise.resolve(null),
@@ -282,17 +345,17 @@ export class SalesMeetingsService {
             where: { id: meeting.customerId },
             select: {
               id: true,
-              name: true,
-              email: true,
               companyName: true,
+              companyWebsite: true,
               jobTitle: true,
+              industry: true,
             },
           })
         : Promise.resolve(null),
       meeting.attendeeIds.length
         ? this.users.find({
             where: { id: In(meeting.attendeeIds) },
-            select: { id: true, name: true, email: true, role: true },
+            select: { id: true, role: true },
           })
         : Promise.resolve([]),
     ]);
@@ -300,7 +363,7 @@ export class SalesMeetingsService {
       meeting: {
         id: meeting.id,
         workflowRunId: meeting.workflowRunId,
-        meetingPurpose: meeting.meetingPurpose,
+        meetingPurpose: meeting.meetingPurpose ? redactMeetingTranscript(meeting.meetingPurpose).slice(0, 500) : null,
         scheduledAt: meeting.scheduledAt,
       },
       lead,
@@ -316,6 +379,10 @@ export class SalesMeetingsService {
 
     const redactedText = redactMeetingTranscript(dto.transcript);
     const hash = createHash('sha256').update(redactedText).digest('hex');
+    const n8nExecutionId = dto.n8nExecutionId?.trim();
+    if (!n8nExecutionId || n8nExecutionId.length > 255) {
+      throw new BadRequestException('A valid n8nExecutionId is required');
+    }
     const idempotencyKey = `wf11:${dto.workflowRunId}:transcript`;
 
     return this.dataSource.transaction(async (manager) => {
@@ -324,6 +391,18 @@ export class SalesMeetingsService {
         dto.meetingId,
         dto.workflowRunId,
       );
+      const now = new Date();
+      const currentLeaseActive = Boolean(run.claimExpiresAt) && run.claimExpiresAt!.getTime() > now.getTime();
+      if (run.n8nExecutionId && run.n8nExecutionId !== n8nExecutionId && currentLeaseActive) {
+        throw new ConflictException('WorkflowRun is already claimed by another n8n execution');
+      }
+      const rawLease = Number(process.env.N8N_WORKFLOW_CLAIM_LEASE_SECONDS);
+      const leaseSeconds = Number.isInteger(rawLease) && rawLease >= 60 && rawLease <= 3600 ? rawLease : 1200;
+      run.n8nExecutionId = n8nExecutionId;
+      run.claimExpiresAt = new Date(now.getTime() + leaseSeconds * 1000);
+      run.status = WorkflowStatus.RUNNING;
+      await manager.getRepository(WorkflowRun).save(run);
+
       const transcriptRepository = manager.getRepository(ConversationTranscript);
       const existing = await transcriptRepository.findOne({
         where: { idempotencyKey },
@@ -354,6 +433,7 @@ export class SalesMeetingsService {
           workflowRunId: run.id,
           redacted: true,
           contentHash: hash,
+          redactedTranscript: redactedText,
           reused: true,
         };
       }
@@ -377,6 +457,7 @@ export class SalesMeetingsService {
         workflowRunId: run.id,
         redacted: true,
         contentHash: hash,
+        redactedTranscript: redactedText,
         reused: false,
       };
     });
@@ -393,6 +474,8 @@ export class SalesMeetingsService {
         meetingId,
         dto.workflowRunId,
       );
+      this.renewOwnedExecutionLease(run, dto.n8nExecutionId);
+      await manager.getRepository(WorkflowRun).save(run);
       if (!meeting.transcriptId || meeting.transcriptId !== dto.transcriptId) {
         throw new ConflictException('Transcript must be saved before summary');
       }
@@ -476,23 +559,32 @@ export class SalesMeetingsService {
 
     return this.dataSource.transaction(async (manager) => {
       const summaryRepository = manager.getRepository(ConversationSummary);
-      const meetingRepository = manager.getRepository(SalesMeeting);
       const itemRepository = manager.getRepository(ConversationActionItem);
+      const summaryReference = await summaryRepository.findOne({
+        where: { id: summaryId, workflowRunId: dto.workflowRunId },
+      });
+      if (!summaryReference) {
+        throw new NotFoundException('Meeting summary not found');
+      }
+      if (!summaryReference.meetingId) {
+        throw new NotFoundException('Meeting not found');
+      }
+
+      // Match the shared callback lock order: Meeting -> WorkflowRun -> Summary.
+      const { meeting, run } = await this.getMeetingRunForUpdate(
+        manager,
+        summaryReference.meetingId,
+        dto.workflowRunId,
+      );
+      this.renewOwnedExecutionLease(run, dto.n8nExecutionId);
+      await manager.getRepository(WorkflowRun).save(run);
+
       const summary = await summaryRepository.findOne({
         where: { id: summaryId, workflowRunId: dto.workflowRunId },
         lock: { mode: 'pessimistic_write' },
       });
       if (!summary) {
         throw new NotFoundException('Meeting summary not found');
-      }
-
-      const meeting = summary.meetingId
-        ? await meetingRepository.findOne({
-            where: { id: summary.meetingId },
-          })
-        : null;
-      if (!meeting) {
-        throw new NotFoundException('Meeting not found');
       }
 
       const attendeeSet = new Set(meeting.attendeeIds);
@@ -679,6 +771,7 @@ export class SalesMeetingsService {
         dto.workflowRunId,
         true,
       );
+      this.renewOwnedExecutionLease(run, dto.n8nExecutionId, true);
       if (
         ![
           WorkflowStatus.PENDING,
@@ -736,6 +829,7 @@ export class SalesMeetingsService {
       meeting.notificationSentAt = meeting.notificationSentAt ?? new Date();
       run.status = WorkflowStatus.SUCCESS;
       run.finishedAt = run.finishedAt ?? new Date();
+      run.claimExpiresAt = null;
       run.outputPayload = {
         ...(run.outputPayload ?? {}),
         transcriptId: meeting.transcriptId,

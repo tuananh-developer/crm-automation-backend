@@ -117,20 +117,25 @@ CustomerTask supports retention tasks from WF06, feedback escalation from WF14 a
 | `POST /api/v1/segments/:segmentId/evaluate-all`                                         | Evaluate eligible Customers for one active segment; Sales is limited to Customers created by that actor. |
 | `GET /api/v1/segments/:segmentId/customers`                                             | List membership; Sales sees only Customers created by that actor.                                        |
 
+- `POST /api/v1/internal/n8n/next-best-actions/claim-and-entity-context` — machine-authenticated WF10 request; validates entity/run scope and atomically claims the run before returning context. A competing execution receives HTTP 409. `GET /api/v1/internal/n8n/next-best-actions/follow-up-segment-context` requires the current `n8nExecutionId` and renews the WF10 claim lease. The profile/context responses expose only non-identifying business attributes and engagement metadata. `POST /api/v1/internal/n8n/next-best-actions/callback` and `/review` require the current `n8nExecutionId`; the review call is the final approval/notification gate and releases the lease.
+
 ## 7. Data Cleaning APIs
 
 - `POST /api/v1/data-cleaning/scans` — create scan and publish the event.
 - `GET /api/v1/data-cleaning/scans/:workflowRunId` — scan/report summary.
 - `GET /api/v1/data-cleaning/scans/:workflowRunId/leads` — scoped Lead batch for the authenticated n8n service identity.
-- `POST /api/v1/internal/n8n/data-cleaning/callback` — persist validated findings/report.
+- `POST /api/v1/data-cleaning/callback` — persist validated findings/report.
 - `POST /api/v1/data-cleaning/scans/:workflowRunId/apply` — apply selected finding IDs only after backend revalidation and required approval.
 
 Apply DTO cannot force safety/approval; the backend reloads each target and enforces allowlist, freshness, permission, transaction, idempotency and AuditLog.
 
 ## 8. Conversation, meetings and feedback APIs
 
+- `GET /api/v1/internal/n8n/sales-meetings/:meetingId/context` — requires the current `n8nExecutionId` and renews the WF11 claim lease. It returns redacted meeting-purpose text, non-identifying Lead/Customer business attributes, and attendee IDs/roles only.
+
 - `POST/GET /api/v1/sales-meetings`; `GET/PATCH /api/v1/sales-meetings/:meetingId`.
 - `POST /api/v1/conversation-transcripts` — validated ingest through NestJS; redact before AI dispatch.
+- `POST /api/v1/internal/n8n/conversation-transcripts` — machine-authenticated WF11 transcript persistence; requires `n8nExecutionId` and atomically claims the WorkflowRun in the same locked transaction that stores the redacted transcript. A different execution ID is rejected before AI processing.
 - `GET /api/v1/conversation-transcripts/:transcriptId` — role-scoped redacted content/metadata.
 - `GET /api/v1/conversation-transcripts/:transcriptId/summary` — summary and processing status.
 - `GET/POST /api/v1/conversation-summaries/:summaryId/action-items`; `PATCH /api/v1/conversation-action-items/:itemId`.
@@ -145,13 +150,16 @@ Apply DTO cannot force safety/approval; the backend reloads each target and enfo
 - `POST /api/v1/quotes/:quoteId/submit-for-approval`; `POST /api/v1/quotes/:quoteId/approve`; `POST /api/v1/quotes/:quoteId/reject`.
 - `GET/POST /api/v1/customer-contracts`; `GET/PATCH /api/v1/customer-contracts/:contractId`.
 - `GET /api/v1/customer-contracts/due-for-renewal`.
-- `POST /api/v1/internal/n8n/workflow-executions/claim` — machine-authenticated, atomic WorkflowRun execution claim. Requires `workflowRunId`, an allowlisted T12 `workflowName`, and the n8n `n8nExecutionId`; only the first distinct active execution may continue to AI processing, while retries from that same execution are idempotent.
+- `POST /api/v1/internal/n8n/quotes/claim-and-entity-context` — machine-authenticated WF12 request; validates entity/run scope and atomically claims the run before returning context. A competing execution receives HTTP 409. The catalog context request renews the lease for the same execution. Entity context is minimized to business/company attributes. Quote price-preview, draft-save and approval-submission payloads carry `n8nExecutionId` so the backend can verify the current lease owner.
 - `GET/POST /api/v1/customer-contracts/:contractId/renewal-attempts`; `GET /api/v1/renewal-attempts/:attemptId`.
 
 ## 10. Dashboard, workflow runs, notification and Communication APIs
 
 - `GET /api/v1/dashboard/overview`, `GET /api/v1/dashboard/workflows`, `GET /api/v1/dashboard/customer-health` — role-filtered read models.
 - `GET /api/v1/workflow-runs`; `GET /api/v1/workflow-runs/:runId` — run status, correlation, result summary and safe error detail.
+- `POST /api/v1/internal/n8n/workflow-executions/claim` — atomic claim endpoint for allowlisted T12 workflows; requires `workflowRunId`, `workflowName` and `n8nExecutionId`. The default lease is 20 minutes (`N8N_WORKFLOW_CLAIM_LEASE_SECONDS`, allowed range 60–3600); same-execution retries renew it, and a different execution can recover an expired claim.
+- `POST /api/v1/internal/n8n/workflow-executions/heartbeat` — renew a non-expired lease for the current execution owner.
+- `POST /api/v1/internal/n8n/workflow-executions/failure` — shared Error Handler callback; accepts a stable error category and node name only, never raw error/stack/request content. It can locate the run by `(workflowName, n8nExecutionId)` when `workflowRunId` is not available. The failure DTO allowlists WF01 (`lead-qualification`), WF08 (`UC10_DATA_CLEANING`) and WF10/WF11/WF12 persisted workflow names. WF01/WF08 may report a terminal failure before an execution claim; WF10/WF11/WF12 require current execution ownership once claimed.
 - `GET /api/v1/notifications`; `POST /api/v1/notifications/:notificationId/read`.
 - `POST /api/v1/internal/communication/send` — service-authenticated request to deliver an approved message; supports idempotency and returns delivery identity/state. This endpoint is for trusted backend/workflow calls, not browser-direct access.
 
