@@ -27,7 +27,7 @@ export class NextBestActionContextQueryDto {
   @IsString()
   @MinLength(1)
   @MaxLength(255)
-  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  @Matches(/\S/, { message: 'n8nExecutionId must not be blank' })
   n8nExecutionId?: string;
 }
 

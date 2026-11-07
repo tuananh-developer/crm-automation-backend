@@ -148,6 +148,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       ...workflowRun,
       n8nExecutionId: 'execution-original',
       claimExpiresAt: new Date(Date.now() + 60_000),
+      claimExpiresAt: new Date(Date.now() + 60_000),
     });
     await expect(service.saveTranscript(transcriptDto)).rejects.toBeInstanceOf(
       ConflictException,
@@ -191,7 +192,10 @@ describe('SalesMeetingsService persistence idempotency', () => {
       reused: true,
     });
 
-    expect(repositories.WorkflowRun.save).not.toHaveBeenCalled();
+    expect(repositories.WorkflowRun.save).toHaveBeenCalledWith(expect.objectContaining({
+      n8nExecutionId: transcriptDto.n8nExecutionId,
+      claimExpiresAt: expect.any(Date),
+    }));
     expect(repositories.ConversationTranscript.save).not.toHaveBeenCalled();
     expect(repositories.SalesMeeting.save).not.toHaveBeenCalled();
   });
