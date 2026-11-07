@@ -126,6 +126,29 @@ describe('Tuấn Anh T12 workflow exports', () => {
     expect(handler.settings?.errorWorkflow).toBeUndefined();
   });
 
+  it('passes the backend-redacted transcript returned by WF11 to Gemini', () => {
+    const wf11 = readWorkflow(
+      'integrations/n8n/workflows/t12-wf11-sales-meeting.json',
+    );
+    const builder = wf11.nodes.find(
+      (node) => node.name === 'Code: Build Meeting Prompt',
+    )?.parameters?.jsCode ?? '';
+    expect(builder).toContain('transcript.redactedTranscript');
+    expect(builder).toContain('Backend-redacted transcript is missing');
+  });
+
+  it('unwraps the nested backend entity for WF12 proposal context', () => {
+    const wf12 = readWorkflow(
+      'integrations/n8n/workflows/t12-wf12-quote-proposal.json',
+    );
+    const builder = wf12.nodes.find(
+      (node) => node.name === 'Code: Normalize Requirements',
+    )?.parameters?.jsCode ?? '';
+    expect(builder).toContain('c.data?.entity||c.entity||c.data||c');
+    expect(builder).toContain('sourceCustomer.companyName');
+    expect(builder).toContain('sourceCustomer.companyWebsite');
+  });
+
   it('preserves WF11 identifiers across the attendee-context HTTP node for downstream saves', () => {
     const wf11 = readWorkflow(
       'integrations/n8n/workflows/t12-wf11-sales-meeting.json',
