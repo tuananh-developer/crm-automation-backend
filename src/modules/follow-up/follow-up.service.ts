@@ -828,6 +828,7 @@ export class FollowUpService {
         LeadFollowUpEnrollment,
       );
       const executionsRepository = manager.getRepository(FollowUpExecution);
+      const stepsRepository = manager.getRepository(FollowUpStep);
       const auditLogRepository = manager.getRepository(AuditLog);
 
       // Keep the lifecycle lock order: enrollment first, then execution.
@@ -907,6 +908,54 @@ export class FollowUpService {
       };
       const savedExecution = await executionsRepository.save(record);
 
+      // Legacy sequences may already contain CALL/SMS/MESSAGE steps that were
+      // inserted before the channel policy existed. Skip this step and advance
+      // the enrollment so the minute-based worker does not leave it stuck.
+      const nextStep = await stepsRepository.findOne({
+        where: {
+          sequenceId: lockedEnrollment.sequenceId,
+          stepOrder: MoreThan(step.stepOrder),
+          isActive: true,
+        },
+        order: { stepOrder: 'ASC' },
+      });
+
+      let nextStepId: string | null = null;
+      if (nextStep) {
+        nextStepId = nextStep.id;
+        lockedEnrollment.currentStepId = nextStep.id;
+        const alreadyScheduled = await executionsRepository.findOne({
+          where: {
+            enrollmentId: lockedEnrollment.id,
+            stepId: nextStep.id,
+          },
+        });
+        if (!alreadyScheduled) {
+          await executionsRepository.save(
+            executionsRepository.create({
+              enrollmentId: lockedEnrollment.id,
+              stepId: nextStep.id,
+              status: ExecutionStatus.PENDING,
+              scheduledAt: new Date(
+                skippedAt.getTime() + nextStep.delayMinutes * 60_000,
+              ),
+              startedAt: null,
+              completedAt: null,
+              providerMessageId: null,
+              requestPayload: null,
+              responsePayload: null,
+              errorMessage: null,
+              retryCount: 0,
+            }),
+          );
+        }
+      } else {
+        lockedEnrollment.status = EnrollmentStatus.COMPLETED;
+        lockedEnrollment.completedAt = skippedAt;
+        lockedEnrollment.pausedAt = null;
+      }
+      await enrollmentsRepository.save(lockedEnrollment);
+
       await auditLogRepository.save(
         auditLogRepository.create({
           userId: lockedEnrollment.assignedBy,
@@ -914,13 +963,19 @@ export class FollowUpService {
           entityType: 'FollowUpExecution',
           entityId: savedExecution.id,
           oldValue: { status: previousStatus },
-          newValue: { status: ExecutionStatus.SKIPPED },
+          newValue: {
+            status: ExecutionStatus.SKIPPED,
+            enrollmentStatus: lockedEnrollment.status,
+            currentStepId: lockedEnrollment.currentStepId,
+          },
           metadata: {
             enrollmentId: lockedEnrollment.id,
             stepId: step.id,
             channel: step.channel,
             actionType: step.actionType,
             reason: 'FOLLOW_UP_ACTION_UNSUPPORTED',
+            nextStepId,
+            enrollmentCompleted: !nextStep,
           },
           ipAddress: null,
           userAgent: null,
