@@ -163,6 +163,43 @@ describe('WorkflowExecutionClaimsService', () => {
     }));
   });
 
+  it.each([
+    { label: 'WF01', workflowName: 'lead-qualification' },
+    { label: 'WF08', workflowName: 'UC10_DATA_CLEANING' },
+  ])('records a pre-claim failure from $label using the persisted workflow name', async ({ workflowName }) => {
+    run.workflowName = workflowName;
+    run.n8nExecutionId = null;
+    run.claimExpiresAt = null;
+    run.status = WorkflowStatus.PENDING;
+
+    const result = await service.fail({
+      workflowRunId: request.workflowRunId,
+      workflowName,
+      n8nExecutionId: 'rabbitmq-execution-1',
+      errorCategory: 'UPSTREAM_PROVIDER_FAILURE',
+      failedNodeName: 'Gemini Provider',
+    });
+
+    expect(result).toEqual({
+      failed: true,
+      duplicate: false,
+      status: WorkflowStatus.FAILED,
+    });
+    expect(repository.findOne).toHaveBeenCalledWith({
+      where: {
+        id: request.workflowRunId,
+        workflowName,
+      },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({
+      workflowName,
+      n8nExecutionId: 'rabbitmq-execution-1',
+      status: WorkflowStatus.FAILED,
+      claimExpiresAt: null,
+    }));
+  });
+
   it('requires workflowRunId when reporting a failure before a run has been claimed', async () => {
     run.n8nExecutionId = null;
     run.status = WorkflowStatus.RUNNING;
