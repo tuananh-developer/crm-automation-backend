@@ -364,7 +364,6 @@ export class NextBestActionsService {
             status: qualification.status,
             confidence: qualification.confidence,
             intent: qualification.intent,
-            reason: qualification.reason,
             createdAt: qualification.createdAt,
           }
         : null,
@@ -373,7 +372,6 @@ export class NextBestActionsService {
         ? {
             score: score.score,
             label: score.label,
-            reason: score.reason,
             createdAt: score.createdAt,
           }
         : null,
