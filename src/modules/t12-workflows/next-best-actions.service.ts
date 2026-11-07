@@ -250,38 +250,29 @@ export class NextBestActionsService {
         where: { id: entityId },
         select: {
           id: true,
-          firstName: true,
-          lastName: true,
-          email: true,
-          phone: true,
           companyName: true,
           companyWebsite: true,
           jobTitle: true,
           companySize: true,
           industry: true,
           status: true,
-          ownerId: true,
-          createdAt: true,
         },
       });
       if (!lead) throw new NotFoundException('Lead not found');
       return { data: { ...lead, entityType } };
     }
+    // WF10 ranks business actions from company and engagement context only.
+    // Contact names, email addresses and phone numbers are not needed in n8n.
     const customer = await this.customers.findOne({
       where: { id: entityId },
       select: {
         id: true,
-        name: true,
-        email: true,
-        phone: true,
         companyName: true,
         companyWebsite: true,
         jobTitle: true,
         companySize: true,
         industry: true,
         status: true,
-        createdBy: true,
-        createdAt: true,
       },
     });
     if (!customer) throw new NotFoundException('Customer not found');
