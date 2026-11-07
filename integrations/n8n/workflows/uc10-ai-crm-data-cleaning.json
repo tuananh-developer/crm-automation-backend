@@ -315,7 +315,7 @@
           "conditions": [
             {
               "id": "e5414e43-b9c5-4668-ab1d-6804e5136eb7",
-              "leftValue": "={ $json.manualReviewNeeded }",
+              "leftValue": "={{ $json.manualReviewNeeded }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
