@@ -117,7 +117,7 @@ CustomerTask supports retention tasks from WF06, feedback escalation from WF14 a
 | `POST /api/v1/segments/:segmentId/evaluate-all`                                         | Evaluate eligible Customers for one active segment; Sales is limited to Customers created by that actor. |
 | `GET /api/v1/segments/:segmentId/customers`                                             | List membership; Sales sees only Customers created by that actor.                                        |
 
-- `POST /api/v1/internal/n8n/next-best-actions/claim-and-entity-context` — machine-authenticated WF10 request; validates entity/run scope and atomically claims the run before returning context. A competing execution receives HTTP 409. `GET /api/v1/internal/n8n/next-best-actions/follow-up-segment-context` requires the current `n8nExecutionId` and renews the WF10 claim lease.
+- `POST /api/v1/internal/n8n/next-best-actions/claim-and-entity-context` — machine-authenticated WF10 request; validates entity/run scope and atomically claims the run before returning context. A competing execution receives HTTP 409. `GET /api/v1/internal/n8n/next-best-actions/follow-up-segment-context` requires the current `n8nExecutionId` and renews the WF10 claim lease. The profile/context responses expose only non-identifying business attributes and engagement metadata. `POST /api/v1/internal/n8n/next-best-actions/callback` and `/review` require the current `n8nExecutionId`; the review call is the final approval/notification gate and releases the lease.
 
 ## 7. Data Cleaning APIs
 
@@ -131,7 +131,7 @@ Apply DTO cannot force safety/approval; the backend reloads each target and enfo
 
 ## 8. Conversation, meetings and feedback APIs
 
-- `GET /api/v1/internal/n8n/sales-meetings/:meetingId/context` — requires the current `n8nExecutionId` and renews the WF11 claim lease.
+- `GET /api/v1/internal/n8n/sales-meetings/:meetingId/context` — requires the current `n8nExecutionId` and renews the WF11 claim lease. It returns redacted meeting-purpose text, non-identifying Lead/Customer business attributes, and attendee IDs/roles only.
 
 - `POST/GET /api/v1/sales-meetings`; `GET/PATCH /api/v1/sales-meetings/:meetingId`.
 - `POST /api/v1/conversation-transcripts` — validated ingest through NestJS; redact before AI dispatch.
@@ -150,7 +150,7 @@ Apply DTO cannot force safety/approval; the backend reloads each target and enfo
 - `POST /api/v1/quotes/:quoteId/submit-for-approval`; `POST /api/v1/quotes/:quoteId/approve`; `POST /api/v1/quotes/:quoteId/reject`.
 - `GET/POST /api/v1/customer-contracts`; `GET/PATCH /api/v1/customer-contracts/:contractId`.
 - `GET /api/v1/customer-contracts/due-for-renewal`.
-- `POST /api/v1/internal/n8n/quotes/claim-and-entity-context` — machine-authenticated WF12 request; validates entity/run scope and atomically claims the run before returning context. A competing execution receives HTTP 409. The catalog context request renews the lease for the same execution.
+- `POST /api/v1/internal/n8n/quotes/claim-and-entity-context` — machine-authenticated WF12 request; validates entity/run scope and atomically claims the run before returning context. A competing execution receives HTTP 409. The catalog context request renews the lease for the same execution. Entity context is minimized to business/company attributes. Quote price-preview, draft-save and approval-submission payloads carry `n8nExecutionId` so the backend can verify the current lease owner.
 - `GET/POST /api/v1/customer-contracts/:contractId/renewal-attempts`; `GET /api/v1/renewal-attempts/:attemptId`.
 
 ## 10. Dashboard, workflow runs, notification and Communication APIs
