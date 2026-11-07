@@ -116,6 +116,10 @@ describe('Tuấn Anh T12 workflow exports', () => {
     expect(callback?.parameters?.url).toContain('/workflow-executions/failure');
     expect(callback?.parameters?.jsonBody).toContain('errorCategory');
     expect(callback?.parameters?.jsonBody).not.toContain('error.message');
+    const normalizer = handler.nodes.find(
+      (node) => node.name === 'Code: Normalize Failure Event',
+    )?.parameters?.jsCode ?? '';
+    expect(normalizer).toContain('findWorkflowRunId(execution.data) || findWorkflowRunId(event.data)');
     expect(handler.settings?.errorWorkflow).toBeUndefined();
   });
 
