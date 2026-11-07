@@ -349,7 +349,7 @@
           "conditions": [
             {
               "id": "40a0d670-6452-445d-a4c9-4e051fe15ea6",
-              "leftValue": "={ $json.approvalRequired }",
+              "leftValue": "={{ $json.approvalRequired }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
