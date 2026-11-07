@@ -595,6 +595,20 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
+  // T12-WF05: Customer 360 Aggregation with Service-Key Authentication
+  // ─────────────────────────────────────────────────────────────────────────
+  it('T12-WF05: should read Customer 360 view using only n8n service key (X-N8N-API-KEY)', async () => {
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/customers/${customerId}/360`)
+      .set('x-n8n-api-key', N8N_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.customer.id).toBe(customerId);
+    expect(res.body.sourceCoverage).toBeDefined();
+    expect(res.body.sourceCoverage.crmProfile).toBe('AVAILABLE');
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
   // UC09: Customer Segmentation
   // ─────────────────────────────────────────────────────────────────────────
   it('UC09: should create Segment and evaluate Customer assignment', async () => {

@@ -4,3 +4,7 @@ export * from './query-segment.dto.js';
 export * from './query-customer.dto.js';
 export * from './evaluate-segment.dto.js';
 export * from './evaluate-segment-bulk.dto.js';
+export * from './customer-response.dto.js';
+export * from './customer-360-response.dto.js';
+export * from './trigger-customer-360.dto.js';
+export * from './customer-360-callback.dto.js';

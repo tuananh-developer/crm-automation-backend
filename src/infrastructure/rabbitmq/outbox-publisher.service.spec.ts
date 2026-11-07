@@ -146,6 +146,62 @@ describe('OutboxPublisher', () => {
     fetchSpy.mockRestore();
   });
 
+  it('dispatches allowlisted WF05 HTTP outbox events and updates WorkflowRun to RUNNING', async () => {
+    const workflowRunId = '55555555-5555-5555-5555-555555555555';
+    const httpEvent = {
+      ...event,
+      transport: OutboxTransport.HTTP,
+      destination: 'N8N_WF05_WEBHOOK_URL',
+      destinationPath: 't12-wf05-customer-360',
+      payload: { workflowRunId, customerId: 'customer-1' },
+    };
+    manager.query.mockResolvedValueOnce([httpEvent]);
+    const workflowRepository = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    manager.getRepository.mockImplementation((entity: unknown) =>
+      entity === WorkflowRun ? workflowRepository : repository,
+    );
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'N8N_WF05_WEBHOOK_URL') {
+          return 'https://n8n.example/webhook/t12-wf05-customer-360';
+        }
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        return undefined;
+      }),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      config as unknown as ConfigService,
+    );
+
+    await publisher.publishPendingEvents();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://n8n.example/webhook/t12-wf05-customer-360',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'X-N8N-API-KEY': 'test-n8n-secret',
+          'Idempotency-Key': workflowRunId,
+        }),
+        body: JSON.stringify(httpEvent.payload),
+      }),
+    );
+    expect(workflowRepository.update).toHaveBeenCalledWith(
+      { id: workflowRunId, status: WorkflowStatus.PENDING },
+      { status: WorkflowStatus.RUNNING },
+    );
+    expect(rabbitmq.publishOutboxEvent).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
   it('schedules an exponential retry when publication fails', async () => {
     (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
       new Error('broker unavailable'),
