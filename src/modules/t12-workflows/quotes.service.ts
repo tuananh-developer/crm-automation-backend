@@ -409,18 +409,17 @@ export class QuotesService {
   }
 
   async pricePreview(dto: QuotePricePreviewDto, headerKey?: string) {
-    await this.executionClaims.heartbeat({ workflowRunId: dto.workflowRunId, workflowName: WF12_NAME, n8nExecutionId: dto.n8nExecutionId });
     if (
       headerKey !== dto.idempotencyKey ||
       dto.idempotencyKey !== dto.workflowRunId
     )
       throw new BadRequestException('Idempotency-Key must equal workflowRunId');
+    await this.executionClaims.heartbeat({ workflowRunId: dto.workflowRunId, workflowName: WF12_NAME, n8nExecutionId: dto.n8nExecutionId });
     const { priced } = await this.canonicalPrice(dto);
     return { workflowRunId: dto.workflowRunId, ...priced };
   }
 
   async saveDraft(dto: CreateQuoteInternalDto) {
-    await this.executionClaims.heartbeat({ workflowRunId: dto.workflowRunId, workflowName: WF12_NAME, n8nExecutionId: dto.n8nExecutionId });
     return this.dataSource.transaction(async (manager) => {
       const { run, priced } = await this.canonicalPrice(
         { ...dto, idempotencyKey: dto.workflowRunId },
@@ -432,6 +431,16 @@ export class QuotesService {
 
       // canonicalPrice locks the WorkflowRun and selected catalog rows. This
       // makes the existence check and the quote snapshot single-writer.
+      const sameExecution = run.n8nExecutionId === dto.n8nExecutionId;
+      const now = Date.now();
+      const activeLease =
+        sameExecution &&
+        [WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status) &&
+        Boolean(run.claimExpiresAt) &&
+        run.claimExpiresAt!.getTime() > now;
+      const completedReplay =
+        sameExecution &&
+        [WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL].includes(run.status);
       const existing = await quoteRepo.findOne({
         where: { workflowRunId: run.id },
       });
@@ -444,6 +453,11 @@ export class QuotesService {
             'WorkflowRun already has a quote with a different draft payload',
           );
         }
+        if (!activeLease && !completedReplay) {
+          throw new ConflictException(
+            'Workflow execution no longer owns this quote claim',
+          );
+        }
         return {
           id: existing.id,
           workflowRunId: run.id,
@@ -452,6 +466,11 @@ export class QuotesService {
           approvalRequired: existing.approvalRequired,
           reused: true,
         };
+      }
+      if (!activeLease) {
+        throw new ConflictException(
+          'Workflow execution claim has expired or is no longer active',
+        );
       }
 
       const quote = await quoteRepo.save(
@@ -552,7 +571,17 @@ export class QuotesService {
       });
       if (!current) throw new NotFoundException('Quote not found');
       const run = await runRepo.findOne({ where: { id: dto.workflowRunId, workflowName: WF12_NAME }, lock: { mode: 'pessimistic_write' } });
-      if (!run || run.n8nExecutionId !== dto.n8nExecutionId || (run.claimExpiresAt && run.claimExpiresAt.getTime() <= Date.now())) {
+      const activeExecutionLease =
+        Boolean(run?.claimExpiresAt) &&
+        run!.claimExpiresAt!.getTime() > Date.now();
+      const completedApprovalReplay =
+        run?.status === WorkflowStatus.PARTIAL &&
+        run.n8nExecutionId === dto.n8nExecutionId;
+      const activeApprovalSubmission =
+        run?.status === WorkflowStatus.RUNNING &&
+        run.n8nExecutionId === dto.n8nExecutionId &&
+        activeExecutionLease;
+      if (!run || (!activeApprovalSubmission && !completedApprovalReplay)) {
         throw new ConflictException('Workflow execution no longer owns this quote claim');
       }
       let approval = await aRepo.findOne({ where: { quoteId } });
