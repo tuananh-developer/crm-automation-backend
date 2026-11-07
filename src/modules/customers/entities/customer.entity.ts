@@ -14,8 +14,6 @@ import type { Lead } from '../../leads/entities/lead.entity.js';
 import type { CustomerSegment } from './customer-segment.entity.js';
 import type { WorkflowRun } from '../../workflow/entities/workflow-run.entity.js';
 import type { Notification } from '../../notifications/entities/notification.entity.js';
-import type { CustomerChurnAssessment } from './customer-churn-assessment.entity.js';
-import type { CustomerTask } from './customer-task.entity.js';
 
 @Entity('customers')
 @Index('IDX_customers_email', ['email'])
@@ -100,9 +98,4 @@ export class Customer {
   @OneToMany('Notification', 'customer')
   notifications?: Notification[];
 
-  @OneToMany('CustomerChurnAssessment', 'customer')
-  churnAssessments?: CustomerChurnAssessment[];
-
-  @OneToMany('CustomerTask', 'customer')
-  customerTasks?: CustomerTask[];
 }

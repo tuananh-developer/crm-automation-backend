@@ -11,13 +11,8 @@ import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
 import { AccountHealthService } from './account-health.service.js';
 import { AccountHealthController } from './account-health.controller.js';
-import {
-  CustomerTasksController,
-  CustomersController,
-} from './customers.controller.js';
-import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
+import { CustomersController } from './customers.controller.js';
 import { AccountHealthSnapshot } from './entities/account-health-snapshot.entity.js';
-import { CustomerTask } from './entities/customer-task.entity.js';
 
 @Module({
   imports: [
@@ -28,8 +23,6 @@ import { CustomerTask } from './entities/customer-task.entity.js';
       LeadScore,
       User,
       WorkflowRun,
-      CustomerChurnAssessment,
-      CustomerTask,
       AccountHealthSnapshot,
     ]),
   ],
@@ -37,7 +30,6 @@ import { CustomerTask } from './entities/customer-task.entity.js';
     AccountHealthController,
     SegmentsController,
     CustomersController,
-    CustomerTasksController,
   ],
   providers: [SegmentsService, CustomersService, AccountHealthService],
   exports: [TypeOrmModule, SegmentsService, CustomersService],
