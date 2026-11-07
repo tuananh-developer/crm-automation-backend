@@ -21,11 +21,13 @@ import { AuthModule } from './modules/auth/auth.module.js';
 import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module.js';
 import { T12WorkflowsModule } from './modules/t12-workflows/t12-workflows.module.js';
 import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
+import { validateEnvironmentConfiguration } from './config/environment.validation.js';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      validate: validateEnvironmentConfiguration,
       envFilePath: [
         `.env.${process.env.NODE_ENV || 'development'}.local`,
         `.env.${process.env.NODE_ENV || 'development'}`,
@@ -39,9 +41,17 @@ import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
-        const isProd = config.get<string>('NODE_ENV') === 'production';
+        const isProd =
+          (config.get<string>('NODE_ENV') || '').trim().toLowerCase() ===
+          'production';
         const useLocalDb = config.get<string>('USE_LOCAL_DB') === 'true';
-        const dbUrl = config.get<string>('DATABASE_URL');
+        const dbUrl = config.get<string>('DATABASE_URL')?.trim();
+
+        if (isProd && (useLocalDb || !dbUrl)) {
+          throw new Error(
+            'FATAL: DATABASE_URL is required in production and USE_LOCAL_DB must not be true',
+          );
+        }
 
         // Connect to remote database (Neon / Supabase) if in production or DATABASE_URL provided without USE_LOCAL_DB
         if (!useLocalDb && dbUrl) {
