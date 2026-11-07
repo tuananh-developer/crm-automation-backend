@@ -40,8 +40,6 @@ import {
   FollowUpSequenceStatus,
 } from './enums/follow-up.enum.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
-import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
-import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Follow-up Sequences')
 @Controller(['follow-up', 'sequences'])

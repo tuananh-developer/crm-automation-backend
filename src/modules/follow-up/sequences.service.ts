@@ -191,7 +191,7 @@ export class SequencesService {
         ? FollowUpSequenceStatus.ACTIVE
         : FollowUpSequenceStatus.PAUSED;
     }
-    if (true) {
+    {
       sequence.updatedBy = null;
     }
 
