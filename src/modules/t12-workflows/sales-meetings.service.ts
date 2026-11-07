@@ -391,6 +391,7 @@ export class SalesMeetingsService {
           workflowRunId: run.id,
           redacted: true,
           contentHash: hash,
+          redactedTranscript: redactedText,
           reused: true,
         };
       }
@@ -414,6 +415,7 @@ export class SalesMeetingsService {
         workflowRunId: run.id,
         redacted: true,
         contentHash: hash,
+        redactedTranscript: redactedText,
         reused: false,
       };
     });

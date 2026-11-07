@@ -1,6 +1,7 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsIn,
+  IsOptional,
   IsString,
   IsUUID,
   Matches,
@@ -33,7 +34,6 @@ export class ClaimWorkflowExecutionDto {
   n8nExecutionId!: string;
 }
 
-
 export class FailWorkflowExecutionDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
@@ -47,7 +47,7 @@ export class FailWorkflowExecutionDto {
   @IsString()
   @MinLength(1)
   @MaxLength(255)
-  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  @Matches(/\S/, { message: 'n8nExecutionId must not be blank' })
   n8nExecutionId!: string;
 
   @ApiProperty({ example: 'UPSTREAM_PROVIDER_FAILURE' })
