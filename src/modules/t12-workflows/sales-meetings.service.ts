@@ -562,7 +562,6 @@ export class SalesMeetingsService {
 
     return this.dataSource.transaction(async (manager) => {
       const summaryRepository = manager.getRepository(ConversationSummary);
-      const meetingRepository = manager.getRepository(SalesMeeting);
       const itemRepository = manager.getRepository(ConversationActionItem);
       const summaryReference = await summaryRepository.findOne({
         where: { id: summaryId, workflowRunId: dto.workflowRunId },
