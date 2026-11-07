@@ -90,6 +90,7 @@ export class SegmentsService {
     query: QuerySegmentDto,
     actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
+    void actor;
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
@@ -150,6 +151,7 @@ export class SegmentsService {
   }
 
   async findOne(id: string, actor: AuthenticatedUser): Promise<SegmentResponseDto> {
+    void actor;
     const segment = await this.segmentsRepository.findOne({
       where: { id },
       relations: {
@@ -196,9 +198,7 @@ export class SegmentsService {
       }
     }
 
-    let updater: User | null = segment.updater ?? null;
-
-    if (true) {
+    {
       const user = await this.usersRepository.findOne({
         where: { id: actor.id },
       });
@@ -210,7 +210,6 @@ export class SegmentsService {
       }
 
       segment.updatedBy = actor.id;
-      updater = user;
     }
 
     if (dto.name !== undefined) {
@@ -232,7 +231,7 @@ export class SegmentsService {
     const saved = await this.segmentsRepository.save(segment);
 
     saved.creator = segment.creator;
-    saved.updater = updater;
+    saved.updater = null;
     return SegmentMapper.toResponseDto(saved);
   }
 
