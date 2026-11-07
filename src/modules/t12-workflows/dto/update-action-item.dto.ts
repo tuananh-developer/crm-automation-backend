@@ -16,10 +16,23 @@ export class UpdateActionItemDto {
   @IsUUID('4')
   assignedTo?: string;
 
+  @ApiPropertyOptional({
+    description: 'Owner attendee user UUID alias',
+    format: 'uuid',
+  })
+  @IsOptional()
+  @IsUUID('4')
+  ownerAttendeeId?: string;
+
   @ApiPropertyOptional({ description: 'Due date timestamp' })
   @IsOptional()
   @IsString()
   dueAt?: string;
+
+  @ApiPropertyOptional({ description: 'Due date timestamp alias' })
+  @IsOptional()
+  @IsString()
+  dueDate?: string;
 
   @ApiPropertyOptional({ enum: ActionItemStatus })
   @IsOptional()

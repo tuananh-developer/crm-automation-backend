@@ -1,11 +1,5 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  IsUUID,
-  MaxLength,
-} from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class CreateTranscriptDto {
   @ApiPropertyOptional({
@@ -30,6 +24,13 @@ export class CreateTranscriptDto {
   meetingId?: string;
 
   @ApiPropertyOptional({
+    description: 'Idempotency key for request deduplication',
+  })
+  @IsOptional()
+  @IsString()
+  idempotencyKey?: string;
+
+  @ApiPropertyOptional({
     description: 'Conversation channel/source type',
     example: 'CALL',
     enum: ['CALL', 'MEETING', 'EMAIL', 'CHAT'],
@@ -38,14 +39,22 @@ export class CreateTranscriptDto {
   @IsString()
   sourceType?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description:
       'Conversation transcript text (will be redacted before AI processing)',
     example:
       'Customer discussed upgrading to Enterprise plan with 50 user licenses next month.',
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  @MaxLength(50000)
-  content!: string;
+  @MaxLength(120000)
+  rawTranscript?: string;
+
+  @ApiPropertyOptional({
+    description: 'Alias for rawTranscript',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120000)
+  content?: string;
 }

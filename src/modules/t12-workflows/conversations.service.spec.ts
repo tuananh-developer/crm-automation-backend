@@ -5,11 +5,11 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { ConversationsService } from './conversations.service.js';
 import {
-  ConversationTranscript,
+  ConversationsService,
   TranscriptProcessingStatus,
-} from './entities/conversation-transcript.entity.js';
+} from './conversations.service.js';
+import { ConversationTranscript } from './entities/conversation-transcript.entity.js';
 import { ConversationSummary } from './entities/conversation-summary.entity.js';
 import {
   ActionItemApprovalState,

@@ -31,7 +31,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
-@ApiTags('Conversations & Meetings')
+@ApiTags('Conversations & Meetings (T12-WF09)')
 @Controller()
 export class ConversationsController {
   constructor(private readonly conversationsService: ConversationsService) {}
@@ -79,7 +79,10 @@ export class ConversationsController {
     return this.conversationsService.getTranscriptSummary(transcriptId, user);
   }
 
-  @Put('conversation-transcripts/:transcriptId/internal/redact')
+  @Put([
+    'conversation-transcripts/:transcriptId/internal/redact',
+    'internal/n8n/conversation-transcripts/:transcriptId/redact',
+  ])
   @UseGuards(N8nAuthGuard)
   @ApiOperation({
     summary:
@@ -96,7 +99,10 @@ export class ConversationsController {
     );
   }
 
-  @Post('conversation-transcripts/:transcriptId/callback')
+  @Post([
+    'conversation-transcripts/:transcriptId/callback',
+    'internal/n8n/conversation-transcripts/:transcriptId/callback',
+  ])
   @UseGuards(N8nAuthGuard)
   @ApiOperation({ summary: 'Internal n8n callback for T12-WF09' })
   @ApiParam({ name: 'transcriptId', format: 'uuid' })
@@ -113,7 +119,10 @@ export class ConversationsController {
     return this.conversationsService.handleCallback(dto);
   }
 
-  @Post('conversation-summaries/:summaryId/internal/action-items')
+  @Post([
+    'conversation-summaries/:summaryId/internal/action-items',
+    'internal/n8n/conversation-summaries/:summaryId/action-items',
+  ])
   @UseGuards(N8nAuthGuard)
   @ApiOperation({
     summary: 'Internal endpoint for workflow to persist pending action items',

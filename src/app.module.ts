@@ -19,7 +19,6 @@ import { AuditModule } from './modules/audit/audit.module.js';
 import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module.js';
-import { ConversationsModule } from './modules/conversations/conversations.module.js';
 import { T12WorkflowsModule } from './modules/t12-workflows/t12-workflows.module.js';
 import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
 
@@ -110,7 +109,6 @@ import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
     AuditModule,
     AuthModule,
     DataCleaningModule,
-    ConversationsModule,
     T12WorkflowsModule,
     ThrottlerModule.forRoot([
       {

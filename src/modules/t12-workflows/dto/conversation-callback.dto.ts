@@ -22,10 +22,23 @@ export class ActionItemCallbackItemDto {
   @IsUUID('4')
   assignedTo?: string;
 
+  @ApiPropertyOptional({
+    description: 'Owner attendee user ID alias',
+    format: 'uuid',
+  })
+  @IsOptional()
+  @IsUUID('4')
+  ownerAttendeeId?: string;
+
   @ApiPropertyOptional({ description: 'Due date timestamp' })
   @IsOptional()
   @IsString()
   dueAt?: string;
+
+  @ApiPropertyOptional({ description: 'Due date alias' })
+  @IsOptional()
+  @IsString()
+  dueDate?: string;
 
   @ApiPropertyOptional({ description: 'Initial status', default: 'PENDING' })
   @IsOptional()
@@ -36,6 +49,10 @@ export class ActionItemCallbackItemDto {
   @IsOptional()
   @IsString()
   approvalState?: string;
+
+  @ApiPropertyOptional({ description: 'Confidence score' })
+  @IsOptional()
+  confidence?: number;
 }
 
 export class ConversationCallbackDto {
@@ -61,10 +78,19 @@ export class ConversationCallbackDto {
     description:
       'Executive conversational summary text (required if status is SUCCESS)',
   })
-  @ValidateIf((o: ConversationCallbackDto) => o.status === 'SUCCESS')
+  @ValidateIf(
+    (o: ConversationCallbackDto) => o.status === 'SUCCESS' && !o.summary,
+  )
   @IsNotEmpty()
   @IsString()
   summaryText?: string;
+
+  @ApiPropertyOptional({
+    description: 'Summary text alias',
+  })
+  @IsOptional()
+  @IsString()
+  summary?: string;
 
   @ApiPropertyOptional({
     description: 'Detected customer sentiment',
@@ -89,6 +115,22 @@ export class ConversationCallbackDto {
   @IsArray()
   @IsString({ each: true })
   keyPoints?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Key decisions',
+    type: [Object],
+  })
+  @IsOptional()
+  @IsArray()
+  decisions?: Array<Record<string, unknown>>;
+
+  @ApiPropertyOptional({
+    description: 'Identified risks',
+    type: [Object],
+  })
+  @IsOptional()
+  @IsArray()
+  risks?: Array<Record<string, unknown>>;
 
   @ApiPropertyOptional({
     description: 'Extracted follow-up action items',

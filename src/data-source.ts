@@ -3,7 +3,6 @@ import { DataSource } from 'typeorm';
 import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
 import { InitialSchema1727866977000 } from './database/migrations/1727866977000-InitialSchema.js';
 import { AddEnrollmentActiveUniqueIndex1728400000000 } from './database/migrations/1728400000000-AddEnrollmentActiveUniqueIndex.js';
-import { CreateConversationTables1728500000000 } from './database/migrations/1728500000000-CreateConversationTables.js';
 import { AddOutboxEventsTable1729000000000 } from './database/migrations/1729000000000-AddOutboxEventsTable.js';
 import { AddOutboxProcessingLease1793476900000 } from './database/migrations/1793476900000-AddOutboxProcessingLease.js';
 import { AddOutboxHttpDispatch1793477000000 } from './database/migrations/1793477000000-AddOutboxHttpDispatch.js';
@@ -40,7 +39,6 @@ export const AppDataSource = new DataSource(
         migrations: [
           InitialSchema1727866977000,
           AddEnrollmentActiveUniqueIndex1728400000000,
-          CreateConversationTables1728500000000,
           AddOutboxEventsTable1729000000000,
           AddT12WorkflowDomains1793476800000,
           AddOutboxProcessingLease1793476900000,
@@ -65,7 +63,6 @@ export const AppDataSource = new DataSource(
         migrations: [
           InitialSchema1727866977000,
           AddEnrollmentActiveUniqueIndex1728400000000,
-          CreateConversationTables1728500000000,
           AddOutboxEventsTable1729000000000,
           AddT12WorkflowDomains1793476800000,
           AddOutboxProcessingLease1793476900000,
