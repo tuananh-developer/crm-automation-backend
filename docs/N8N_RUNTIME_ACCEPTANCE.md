@@ -15,6 +15,12 @@ This runbook is the operational acceptance procedure for WF01, WF08, WF10, WF11 
 4. Configure `BACKEND_INTERNAL_URL`, `N8N_API_KEY`, `GEMINI_API_KEY`, optional `GEMINI_MODEL`, and the RabbitMQ/HTTP Header credentials in n8n's credential store. Never commit credential values to workflow JSON.
 5. For WF01/WF08, configure RabbitMQ credentials and confirm the queues `n8n.lead-qualification.q` and `n8n.data-cleaning.q` exist. For WF10/WF11/WF12, configure protected webhook credentials and HTTPS destinations.
 
+Synthetic input fixtures are version-controlled under `integrations/n8n/fixtures/`:
+- `wf01-qualification.event.json`, `wf08-data-cleaning.event.json`
+- `wf10-next-best-action.request.json`, `wf11-sales-meeting.dispatch.json`, `wf12-quote-proposal.dispatch.json`
+
+All fixture identities are synthetic UUIDs and email/phone examples use non-routable test data. Use them only with disposable database records that have been seeded to match those IDs; do not replay them against a shared or production database.
+
 ## 2. Disposable-environment test matrix
 
 Run with a disposable database, synthetic records and provider sandbox/test credentials. Do not use production customer transcripts.
