@@ -291,11 +291,10 @@ export class SalesMeetingsService {
             where: { id: meeting.leadId },
             select: {
               id: true,
-              firstName: true,
-              lastName: true,
-              email: true,
               companyName: true,
+              companyWebsite: true,
               jobTitle: true,
+              industry: true,
             },
           })
         : Promise.resolve(null),
@@ -304,17 +303,17 @@ export class SalesMeetingsService {
             where: { id: meeting.customerId },
             select: {
               id: true,
-              name: true,
-              email: true,
               companyName: true,
+              companyWebsite: true,
               jobTitle: true,
+              industry: true,
             },
           })
         : Promise.resolve(null),
       meeting.attendeeIds.length
         ? this.users.find({
             where: { id: In(meeting.attendeeIds) },
-            select: { id: true, name: true, email: true, role: true },
+            select: { id: true, role: true },
           })
         : Promise.resolve([]),
     ]);

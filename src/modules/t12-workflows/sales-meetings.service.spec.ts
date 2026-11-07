@@ -147,6 +147,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
     repositories.WorkflowRun.findOne.mockResolvedValue({
       ...workflowRun,
       n8nExecutionId: 'execution-original',
+      claimExpiresAt: new Date(Date.now() + 60_000),
     });
     await expect(service.saveTranscript(transcriptDto)).rejects.toBeInstanceOf(
       ConflictException,

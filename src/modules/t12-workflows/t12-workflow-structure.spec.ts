@@ -40,4 +40,38 @@ describe('Tuấn Anh T12 workflow exports', () => {
       }
     }
   });
+
+  it('uses a separate shared Error Trigger workflow with a sanitized failure callback', () => {
+    const handler = JSON.parse(readFileSync(
+      resolve(process.cwd(), 'integrations/n8n/workflows/t12-error-handler.json'),
+      'utf8',
+    ));
+    expect(handler.nodes.some((node: { type: string }) =>
+      node.type === 'n8n-nodes-base.errorTrigger',
+    )).toBe(true);
+    const callback = handler.nodes.find((node: { name: string }) =>
+      node.name === 'HTTP Request: Record Workflow Failure',
+    );
+    expect(callback.parameters.url).toContain('/workflow-executions/failure');
+    expect(callback.parameters.jsonBody).toContain('errorCategory');
+    expect(callback.parameters.jsonBody).not.toContain('error.message');
+    expect(handler.settings.errorWorkflow).toBeUndefined();
+  });
+
+  it('does not reference direct contact identifiers in the four AI prompt builders', () => {
+    const checks = [
+      ['integrations/n8n/workflows/uc02-ai-lead-qualification.json', 'Code: Normalize Qualification Input'],
+      ['integrations/n8n/workflows/t12-wf10-next-best-action.json', 'Code: Generate Candidate Actions'],
+      ['integrations/n8n/workflows/t12-wf11-sales-meeting.json', 'Code: Build Meeting Prompt'],
+      ['integrations/n8n/workflows/t12-wf12-quote-proposal.json', 'Code: Normalize Requirements'],
+    ];
+    for (const [path, name] of checks) {
+      const workflow = JSON.parse(readFileSync(resolve(process.cwd(), path), 'utf8'));
+      const node = workflow.nodes.find((item: { name: string }) => item.name === name);
+      expect(node).toBeDefined();
+      expect(node.parameters.jsCode).not.toMatch(
+        /(?:lead|sourceProfile|sourceCustomer|meeting\.(?:lead|customer|attendees))\.(?:email|phone|firstName|lastName|name)\b/i,
+      );
+    }
+  });
 });

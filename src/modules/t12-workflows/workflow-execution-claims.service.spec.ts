@@ -148,6 +148,14 @@ describe('WorkflowExecutionClaimsService', () => {
       .rejects.toBeInstanceOf(ConflictException);
   });
 
+  it('locates a failed run by execution ID when the Error Trigger has no run ID', async () => {
+    run.n8nExecutionId = request.n8nExecutionId;
+    run.claimExpiresAt = new Date(Date.now() + 60_000);
+    run.status = WorkflowStatus.RUNNING;
+    await service.fail({ workflowName: request.workflowName, n8nExecutionId: request.n8nExecutionId, errorCategory: 'UPSTREAM_PROVIDER_FAILURE' });
+    expect(repository.findOne).toHaveBeenCalledWith({ where: { workflowName: request.workflowName, n8nExecutionId: request.n8nExecutionId }, lock: { mode: 'pessimistic_write' } });
+  });
+
   it('rejects free-form error text instead of a stable category', async () => {
     await expect(service.fail({ ...request, errorCategory: 'token=secret provider failed' }))
       .rejects.toBeInstanceOf(BadRequestException);
