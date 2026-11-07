@@ -33,6 +33,7 @@ import {
 } from './dto/index.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { QualificationMapper, EnrichmentMapper } from './mappers/index.js';
@@ -166,7 +167,7 @@ export class LeadIntelligenceController {
   }
 
   @Get('mock-enrichment')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrN8nAuthGuard)
   @ApiOperation({
     summary: 'Mock external enrichment service for testing & n8n',
     description:

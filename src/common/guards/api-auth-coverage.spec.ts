@@ -16,6 +16,7 @@ import { NextBestActionsController } from '../../modules/t12-workflows/next-best
 import { SalesMeetingsController } from '../../modules/t12-workflows/sales-meetings.controller.js';
 import { QuotesController } from '../../modules/t12-workflows/quotes.controller.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
+import { JwtOrN8nAuthGuard } from './jwt-or-n8n-auth.guard.js';
 import { RolesGuard } from './roles.guard.js';
 import { ROLES_KEY } from '../decorators/roles.decorator.js';
 import { UserRole } from '../../modules/users/enums/user.enum.js';
@@ -131,8 +132,6 @@ describe('API authentication guard coverage', () => {
     [LeadIntelligenceController, 'getLatestQualification'],
     [LeadIntelligenceController, 'getEnrichments'],
     [LeadIntelligenceController, 'getLatestEnrichment'],
-    [LeadIntelligenceController, 'mockEnrichment'],
-    [EnrichmentController, 'mockEnrichment'],
     [EnrichmentController, 'getEnrichmentsByLead'],
     [EnrichmentController, 'getLatestEnrichment'],
     [ScoringController, 'getScoringContext'],
@@ -148,6 +147,22 @@ describe('API authentication guard coverage', () => {
       );
 
       expect(guards).toContain(JwtAuthGuard);
+    },
+  );
+
+  it.each([
+    [LeadIntelligenceController, 'mockEnrichment'],
+    [EnrichmentController, 'mockEnrichment'],
+  ] as const)(
+    '%p.%s allows service or JWT authentication via JwtOrN8nAuthGuard',
+    (controller, method) => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        Object.getOwnPropertyDescriptor(controller.prototype, method)
+          ?.value as object,
+      );
+
+      expect(guards).toContain(JwtOrN8nAuthGuard);
     },
   );
 });

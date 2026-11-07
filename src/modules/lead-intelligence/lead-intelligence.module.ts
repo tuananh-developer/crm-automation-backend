@@ -15,6 +15,7 @@ import { EnrichmentController } from './enrichment.controller.js';
 import { ScoringController } from './scoring.controller.js';
 import { InternalN8nController } from './internal-n8n.controller.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
+import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js';
 import { DataCleaningModule } from '../data-cleaning/data-cleaning.module.js';
 
 @Module({
@@ -38,7 +39,12 @@ import { DataCleaningModule } from '../data-cleaning/data-cleaning.module.js';
     ScoringController,
     InternalN8nController,
   ],
-  providers: [LeadIntelligenceService, N8nAuthGuard],
-  exports: [LeadIntelligenceService, TypeOrmModule],
+  providers: [LeadIntelligenceService, N8nAuthGuard, JwtOrN8nAuthGuard],
+  exports: [
+    LeadIntelligenceService,
+    TypeOrmModule,
+    N8nAuthGuard,
+    JwtOrN8nAuthGuard,
+  ],
 })
 export class LeadIntelligenceModule {}

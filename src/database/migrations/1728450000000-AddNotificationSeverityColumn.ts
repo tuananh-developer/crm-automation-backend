@@ -6,14 +6,14 @@ export class AddNotificationSeverityColumn1728450000000 implements MigrationInte
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       ALTER TABLE "notifications"
-      ADD COLUMN IF NOT EXISTS "severity" character varying(30) DEFAULT 'INFO';
+      ADD COLUMN IF NOT EXISTS "severity" character varying(30) NOT NULL DEFAULT 'INFO'
     `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       ALTER TABLE "notifications"
-      DROP COLUMN IF EXISTS "severity";
+      DROP COLUMN IF EXISTS "severity"
     `);
   }
 }

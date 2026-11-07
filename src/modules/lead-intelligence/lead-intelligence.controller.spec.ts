@@ -5,6 +5,7 @@ import { LeadStatus } from '../leads/enums/lead.enum.js';
 import type { LeadQualification } from './entities/lead-qualification.entity.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
@@ -245,6 +246,15 @@ describe('LeadIntelligenceController', () => {
       );
       expect(guards).toBeDefined();
       expect(guards).toContain(N8nAuthGuard);
+    });
+
+    it('should protect mockEnrichment endpoint with JwtOrN8nAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        LeadIntelligenceController.prototype.mockEnrichment,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtOrN8nAuthGuard);
     });
 
     it('should configure dual route paths for handleCallback endpoint', () => {

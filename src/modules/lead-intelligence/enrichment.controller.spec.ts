@@ -1,8 +1,12 @@
+import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
 import { EnrichmentController } from './enrichment.controller.js';
 import type { LeadIntelligenceService } from './lead-intelligence.service.js';
 import { EnrichmentStatus } from './enums/lead-intelligence.enum.js';
 import type { LeadEnrichment } from './entities/lead-enrichment.entity.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js';
+import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
@@ -196,6 +200,108 @@ describe('EnrichmentController', () => {
       expect(guards).toBeDefined();
       expect(guards).toContain(JwtAuthGuard);
     });
+
+    it('should protect mockEnrichment endpoint with JwtOrN8nAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        EnrichmentController.prototype.mockEnrichment,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtOrN8nAuthGuard);
+    });
     /* eslint-enable @typescript-eslint/unbound-method */
+  });
+
+  describe('Mock Enrichment Service Authentication Flow (n8n Integration)', () => {
+    let compositeGuard: JwtOrN8nAuthGuard;
+    let n8nAuthGuard: N8nAuthGuard;
+    let mockJwtAuthGuard: Partial<JwtAuthGuard>;
+    const mockApiKey = 'n8n-service-secret-key-123';
+
+    beforeEach(() => {
+      const mockConfigService = {
+        get: jest.fn((key: string) => {
+          if (key === 'N8N_API_KEY') return mockApiKey;
+          if (key === 'NODE_ENV') return 'test';
+          return undefined;
+        }),
+      };
+      n8nAuthGuard = new N8nAuthGuard(
+        mockConfigService as unknown as ConfigService,
+      );
+      mockJwtAuthGuard = {
+        canActivate: jest.fn().mockImplementation(() => {
+          throw new UnauthorizedException('JWT token required');
+        }),
+      };
+      compositeGuard = new JwtOrN8nAuthGuard(
+        mockJwtAuthGuard as JwtAuthGuard,
+        n8nAuthGuard,
+      );
+    });
+
+    const createExecutionContext = (
+      headers: Record<string, string>,
+    ): ExecutionContext =>
+      ({
+        switchToHttp: jest.fn().mockReturnValue({
+          getRequest: jest.fn().mockReturnValue({ headers }),
+        }),
+      }) as unknown as ExecutionContext;
+
+    it('successfully authenticates workflow request carrying only X-N8N-API-KEY (no user JWT) and returns mock data', async () => {
+      const context = createExecutionContext({
+        'x-n8n-api-key': mockApiKey,
+      });
+
+      const canActivate = await compositeGuard.canActivate(context);
+      expect(canActivate).toBe(true);
+
+      const response = controller.mockEnrichment(
+        'innovatetech.io',
+        'contact@innovatetech.io',
+        'mock',
+      );
+
+      expect(service.mockEnrichment).toHaveBeenCalledWith({
+        domain: 'innovatetech.io',
+        email: 'contact@innovatetech.io',
+        provider: 'mock',
+        fail: undefined,
+      });
+      expect(response).toBeDefined();
+      expect(response.company.name).toBe('Acme Solutions');
+    });
+
+    it('rejects workflow request without authentication credentials (401)', async () => {
+      const context = createExecutionContext({});
+
+      await expect(compositeGuard.canActivate(context)).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('rejects workflow request with invalid X-N8N-API-KEY (401)', async () => {
+      const context = createExecutionContext({
+        'x-n8n-api-key': 'invalid-secret-key',
+      });
+
+      await expect(compositeGuard.canActivate(context)).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('successfully authenticates browser user carrying valid JWT Bearer token', async () => {
+      (mockJwtAuthGuard.canActivate as jest.Mock).mockResolvedValue(true);
+      const context = createExecutionContext({
+        authorization: 'Bearer valid-user-jwt',
+      });
+
+      const canActivate = await compositeGuard.canActivate(context);
+      expect(canActivate).toBe(true);
+
+      const response = controller.mockEnrichment('acme.com');
+      expect(response).toBeDefined();
+    });
   });
 });
