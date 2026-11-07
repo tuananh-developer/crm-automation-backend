@@ -298,7 +298,7 @@
           "conditions": [
             {
               "id": "552caa1b-6be1-42a3-8eac-419fd6d9c31f",
-              "leftValue": "={ $json.reviewRequired }",
+              "leftValue": "={{ $json.reviewRequired }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
