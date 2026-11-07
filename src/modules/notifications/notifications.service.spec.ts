@@ -1,8 +1,16 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { NotificationsService } from './notifications.service.js';
-import { NotificationType } from './enums/notification.enum.js';
+import {
+  NotificationSeverity,
+  NotificationType,
+} from './enums/notification.enum.js';
 import type { Repository } from 'typeorm';
 import type { Notification } from './entities/notification.entity.js';
+import type { Lead } from '../leads/entities/lead.entity.js';
 
 describe('NotificationsService', () => {
   let service: NotificationsService;
@@ -14,6 +22,7 @@ describe('NotificationsService', () => {
     type: NotificationType.HUMAN_REVIEW_REQUIRED,
     title: 'Human review required',
     content: 'Lead lead-1 requires manual review.',
+    severity: NotificationSeverity.INFO,
     leadId: 'lead-1',
     customerId: null,
     reviewTaskId: 'review-1',
@@ -137,17 +146,47 @@ describe('NotificationsService', () => {
   });
 
   it('reuses an existing notification when the idempotency key and payload match', async () => {
-    const existing = { ...mockNotification, idempotencyKey: 'wf08:run-1:user-1' };
-    (notificationRepository.findOne as jest.Mock).mockResolvedValueOnce(existing);
-    const result = await service.create({ userId: existing.userId, type: existing.type, title: existing.title, content: existing.content, leadId: existing.leadId, customerId: existing.customerId, reviewTaskId: existing.reviewTaskId, idempotencyKey: existing.idempotencyKey });
+    const existing = {
+      ...mockNotification,
+      idempotencyKey: 'wf08:run-1:user-1',
+    };
+    (notificationRepository.findOne as jest.Mock).mockResolvedValueOnce(
+      existing,
+    );
+    const result = await service.create({
+      userId: existing.userId,
+      type: existing.type,
+      title: existing.title,
+      content: existing.content,
+      leadId: existing.leadId,
+      customerId: existing.customerId,
+      reviewTaskId: existing.reviewTaskId,
+      idempotencyKey: existing.idempotencyKey,
+    });
     expect(result).toBe(existing);
     expect(notificationRepository.save).not.toHaveBeenCalled();
   });
 
   it('rejects reuse of an idempotency key with a different payload', async () => {
-    const existing = { ...mockNotification, idempotencyKey: 'wf08:run-1:user-1' };
-    (notificationRepository.findOne as jest.Mock).mockResolvedValueOnce(existing);
-    await expect(service.create({ userId: 'another-user', type: existing.type, title: existing.title, content: existing.content, leadId: existing.leadId, customerId: existing.customerId, reviewTaskId: existing.reviewTaskId, idempotencyKey: existing.idempotencyKey })).rejects.toBeInstanceOf(ConflictException);
+    const existing = {
+      ...mockNotification,
+      idempotencyKey: 'wf08:run-1:user-1',
+    };
+    (notificationRepository.findOne as jest.Mock).mockResolvedValueOnce(
+      existing,
+    );
+    await expect(
+      service.create({
+        userId: 'another-user',
+        type: existing.type,
+        title: existing.title,
+        content: existing.content,
+        leadId: existing.leadId,
+        customerId: existing.customerId,
+        reviewTaskId: existing.reviewTaskId,
+        idempotencyKey: existing.idempotencyKey,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
   it('creates an unread notification', async () => {
     (notificationRepository.create as jest.Mock).mockImplementation(
@@ -167,5 +206,96 @@ describe('NotificationsService', () => {
     expect(result.isRead).toBe(false);
     expect(result.readAt).toBeNull();
     expect(result.type).toBe(NotificationType.FOLLOW_UP_FAILED);
+  });
+
+  it('resolves recipient userId from lead owner when userId is omitted', async () => {
+    const leadsRepo = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'lead-1', ownerId: 'owner-user-1' }),
+    };
+    const serviceWithLeads = new NotificationsService(
+      notificationRepository as Repository<Notification>,
+      undefined,
+      leadsRepo as unknown as Repository<Lead>,
+    );
+    (notificationRepository.create as jest.Mock).mockImplementation(
+      (input: Partial<Notification>) => input as Notification,
+    );
+    (notificationRepository.save as jest.Mock).mockImplementation(
+      (notification: Notification) => Promise.resolve(notification),
+    );
+
+    const result = await serviceWithLeads.create({
+      type: NotificationType.WORKFLOW_COMPLETED,
+      title: 'Lead Enrichment Incomplete',
+      leadId: 'lead-1',
+    });
+
+    expect(result.userId).toBe('owner-user-1');
+  });
+
+  it('throws BadRequestException when userId is omitted and lead has no owner', async () => {
+    const leadsRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: 'lead-1', ownerId: null }),
+    };
+    const serviceWithLeads = new NotificationsService(
+      notificationRepository as Repository<Notification>,
+      undefined,
+      leadsRepo as unknown as Repository<Lead>,
+    );
+
+    await expect(
+      serviceWithLeads.create({
+        type: NotificationType.WORKFLOW_COMPLETED,
+        title: 'Lead Enrichment Incomplete',
+        leadId: 'lead-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('persists explicit notification severity (HIGH / MEDIUM / INFO) end-to-end', async () => {
+    (notificationRepository.create as jest.Mock).mockImplementation(
+      (input: Partial<Notification>) => input as Notification,
+    );
+    (notificationRepository.save as jest.Mock).mockImplementation(
+      (notification: Notification) => Promise.resolve(notification),
+    );
+
+    const highNotif = await service.create({
+      userId: 'user-1',
+      type: NotificationType.WORKFLOW_COMPLETED,
+      severity: 'HIGH',
+      title: 'Lead Enrichment Failed',
+      message: 'Enrichment failed with error',
+      leadId: 'lead-1',
+    });
+
+    expect(notificationRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'HIGH',
+      }),
+    );
+    expect(highNotif.severity).toBe('HIGH');
+
+    const mediumNotif = await service.create({
+      userId: 'user-1',
+      type: NotificationType.WORKFLOW_COMPLETED,
+      severity: 'MEDIUM',
+      title: 'Lead Enrichment Partial',
+      message: 'Enrichment completed partially',
+      leadId: 'lead-1',
+    });
+
+    expect(mediumNotif.severity).toBe('MEDIUM');
+
+    const defaultNotif = await service.create({
+      userId: 'user-1',
+      type: NotificationType.WORKFLOW_COMPLETED,
+      title: 'Default Severity Notification',
+      leadId: 'lead-1',
+    });
+
+    expect(defaultNotif.severity).toBe('INFO');
   });
 });

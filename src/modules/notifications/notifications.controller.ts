@@ -14,9 +14,10 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service.js';
 import {
-  CreateNotificationDto,
+  CreateInternalNotificationDto,
   MarkNotificationReadDto,
   QueryNotificationsDto,
   NotificationResponseDto,
@@ -27,7 +28,6 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole } from '../users/enums/user.enum.js';
-import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 @ApiTags('Notifications')
 @Controller('notifications')
@@ -36,6 +36,7 @@ export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
   @Get()
+  @ApiOperation({ summary: 'Find notifications for a user' })
   findAll(
     @Query() query: QueryNotificationsDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -45,6 +46,7 @@ export class NotificationsController {
   }
 
   @Get('unread-count')
+  @ApiOperation({ summary: 'Get unread notification count for a user' })
   async unreadCount(
     @Query('userId', ParseUUIDPipe) userId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -54,6 +56,7 @@ export class NotificationsController {
   }
 
   @Patch('read-all')
+  @ApiOperation({ summary: 'Mark all notifications as read for a user' })
   async markAllRead(
     @Body() dto: MarkNotificationReadDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -65,6 +68,7 @@ export class NotificationsController {
   }
 
   @Patch(':id/read')
+  @ApiOperation({ summary: 'Mark specific notification as read' })
   markRead(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: MarkNotificationReadDto,
@@ -95,7 +99,7 @@ export class NotificationsController {
     description:
       'Canonical route: /api/v1/notifications/internal/create. n8n workflows request an idempotent backend notification through this endpoint. The backend validates the target user, type and resource references.',
   })
-  @ApiBody({ type: CreateNotificationDto })
+  @ApiBody({ type: CreateInternalNotificationDto })
   @ApiResponse({
     status: 200,
     description: 'Notification created.',
@@ -103,13 +107,14 @@ export class NotificationsController {
   })
   @ApiResponse({ status: 401, description: 'Unauthorized n8n callback.' })
   async createInternal(
-    @Body() dto: CreateNotificationDto,
+    @Body() dto: CreateInternalNotificationDto,
   ): Promise<NotificationResponseDto> {
     const notification = await this.notificationsService.create({
       userId: dto.userId,
       type: dto.type,
       title: dto.title,
-      content: dto.content ?? null,
+      content: dto.content ?? dto.message ?? null,
+      severity: dto.severity,
       leadId: dto.leadId ?? null,
       customerId: dto.customerId ?? null,
       reviewTaskId: dto.reviewTaskId ?? null,

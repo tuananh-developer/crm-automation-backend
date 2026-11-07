@@ -35,14 +35,26 @@ describe('ScoringController', () => {
     inputSnapshot: {},
     outputSnapshot: {},
     createdAt: new Date(),
+    updatedAt: new Date(),
+  } as unknown as LeadScore;
+
+  const mockActor: AuthenticatedUser = {
+    id: 'user-actor-456',
+    name: 'Actor Rep',
+    email: 'actor@example.test',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
   };
 
   beforeEach(() => {
     service = {
       triggerScoring: jest.fn().mockResolvedValue({
-        message: 'Lead scoring workflow triggered successfully',
         workflowRunId: 'wf-run-123',
-        leadId: 'lead-123',
+        status: 'PENDING',
+        message: 'Scoring triggered',
       }),
       handleScoringCallback: jest.fn().mockResolvedValue({
         score: mockScore,
@@ -75,6 +87,17 @@ describe('ScoringController', () => {
       actor,
     );
     expect(result.workflowRunId).toBe('wf-run-123');
+  });
+
+  it('should pass authenticated actor when triggering scoring', async () => {
+    const dto = { userId: 'client-user' };
+    await controller.triggerScoring('lead-123', dto, mockActor);
+
+    expect(service.triggerScoring).toHaveBeenCalledWith(
+      'lead-123',
+      dto,
+      mockActor,
+    );
   });
 
   it('should handle scoring callback via service', async () => {
@@ -126,5 +149,6 @@ describe('ScoringController', () => {
       expect(guards).toBeDefined();
       expect(guards).toContain(JwtAuthGuard);
     });
+    /* eslint-enable @typescript-eslint/unbound-method */
   });
 });

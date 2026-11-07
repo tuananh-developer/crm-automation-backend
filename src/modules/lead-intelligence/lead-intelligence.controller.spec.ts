@@ -5,6 +5,7 @@ import { LeadStatus } from '../leads/enums/lead.enum.js';
 import type { LeadQualification } from './entities/lead-qualification.entity.js';
 import { N8nAuthGuard } from './guards/n8n-auth.guard.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 
@@ -27,23 +28,35 @@ describe('LeadIntelligenceController', () => {
     leadId: 'lead-123',
     workflowRunId: 'wf-run-123',
     status: QualificationStatus.QUALIFIED,
-    intent: 'B2B CRM adoption',
     confidence: 0.92,
-    reason: 'Clear requirements and budget match',
+    intent: 'HIGH',
+    reason: 'Matches ideal customer profile',
     modelProvider: 'openai',
-    modelName: 'gpt-4o',
-    modelVersion: '2024-08-06',
+    modelName: 'gpt-4o-mini',
+    modelVersion: 'gpt-4o-mini',
     inputSnapshot: {},
     outputSnapshot: {},
     createdAt: new Date(),
+    updatedAt: new Date(),
+  } as LeadQualification;
+
+  const mockActor: AuthenticatedUser = {
+    id: 'user-actor-456',
+    name: 'Actor Rep',
+    email: 'actor@example.test',
+    role: UserRole.SALES,
+    status: UserStatus.ACTIVE,
+    lastLoginAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
   };
 
   beforeEach(() => {
     service = {
       triggerQualification: jest.fn().mockResolvedValue({
-        message: 'Triggered',
         workflowRunId: 'wf-run-123',
-        leadId: 'lead-123',
+        status: 'PENDING',
+        message: 'Qualification triggered',
       }),
       handleQualificationCallback: jest.fn().mockResolvedValue({
         qualification: mockQualification,
@@ -53,10 +66,9 @@ describe('LeadIntelligenceController', () => {
       getQualificationsByLead: jest.fn().mockResolvedValue([mockQualification]),
       getLatestQualification: jest.fn().mockResolvedValue(mockQualification),
       triggerEnrichment: jest.fn().mockResolvedValue({
-        message: 'Lead enrichment workflow triggered successfully',
         workflowRunId: 'wf-run-123',
-        enrichmentId: 'enrich-123',
-        leadId: 'lead-123',
+        status: 'PENDING',
+        message: 'Enrichment triggered',
       }),
       getEnrichmentsByLead: jest.fn().mockResolvedValue([
         {
@@ -110,6 +122,17 @@ describe('LeadIntelligenceController', () => {
       actor,
     );
     expect(result.workflowRunId).toBe('wf-run-123');
+  });
+
+  it('should pass authenticated actor when triggering qualification', async () => {
+    const dto = { userId: 'client-user' };
+    await controller.triggerQualification('lead-123', dto, mockActor);
+
+    expect(service.triggerQualification).toHaveBeenCalledWith(
+      'lead-123',
+      dto,
+      mockActor,
+    );
   });
 
   it('should handle callback via service', async () => {
@@ -223,6 +246,15 @@ describe('LeadIntelligenceController', () => {
       );
       expect(guards).toBeDefined();
       expect(guards).toContain(N8nAuthGuard);
+    });
+
+    it('should protect mockEnrichment endpoint with JwtOrN8nAuthGuard metadata', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        LeadIntelligenceController.prototype.mockEnrichment,
+      );
+      expect(guards).toBeDefined();
+      expect(guards).toContain(JwtOrN8nAuthGuard);
     });
 
     it('should configure dual route paths for handleCallback endpoint', () => {

@@ -1,14 +1,20 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   BadRequestException,
   ConflictException,
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import {
   CONFIDENCE_THRESHOLD,
   DEFAULT_ENRICHMENT_PROVIDER,
   LeadIntelligenceService,
 } from './lead-intelligence.service.js';
+import { EnrichmentCallbackDto } from './dto/enrichment-callback.dto.js';
+import { LEAD_ENRICHMENT_QUEUE } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
 import {
   EnrichmentStatus,
@@ -342,6 +348,7 @@ describe('LeadIntelligenceService', () => {
         type: 'REVIEW_REQUIRED',
         title: 'Review Required',
         content: 'Please review this Lead',
+        severity: 'INFO',
         leadId: 'lead-123',
         customerId: null,
         reviewTaskId: 'review-123',
@@ -844,8 +851,12 @@ describe('LeadIntelligenceService', () => {
         ...mockLead,
         status: LeadStatus.QUALIFYING,
       });
-      (qualificationsRepo.create as jest.Mock).mockReturnValue(mockQualification);
-      (qualificationsRepo.save as jest.Mock).mockResolvedValue(mockQualification);
+      (qualificationsRepo.create as jest.Mock).mockReturnValue(
+        mockQualification,
+      );
+      (qualificationsRepo.save as jest.Mock).mockResolvedValue(
+        mockQualification,
+      );
       (workflowRunsRepo.save as jest.Mock).mockImplementation((run) =>
         Promise.resolve(run),
       );
@@ -862,11 +873,14 @@ describe('LeadIntelligenceService', () => {
         Notification: notificationsRepo,
       };
       const manager = {
-        getRepository: jest.fn((entity: { name: string }) => repositories[entity.name]),
+        getRepository: jest.fn(
+          (entity: { name: string }) => repositories[entity.name],
+        ),
       };
       const transactionalDataSource = {
-        transaction: jest.fn((callback: (value: typeof manager) => Promise<unknown>) =>
-          callback(manager),
+        transaction: jest.fn(
+          (callback: (value: typeof manager) => Promise<unknown>) =>
+            callback(manager),
         ),
       };
       const transactionalService = new LeadIntelligenceService(
@@ -1364,11 +1378,63 @@ describe('LeadIntelligenceService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should reject an enrichment callback for the wrong workflow type', async () => {
-      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+    it('should reject callback when workflowRunId is missing and never fall back to latest pending enrichment', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+
+      await expect(
+        service.handleEnrichmentCallback({
+          leadId: 'lead-123',
+          workflowRunId: '',
+          status: EnrichmentStatus.SUCCESS,
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(enrichmentsRepo.findOne).not.toHaveBeenCalled();
+      expect(enrichmentsRepo.save).not.toHaveBeenCalled();
+
+      const dtoWithoutRunId = plainToInstance(EnrichmentCallbackDto, {
+        leadId: '11111111-1111-4111-8111-111111111111',
+        status: EnrichmentStatus.SUCCESS,
+      });
+      const validationErrors = await validate(dtoWithoutRunId);
+      expect(
+        validationErrors.some((err) => err.property === 'workflowRunId'),
+      ).toBe(true);
+    });
+
+    it('should throw NotFoundException if workflowRun does not exist', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.handleEnrichmentCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'unknown-wf-run',
+          status: EnrichmentStatus.SUCCESS,
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should reject an enrichment callback for the wrong workflow type or mismatched leadId', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
       (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
         ...mockWorkflowRun,
         workflowName: 'lead-scoring',
+        leadId: 'lead-123',
+      });
+
+      await expect(
+        service.handleEnrichmentCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: EnrichmentStatus.SUCCESS,
+        }),
+      ).rejects.toThrow(NotFoundException);
+
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'lead-enrichment',
+        leadId: 'different-lead-999',
       });
 
       await expect(
@@ -1501,7 +1567,12 @@ describe('LeadIntelligenceService', () => {
       (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
         ...mockWorkflowRun,
         workflowName: 'lead-enrichment',
+        leadId: 'lead-123',
+        status: WorkflowStatus.PENDING,
       });
+      (workflowRunsRepo.save as jest.Mock).mockImplementation((w) =>
+        Promise.resolve(w),
+      );
 
       const result = await service.handleEnrichmentCallback({
         leadId: 'lead-123',
@@ -1513,6 +1584,9 @@ describe('LeadIntelligenceService', () => {
 
       expect(enrichmentsRepo.create).toHaveBeenCalled();
       expect(result.enrichment.status).toBe(EnrichmentStatus.PARTIAL);
+      expect(workflowRunsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: WorkflowStatus.PARTIAL }),
+      );
     });
 
     it('should be idempotent and return existing enrichment when already completed', async () => {
@@ -1536,6 +1610,92 @@ describe('LeadIntelligenceService', () => {
       expect(result.workflowRunUpdated).toBe(false);
       expect(result.enrichment.status).toBe(EnrichmentStatus.SUCCESS);
       expect(enrichmentsRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('should throw ConflictException (409) on duplicate callback with conflicting provider', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'lead-enrichment',
+        status: WorkflowStatus.SUCCESS,
+        outputPayload: { provider: 'clearbit' },
+      });
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockEnrichment,
+        provider: 'clearbit',
+        status: EnrichmentStatus.SUCCESS,
+      });
+
+      await expect(
+        service.handleEnrichmentCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: EnrichmentStatus.SUCCESS,
+          provider: 'apollo',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException (409) on duplicate FAILED callback with conflicting errorMessage', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'lead-enrichment',
+        status: WorkflowStatus.FAILED,
+        errorMessage: 'Original error message',
+      });
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockEnrichment,
+        status: EnrichmentStatus.FAILED,
+      });
+
+      await expect(
+        service.handleEnrichmentCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: EnrichmentStatus.FAILED,
+          errorMessage: 'Conflicting new error',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException (409) on late callback attempting transition from terminal state (e.g. FAILED after SUCCESS)', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'lead-enrichment',
+        status: WorkflowStatus.SUCCESS,
+      });
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockEnrichment,
+        status: EnrichmentStatus.SUCCESS,
+      });
+
+      await expect(
+        service.handleEnrichmentCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: EnrichmentStatus.FAILED,
+          errorMessage: 'Late failure',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException (409) when workflowRun is not active', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({ ...mockLead });
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockWorkflowRun,
+        workflowName: 'lead-enrichment',
+        status: WorkflowStatus.CANCELLED,
+      });
+
+      await expect(
+        service.handleEnrichmentCallback({
+          leadId: 'lead-123',
+          workflowRunId: 'wf-run-123',
+          status: EnrichmentStatus.SUCCESS,
+        }),
+      ).rejects.toThrow(ConflictException);
     });
 
     it('should map alternate field names (industry, jobTitle, linkedInUrl) correctly', async () => {
@@ -1604,8 +1764,7 @@ describe('LeadIntelligenceService', () => {
             ...mockWorkflowRun,
             id: options?.where?.id ?? mockWorkflowRun.id,
             leadId: options?.where?.leadId ?? mockWorkflowRun.leadId,
-            workflowName:
-              options?.where?.workflowName ?? mockWorkflowRun.workflowName,
+            workflowName: options?.where?.workflowName ?? 'lead-enrichment',
             status: WorkflowStatus.PENDING,
           }),
         ),
@@ -1644,6 +1803,8 @@ describe('LeadIntelligenceService', () => {
       (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
         ...mockWorkflowRun,
         workflowName: 'lead-enrichment',
+        leadId: 'lead-123',
+        status: WorkflowStatus.PENDING,
       });
       (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue(null);
 
@@ -1741,4 +1902,269 @@ describe('LeadIntelligenceService', () => {
       expect(CONFIDENCE_THRESHOLD).toBe(0.8);
     });
   });
+
+  /* eslint-disable @typescript-eslint/no-implied-eval */
+  describe('UC03 n8n Workflow Producer-Consumer, Correlation & Degraded Lead-Read Contract', () => {
+    interface N8nWorkflowNode {
+      id: string;
+      name: string;
+      type: string;
+      onError?: string;
+      parameters: {
+        queue?: string;
+        jsCode?: string;
+      };
+    }
+
+    const workflowPath = path.resolve(
+      process.cwd(),
+      'integrations/n8n/workflows/uc03-ai-lead-enrichment.json',
+    );
+    const workflowJson = JSON.parse(fs.readFileSync(workflowPath, 'utf-8')) as {
+      nodes: N8nWorkflowNode[];
+    };
+
+    const findNode = (name: string): N8nWorkflowNode => {
+      const node = workflowJson.nodes.find((n) => n.name === name);
+      if (!node) {
+        throw new Error(`Node '${name}' not found in UC03 workflow`);
+      }
+      return node;
+    };
+
+    it('matches the RabbitMQ queue contract between backend publisher and n8n consumer', () => {
+      const triggerNode = findNode('RabbitMQ Trigger');
+      expect(triggerNode.parameters.queue).toBe(LEAD_ENRICHMENT_QUEUE);
+      expect(triggerNode.parameters.queue).toBe('n8n.lead-enrichment.q');
+    });
+
+    it('rejects RabbitMQ events missing a valid workflowRunId or leadId UUID in Code: Normalize Event', () => {
+      const normalizeNode = findNode('Code: Normalize Event');
+      const runNormalize = (inputJson: Record<string, unknown>) => {
+        const fn = new Function(
+          '$input',
+          normalizeNode.parameters.jsCode ?? '',
+        ) as (input: {
+          first: () => { json: Record<string, unknown> };
+        }) => Array<{ json: Record<string, unknown> }>;
+        return fn({ first: () => ({ json: inputJson }) });
+      };
+
+      const validLeadId = '11111111-1111-4111-8111-111111111111';
+      const validRunId = '22222222-2222-4222-8222-222222222222';
+
+      // Missing workflowRunId
+      expect(() =>
+        runNormalize({
+          data: {
+            leadId: validLeadId,
+          },
+        }),
+      ).toThrow(/workflowRunId/i);
+
+      // Invalid workflowRunId UUID
+      expect(() =>
+        runNormalize({
+          data: {
+            leadId: validLeadId,
+            workflowRunId: 'not-a-uuid',
+          },
+        }),
+      ).toThrow(/workflowRunId/i);
+
+      // Missing leadId
+      expect(() =>
+        runNormalize({
+          data: {
+            workflowRunId: validRunId,
+          },
+        }),
+      ).toThrow(/leadId/i);
+
+      // Valid leadId + workflowRunId
+      const validResult = runNormalize({
+        data: {
+          leadId: validLeadId,
+          workflowRunId: validRunId,
+          provider: 'mock',
+        },
+      });
+      expect(validResult[0].json).toEqual(
+        expect.objectContaining({
+          leadId: validLeadId,
+          workflowRunId: validRunId,
+          provider: 'MOCK',
+        }),
+      );
+    });
+
+    it('makes lead-read fallback explicit and auditable, and fails on unauthorized or invalid fallback', () => {
+      const extractDomainNode = findNode('Code: Extract Domain');
+      const validateCompletenessNode = findNode('Code: Validate Completeness');
+
+      const runExtractDomain = (
+        leadResponse: Record<string, unknown>,
+        eventMeta: Record<string, unknown>,
+      ) => {
+        const fn = new Function(
+          '$input',
+          '$',
+          extractDomainNode.parameters.jsCode ?? '',
+        ) as (
+          input: { first: () => { json: Record<string, unknown> } },
+          selector: (nodeName: string) => {
+            first: () => { json: Record<string, unknown> };
+          },
+        ) => Array<{ json: Record<string, unknown> }>;
+
+        return fn(
+          { first: () => ({ json: leadResponse }) },
+          (nodeName: string) => {
+            if (nodeName === 'Code: Normalize Event') {
+              return { first: () => ({ json: eventMeta }) };
+            }
+            throw new Error(`Unexpected node selector: ${nodeName}`);
+          },
+        );
+      };
+
+      const runValidateCompleteness = (itemJson: Record<string, unknown>) => {
+        const fn = new Function(
+          '$input',
+          validateCompletenessNode.parameters.jsCode ?? '',
+        ) as (input: {
+          first: () => { json: Record<string, unknown> };
+        }) => Array<{ json: Record<string, unknown> }>;
+        return fn({ first: () => ({ json: itemJson }) });
+      };
+
+      const validLeadId = '11111111-1111-4111-8111-111111111111';
+      const validRunId = '22222222-2222-4222-8222-222222222222';
+
+      // 1. Authoritative read succeeds -> leadSource = BACKEND_INTERNAL_API, degradedLeadRead = false
+      const authResult = runExtractDomain(
+        {
+          id: validLeadId,
+          email: 'cto@fpt.com.vn',
+          companyWebsite: 'https://fpt.com.vn',
+          companyName: 'FPT Corporation',
+        },
+        {
+          leadId: validLeadId,
+          workflowRunId: validRunId,
+          provider: 'MOCK',
+          rawEvent: {},
+        },
+      );
+      expect(authResult[0].json).toEqual(
+        expect.objectContaining({
+          leadSource: 'BACKEND_INTERNAL_API',
+          degradedLeadRead: false,
+          leadReadError: null,
+          domain: 'fpt.com.vn',
+        }),
+      );
+
+      // 2. Unauthorized (401) or not-found (404) lead read fails immediately even if snapshot exists
+      expect(() =>
+        runExtractDomain(
+          {
+            statusCode: 401,
+            message: 'Unauthorized',
+          },
+          {
+            leadId: validLeadId,
+            workflowRunId: validRunId,
+            provider: 'MOCK',
+            rawEvent: {
+              data: {
+                leadId: validLeadId,
+                email: 'cto@fpt.com.vn',
+              },
+            },
+          },
+        ),
+      ).toThrow(/HTTP 401/i);
+
+      // 3. Transient error (503) with missing snapshot attributes fails immediately
+      expect(() =>
+        runExtractDomain(
+          {
+            statusCode: 503,
+            message: 'Service Unavailable',
+          },
+          {
+            leadId: validLeadId,
+            workflowRunId: validRunId,
+            provider: 'MOCK',
+            rawEvent: {
+              data: {
+                leadId: validLeadId,
+              },
+            },
+          },
+        ),
+      ).toThrow(/event snapshot fallback is missing valid lead attributes/i);
+
+      // 4. Transient error (503) with validated event snapshot explicitly records EVENT_SNAPSHOT_FALLBACK in callback rawResponse
+      const fallbackExtract = runExtractDomain(
+        {
+          statusCode: 503,
+          message: 'Backend temporarily unavailable',
+        },
+        {
+          leadId: validLeadId,
+          workflowRunId: validRunId,
+          provider: 'MOCK',
+          rawEvent: {
+            data: {
+              leadId: validLeadId,
+              email: 'cto@viettel.com.vn',
+              companyName: 'Viettel',
+            },
+          },
+        },
+      );
+      expect(fallbackExtract[0].json).toEqual(
+        expect.objectContaining({
+          leadSource: 'EVENT_SNAPSHOT_FALLBACK',
+          degradedLeadRead: true,
+          leadReadError: 'Backend temporarily unavailable',
+          domain: 'viettel.com.vn',
+        }),
+      );
+
+      const validatedCallbackPayload = runValidateCompleteness({
+        leadId: validLeadId,
+        workflowRunId: validRunId,
+        companyName: 'Viettel',
+        companyWebsite: 'https://viettel.com.vn',
+        industry: 'Telecom',
+        companySize: 50000,
+        jobTitle: 'CTO',
+        linkedInUrl: 'https://linkedin.com/company/viettel',
+        rawResponse: { source: 'mock-enrichment-v1' },
+        isHttpError: false,
+        leadSource: fallbackExtract[0].json.leadSource,
+        degradedLeadRead: fallbackExtract[0].json.degradedLeadRead,
+        leadReadError: fallbackExtract[0].json.leadReadError,
+      });
+
+      expect(validatedCallbackPayload[0].json).toEqual(
+        expect.objectContaining({
+          status: 'SUCCESS',
+          leadSource: 'EVENT_SNAPSHOT_FALLBACK',
+          degradedLeadRead: true,
+          leadReadError: 'Backend temporarily unavailable',
+          rawResponse: expect.objectContaining({
+            source: 'mock-enrichment-v1',
+            leadSource: 'EVENT_SNAPSHOT_FALLBACK',
+            degradedLeadRead: true,
+            leadReadError: 'Backend temporarily unavailable',
+          }),
+        }),
+      );
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-implied-eval */
 });
