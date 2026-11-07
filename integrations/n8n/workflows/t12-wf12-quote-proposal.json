@@ -146,7 +146,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/catalog/items?workflowRunId=' + $node['Code: Validate Requirements'].json.workflowRunId }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/catalog/items?workflowRunId=' + $node['Code: Validate Requirements'].json.workflowRunId }} + '&n8nExecutionId=' + String($exec.id)",
         "options": {
           "timeout": 20000
         },
@@ -268,7 +268,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Validate Requirements'].json.workflowRunId, customerId: $node['Code: Validate Requirements'].json.customerId, leadId: $node['Code: Validate Requirements'].json.leadId, items: $node['Code: Parse Line Items'].json.proposalDraft.lineItems, currency: $node['Code: Parse Line Items'].json.currency, idempotencyKey: $node['Code: Validate Requirements'].json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Validate Requirements'].json.workflowRunId, customerId: $node['Code: Validate Requirements'].json.customerId, leadId: $node['Code: Validate Requirements'].json.leadId, items: $node['Code: Parse Line Items'].json.proposalDraft.lineItems, currency: $node['Code: Parse Line Items'].json.currency, n8nExecutionId: String($exec.id), idempotencyKey: $node['Code: Validate Requirements'].json.workflowRunId } }}"
       },
       "id": "c1c662f8-a371-4b9b-8f3d-f5abdda88680",
       "name": "HTTP Request: Backend Pricing Validation",
@@ -324,7 +324,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Determine Approval Requirement'].json.workflowRunId, customerId: $node['Code: Determine Approval Requirement'].json.customerId, leadId: $node['Code: Determine Approval Requirement'].json.leadId, title: $node['Code: Determine Approval Requirement'].json.proposalDraft.title, executiveSummary: $node['Code: Determine Approval Requirement'].json.proposalDraft.executiveSummary, body: $node['Code: Determine Approval Requirement'].json.proposalDraft.body, items: $node['Code: Determine Approval Requirement'].json.proposalDraft.lineItems, currency: $node['Code: Determine Approval Requirement'].json.currency } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Determine Approval Requirement'].json.workflowRunId, customerId: $node['Code: Determine Approval Requirement'].json.customerId, leadId: $node['Code: Determine Approval Requirement'].json.leadId, title: $node['Code: Determine Approval Requirement'].json.proposalDraft.title, executiveSummary: $node['Code: Determine Approval Requirement'].json.proposalDraft.executiveSummary, body: $node['Code: Determine Approval Requirement'].json.proposalDraft.body, items: $node['Code: Determine Approval Requirement'].json.proposalDraft.lineItems, n8nExecutionId: String($exec.id), currency: $node['Code: Determine Approval Requirement'].json.currency } }}"
       },
       "id": "a201162a-82c8-4f83-be04-03c8690e6d30",
       "name": "HTTP Request: Save Draft",
@@ -397,7 +397,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Determine Approval Requirement'].json.workflowRunId, idempotencyKey: $node['Code: Determine Approval Requirement'].json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Determine Approval Requirement'].json.workflowRunId, n8nExecutionId: String($exec.id), idempotencyKey: $node['Code: Determine Approval Requirement'].json.workflowRunId } }}"
       },
       "id": "ca2e6046-c09b-488c-ad1c-fdabab7303bd",
       "name": "HTTP Request: Create Approval Task",
