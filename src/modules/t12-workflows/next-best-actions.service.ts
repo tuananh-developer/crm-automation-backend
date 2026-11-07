@@ -22,10 +22,12 @@ import { NotificationType } from '../notifications/enums/notification.enum.js';
 import { UserRole } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { NextBestActionRecommendation } from './entities/next-best-action-recommendation.entity.js';
+import { WorkflowExecutionClaimsService } from './workflow-execution-claims.service.js';
 import {
   NextBestActionCallbackDto,
   NextBestActionReviewDto,
   StartNextBestActionDto,
+  ClaimNextBestActionContextDto,
 } from './dto/index.js';
 import { N8nWorkflowDispatchService } from './n8n-workflow-dispatch.service.js';
 import { hasSamePayload, isPostgresUniqueViolation } from '../../common/utils/idempotency.util.js';
@@ -94,6 +96,7 @@ export class NextBestActionsService {
     private readonly notifications: Repository<Notification>,
     private readonly dataSource: DataSource,
     private readonly dispatcher: N8nWorkflowDispatchService,
+    private readonly executionClaims: WorkflowExecutionClaimsService,
   ) {}
 
   private assertIdempotencyKey(key?: string): string {
@@ -283,6 +286,25 @@ export class NextBestActionsService {
     });
     if (!customer) throw new NotFoundException('Customer not found');
     return { data: { ...customer, entityType } };
+  }
+
+  async claimAndGetEntityContext(dto: ClaimNextBestActionContextDto) {
+    const context = await this.getEntityProfile(
+      dto.entityType,
+      dto.entityId,
+      dto.workflowRunId,
+    );
+    const claim = await this.executionClaims.claim({
+      workflowRunId: dto.workflowRunId,
+      workflowName: WF10_NAME,
+      n8nExecutionId: dto.n8nExecutionId,
+    });
+    if (!claim.claimed) {
+      throw new ConflictException(
+        'WorkflowRun is already claimed by another n8n execution or is no longer active',
+      );
+    }
+    return context;
   }
 
   async getIntelligenceContext(
