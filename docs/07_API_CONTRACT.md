@@ -117,6 +117,8 @@ CustomerTask supports retention tasks from WF06, feedback escalation from WF14 a
 | `POST /api/v1/segments/:segmentId/evaluate-all`                                         | Evaluate eligible Customers for one active segment; Sales is limited to Customers created by that actor. |
 | `GET /api/v1/segments/:segmentId/customers`                                             | List membership; Sales sees only Customers created by that actor.                                        |
 
+- `POST /api/v1/internal/n8n/next-best-actions/claim-and-entity-context` — machine-authenticated WF10 request; validates entity/run scope and atomically claims the run before returning context. A competing execution receives HTTP 409.
+
 ## 7. Data Cleaning APIs
 
 - `POST /api/v1/data-cleaning/scans` — create scan and publish the event.
@@ -131,6 +133,7 @@ Apply DTO cannot force safety/approval; the backend reloads each target and enfo
 
 - `POST/GET /api/v1/sales-meetings`; `GET/PATCH /api/v1/sales-meetings/:meetingId`.
 - `POST /api/v1/conversation-transcripts` — validated ingest through NestJS; redact before AI dispatch.
+- `POST /api/v1/internal/n8n/conversation-transcripts` — machine-authenticated WF11 transcript persistence; requires `n8nExecutionId` and atomically claims the WorkflowRun in the same locked transaction that stores the redacted transcript. A different execution ID is rejected before AI processing.
 - `GET /api/v1/conversation-transcripts/:transcriptId` — role-scoped redacted content/metadata.
 - `GET /api/v1/conversation-transcripts/:transcriptId/summary` — summary and processing status.
 - `GET/POST /api/v1/conversation-summaries/:summaryId/action-items`; `PATCH /api/v1/conversation-action-items/:itemId`.
@@ -145,16 +148,15 @@ Apply DTO cannot force safety/approval; the backend reloads each target and enfo
 - `POST /api/v1/quotes/:quoteId/submit-for-approval`; `POST /api/v1/quotes/:quoteId/approve`; `POST /api/v1/quotes/:quoteId/reject`.
 - `GET/POST /api/v1/customer-contracts`; `GET/PATCH /api/v1/customer-contracts/:contractId`.
 - `GET /api/v1/customer-contracts/due-for-renewal`.
+- `POST /api/v1/internal/n8n/quotes/claim-and-entity-context` — machine-authenticated WF12 request; validates entity/run scope and atomically claims the run before returning context. A competing execution receives HTTP 409.
 - `POST /api/v1/internal/n8n/workflow-executions/claim` — machine-authenticated, atomic WorkflowRun execution claim. Requires `workflowRunId`, an allowlisted T12 `workflowName`, and the n8n `n8nExecutionId`; only the first distinct active execution may continue to AI processing, while retries from that same execution are idempotent.
-- `POST /api/v1/internal/n8n/next-best-actions/claim-and-entity-context` — validate WF10 entity/run scope, atomically claim the run, then return its context; a competing execution receives HTTP 409.
-- `POST /api/v1/internal/n8n/quotes/claim-and-entity-context` — validate WF12 entity/run scope, atomically claim the run, then return its context; a competing execution receives HTTP 409.
-- `POST /api/v1/internal/n8n/conversation-transcripts` — WF11 transcript requests include `n8nExecutionId`; the backend claims the run and saves the redacted transcript in one locked transaction, rejecting a different execution before AI processing.
 - `GET/POST /api/v1/customer-contracts/:contractId/renewal-attempts`; `GET /api/v1/renewal-attempts/:attemptId`.
 
 ## 10. Dashboard, workflow runs, notification and Communication APIs
 
 - `GET /api/v1/dashboard/overview`, `GET /api/v1/dashboard/workflows`, `GET /api/v1/dashboard/customer-health` — role-filtered read models.
 - `GET /api/v1/workflow-runs`; `GET /api/v1/workflow-runs/:runId` — run status, correlation, result summary and safe error detail.
+- `POST /api/v1/internal/n8n/workflow-executions/claim` — atomic claim endpoint for allowlisted T12 workflows; requires `workflowRunId`, `workflowName` and `n8nExecutionId`. Retries from the same execution are idempotent; a different execution cannot claim an active run.
 - `GET /api/v1/notifications`; `POST /api/v1/notifications/:notificationId/read`.
 - `POST /api/v1/internal/communication/send` — service-authenticated request to deliver an approved message; supports idempotency and returns delivery identity/state. This endpoint is for trusted backend/workflow calls, not browser-direct access.
 
