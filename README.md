@@ -28,6 +28,14 @@
 - **Tài liệu API**: [Swagger OpenAPI](https://swagger.io/) (`/api/docs`).
 - **Kiểm thử**: Jest (Node ESM VM modules); unit specs nằm trong `src/`, E2E specs dùng cấu hình `test/jest-e2e.json`. Trạng thái pass phải được xác nhận bằng lần chạy hiện tại, không suy ra từ số lượng test cũ.
 
+- **APM & Observability**: [NestJS Observe](https://github.com/nestjs/observe) (`@nestjs/observe`) cho distributed traces, lỗi và runtime telemetry.
+
+### Cấu hình NestJS Observe
+
+Thiết lập `OBSERVE_APP_KEY` và `OBSERVE_APP_SECRET` trong secret manager của môi trường deploy (hoặc `.env` local). Không commit credential thật. Service được đăng ký với ID `crm-automation-backend`; khi nhận `SIGTERM`, Nest shutdown hooks cho phép SDK flush telemetry còn trong buffer.
+
+Sau khi deploy với credential hợp lệ, gửi một request đến health endpoint (`GET /api/v1/health`) và kiểm tra service/traces trong Observe dashboard. Chỉ coi integration là hoạt động sau khi xác nhận telemetry được nhận và shutdown flush thành công.
+
 User management routes are protected by JWT and Admin role checks. Sales assignment pickers use the limited `GET /api/v1/users/assignees` response; Admin account changes are audited. Public registration always receives the Sales role.
 
 ---
