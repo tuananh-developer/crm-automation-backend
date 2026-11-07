@@ -1043,13 +1043,9 @@ export async function runSeed(options?: { fresh?: boolean }): Promise<void> {
         sequenceId: seq.id,
         stepOrder,
         delayMinutes: i * 720,
-        channel: i % 3 === 0 ? 'EMAIL' : i % 3 === 1 ? 'CALL' : 'MESSAGE',
-        actionType:
-          i % 3 === 0
-            ? 'SEND_EMAIL'
-            : i % 3 === 1
-              ? 'SCHEDULE_CALL'
-              : 'SEND_SMS',
+        // Only EMAIL/SEND_EMAIL has a configured provider in this release.
+        channel: 'EMAIL',
+        actionType: 'SEND_EMAIL',
         subjectTemplate: `Step ${stepOrder}: Introduction & Solutions for {{companyName}}`,
         contentTemplate: `Hi {{firstName}},\n\nWe wanted to share how our CRM helps {{companyName}} accelerate revenue.\n\nBest,\nCRM Team`,
         conditions: { active: true },
