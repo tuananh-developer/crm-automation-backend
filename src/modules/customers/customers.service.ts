@@ -1,5 +1,4 @@
 import {
-  BadGatewayException,
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -38,6 +37,7 @@ import {
 } from './dto/index.js';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
 import { CustomerMapper } from './mappers/customer.mapper.js';
+import { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispatch.service.js';
 
 @Injectable()
 export class CustomersService {
@@ -81,6 +81,9 @@ export class CustomersService {
 
     @Optional()
     private readonly dataSource?: DataSource,
+
+    @Optional()
+    private readonly dispatcher?: N8nWorkflowDispatchService,
   ) {}
 
   async findAll(
@@ -585,72 +588,71 @@ export class CustomersService {
       );
     }
 
-    // 1. Create correlated WorkflowRun in PENDING status with verified user id
-    const workflowRun = this.workflowRunsRepository.create({
-      workflowName: 't12-wf05-customer-360',
-      customerId: customer.id,
-      triggeredByUserId: user.id,
-      status: WorkflowStatus.PENDING,
-      startedAt: new Date(),
-      inputPayload: {
-        customerId: customer.id,
-        customerName: customer.name,
-        customerEmail: customer.email,
-        companyName: customer.companyName,
-        triggeredByUserId: user.id,
-        requestedAt: new Date().toISOString(),
-      },
-    });
+    // 1. Transactional Outbox: persist WorkflowRun and durable OutboxEvent atomically
+    const dispatcher = this.dispatcher ?? new N8nWorkflowDispatchService();
+    const idempotencyKey = `wf05:${user.id}:${customer.id}:${Date.now()}`;
 
-    const savedRun = await this.workflowRunsRepository.save(workflowRun);
-    this.logger.log(
-      `Created WorkflowRun ${savedRun.id} for Customer 360 of customer ${customer.id} by user ${user.id}`,
-    );
+    let savedRun: WorkflowRun;
+    if (this.dataSource) {
+      savedRun = await this.dataSource.transaction(async (manager) => {
+        const workflowRunsRepo = manager.getRepository(WorkflowRun);
 
-    // 2. Dispatch internal webhook to n8n
-    const n8nBaseUrl =
-      this.configService.get<string>('N8N_WEBHOOK_BASE_URL') ||
-      'http://crm_n8n:5678/webhook';
-    const webhookUrl = `${n8nBaseUrl}/t12-wf05-customer-360`;
-
-    let dispatchRes: Response;
-    try {
-      dispatchRes = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-N8N-API-KEY': n8nApiKey,
-        },
-        body: JSON.stringify({
+        const workflowRun = workflowRunsRepo.create({
+          workflowName: 't12-wf05-customer-360',
           customerId: customer.id,
-          workflowRunId: savedRun.id,
           triggeredByUserId: user.id,
-          timestamp: new Date().toISOString(),
-        }),
-        signal: AbortSignal.timeout(10000),
-      });
-    } catch (err: unknown) {
-      const errMsg = `Failed to dispatch Customer 360 workflow to n8n: ${err instanceof Error ? err.message : String(err)}`;
-      this.logger.error(errMsg);
-      savedRun.status = WorkflowStatus.FAILED;
-      savedRun.finishedAt = new Date();
-      savedRun.errorMessage = errMsg;
-      await this.workflowRunsRepository.save(savedRun);
-      throw new BadGatewayException(errMsg);
-    }
+          status: WorkflowStatus.PENDING,
+          startedAt: new Date(),
+          idempotencyKey,
+          inputPayload: {
+            customerId: customer.id,
+            customerName: customer.name,
+            customerEmail: customer.email,
+            companyName: customer.companyName,
+            triggeredByUserId: user.id,
+            requestedAt: new Date().toISOString(),
+          },
+        });
 
-    if (!dispatchRes.ok) {
-      const errMsg = `n8n webhook dispatch returned HTTP ${dispatchRes.status} ${dispatchRes.statusText}`;
-      this.logger.error(errMsg);
-      savedRun.status = WorkflowStatus.FAILED;
-      savedRun.finishedAt = new Date();
-      savedRun.errorMessage = errMsg;
-      await this.workflowRunsRepository.save(savedRun);
-      throw new BadGatewayException(errMsg);
+        const run = await workflowRunsRepo.save(workflowRun);
+
+        // Atomically enqueue durable HTTP outbox event in the same transaction
+        await dispatcher.enqueue(
+          manager,
+          'N8N_WF05_WEBHOOK_URL',
+          't12-wf05-customer-360',
+          {
+            customerId: customer.id,
+            workflowRunId: run.id,
+            triggeredByUserId: user.id,
+            timestamp: new Date().toISOString(),
+          },
+        );
+
+        return run;
+      });
+    } else {
+      const workflowRun = this.workflowRunsRepository.create({
+        workflowName: 't12-wf05-customer-360',
+        customerId: customer.id,
+        triggeredByUserId: user.id,
+        status: WorkflowStatus.PENDING,
+        startedAt: new Date(),
+        idempotencyKey,
+        inputPayload: {
+          customerId: customer.id,
+          customerName: customer.name,
+          customerEmail: customer.email,
+          companyName: customer.companyName,
+          triggeredByUserId: user.id,
+          requestedAt: new Date().toISOString(),
+        },
+      });
+      savedRun = await this.workflowRunsRepository.save(workflowRun);
     }
 
     this.logger.log(
-      `n8n webhook successfully dispatched for run ${savedRun.id}`,
+      `Created WorkflowRun ${savedRun.id} and enqueued OutboxEvent for Customer 360 of customer ${customer.id} by user ${user.id}`,
     );
 
     return {

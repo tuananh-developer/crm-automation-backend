@@ -1,5 +1,4 @@
 import {
-  BadGatewayException,
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -13,6 +12,7 @@ import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { Customer360Status } from './dto/customer-360-callback.dto.js';
 import type { DataSource, Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity.js';
+import type { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispatch.service.js';
 import type { CustomerSegment } from './entities/customer-segment.entity.js';
 import type { Segment } from './entities/segment.entity.js';
 import type { Lead } from '../leads/entities/lead.entity.js';
@@ -45,6 +45,8 @@ describe('CustomersService', () => {
   >;
   let executionsRepository: jest.Mocked<Partial<Repository<FollowUpExecution>>>;
   let configService: jest.Mocked<Partial<ConfigService>>;
+  let dataSourceMock: any;
+  let dispatcherMock: jest.Mocked<Pick<N8nWorkflowDispatchService, 'enqueue'>>;
 
   const mockAdminUser: AuthenticatedUser = {
     id: 'admin-1',
@@ -151,6 +153,30 @@ describe('CustomersService', () => {
       }),
     };
 
+    dataSourceMock = {
+      transaction: jest.fn(async (cb: (manager: any) => Promise<any>) => {
+        const manager = {
+          getRepository: jest.fn((entity: any) => {
+            if (entity === WorkflowRun) {
+              return workflowRunsRepository;
+            }
+            if (entity === Customer) {
+              return customersRepository;
+            }
+            return {
+              create: jest.fn((dto) => ({ ...dto, id: 'run-1' })),
+              save: jest.fn((e) => Promise.resolve({ ...e, id: 'run-1' })),
+            };
+          }),
+        };
+        return cb(manager);
+      }),
+    };
+
+    dispatcherMock = {
+      enqueue: jest.fn().mockResolvedValue({ id: 'outbox-1' }),
+    };
+
     service = new CustomersService(
       customersRepository as Repository<Customer>,
       customerSegmentsRepository as Repository<CustomerSegment>,
@@ -164,6 +190,8 @@ describe('CustomersService', () => {
       enrollmentsRepository as Repository<LeadFollowUpEnrollment>,
       executionsRepository as Repository<FollowUpExecution>,
       configService as ConfigService,
+      dataSourceMock as DataSource,
+      dispatcherMock,
     );
   });
 
@@ -416,7 +444,7 @@ describe('CustomersService', () => {
   });
 
   describe('triggerCustomer360', () => {
-    it('creates WorkflowRun with triggeredByUserId from authenticated user and dispatches webhook', async () => {
+    it('atomically commits WorkflowRun and enqueues OutboxEvent in the same transaction without direct HTTP fetch', async () => {
       (customersRepository.findOne as jest.Mock).mockResolvedValue(
         mockCustomer,
       );
@@ -424,9 +452,7 @@ describe('CustomersService', () => {
       (workflowRunsRepository.create as jest.Mock).mockReturnValue(mockRun);
       (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
 
-      const fetchSpy = jest
-        .spyOn(global, 'fetch')
-        .mockResolvedValue({ ok: true, status: 200 } as Response);
+      const fetchSpy = jest.spyOn(global, 'fetch');
 
       const result = await service.triggerCustomer360(
         'customer-1',
@@ -434,6 +460,7 @@ describe('CustomersService', () => {
       );
 
       expect(result.workflowRunId).toBe('run-1');
+      expect(dataSourceMock.transaction).toHaveBeenCalledTimes(1);
       expect(workflowRunsRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({
           workflowName: 't12-wf05-customer-360',
@@ -442,17 +469,43 @@ describe('CustomersService', () => {
           status: WorkflowStatus.PENDING,
         }),
       );
-      expect(fetchSpy).toHaveBeenCalledWith(
-        'http://test-n8n:5678/webhook/t12-wf05-customer-360',
+      expect(dispatcherMock.enqueue).toHaveBeenCalledWith(
+        expect.anything(),
+        'N8N_WF05_WEBHOOK_URL',
+        't12-wf05-customer-360',
         expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            'X-N8N-API-KEY': 'test-n8n-secret',
-          }),
+          customerId: 'customer-1',
+          workflowRunId: 'run-1',
+          triggeredByUserId: mockSalesUser.id,
+          timestamp: expect.any(String),
         }),
       );
-
+      // Ensures direct HTTP fetch is NOT called during service request lifecycle
+      expect(fetchSpy).not.toHaveBeenCalled();
       fetchSpy.mockRestore();
+    });
+
+    it('fault injection: rolls back transaction and throws when outbox enqueue fails, preventing orphaned WorkflowRun', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      (workflowRunsRepository.create as jest.Mock).mockReturnValue({
+        id: 'run-1',
+        customerId: 'customer-1',
+      });
+      (workflowRunsRepository.save as jest.Mock).mockResolvedValue({
+        id: 'run-1',
+        customerId: 'customer-1',
+      });
+      dispatcherMock.enqueue.mockRejectedValueOnce(
+        new Error('Outbox broker table locked / write failed'),
+      );
+
+      await expect(
+        service.triggerCustomer360('customer-1', mockSalesUser),
+      ).rejects.toThrow('Outbox broker table locked / write failed');
+
+      expect(dataSourceMock.transaction).toHaveBeenCalledTimes(1);
     });
 
     it('throws InternalServerErrorException when N8N_API_KEY is missing (Fail-Closed)', async () => {
@@ -464,61 +517,6 @@ describe('CustomersService', () => {
       await expect(
         service.triggerCustomer360('customer-1', mockSalesUser),
       ).rejects.toBeInstanceOf(InternalServerErrorException);
-    });
-
-    it('marks WorkflowRun as FAILED and throws BadGatewayException when n8n returns non-2xx', async () => {
-      (customersRepository.findOne as jest.Mock).mockResolvedValue(
-        mockCustomer,
-      );
-      const mockRun: any = {
-        id: 'run-err-1',
-        customerId: 'customer-1',
-        status: WorkflowStatus.PENDING,
-      };
-      (workflowRunsRepository.create as jest.Mock).mockReturnValue(mockRun);
-      (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
-
-      const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
-        ok: false,
-        status: 503,
-        statusText: 'Service Unavailable',
-      } as Response);
-
-      await expect(
-        service.triggerCustomer360('customer-1', mockSalesUser),
-      ).rejects.toBeInstanceOf(BadGatewayException);
-
-      expect(mockRun.status).toBe(WorkflowStatus.FAILED);
-      expect(mockRun.errorMessage).toContain('503 Service Unavailable');
-      expect(workflowRunsRepository.save).toHaveBeenCalledTimes(2);
-
-      fetchSpy.mockRestore();
-    });
-
-    it('marks WorkflowRun as FAILED and throws BadGatewayException on dispatch network error', async () => {
-      (customersRepository.findOne as jest.Mock).mockResolvedValue(
-        mockCustomer,
-      );
-      const mockRun: any = {
-        id: 'run-net-1',
-        customerId: 'customer-1',
-        status: WorkflowStatus.PENDING,
-      };
-      (workflowRunsRepository.create as jest.Mock).mockReturnValue(mockRun);
-      (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
-
-      const fetchSpy = jest
-        .spyOn(global, 'fetch')
-        .mockRejectedValue(new Error('Connection refused'));
-
-      await expect(
-        service.triggerCustomer360('customer-1', mockSalesUser),
-      ).rejects.toBeInstanceOf(BadGatewayException);
-
-      expect(mockRun.status).toBe(WorkflowStatus.FAILED);
-      expect(mockRun.errorMessage).toContain('Connection refused');
-
-      fetchSpy.mockRestore();
     });
 
     it('throws ForbiddenException when unauthorized SALES user attempts to trigger', async () => {

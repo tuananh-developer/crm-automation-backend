@@ -19,6 +19,7 @@ import { CustomersController } from './customers.controller.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js';
+import { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispatch.service.js';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js'
   providers: [
     SegmentsService,
     CustomersService,
+    N8nWorkflowDispatchService,
     N8nAuthGuard,
     JwtOrN8nAuthGuard,
   ],
