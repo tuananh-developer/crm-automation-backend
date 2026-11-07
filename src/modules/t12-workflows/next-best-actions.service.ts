@@ -398,15 +398,14 @@ export class NextBestActionsService {
       leadIds = linkedLeads.map((lead) => lead.id);
     }
     if (!leadIds.length) return { items: [] };
+    // WF10 uses interaction identity/type/time as evidence references only.
+    // Do not copy message subjects or free-form contents into n8n execution data.
     const records = await this.interactions.find({
       where: { leadId: In(leadIds) },
       select: {
         id: true,
-        leadId: true,
         type: true,
         channel: true,
-        subject: true,
-        content: true,
         occurredAt: true,
       },
       order: { occurredAt: 'DESC' },
@@ -415,11 +414,8 @@ export class NextBestActionsService {
     return {
       items: records.map((item) => ({
         id: item.id,
-        leadId: item.leadId,
         type: item.type,
         channel: item.channel,
-        subject: item.subject,
-        content: item.content?.slice(0, 2000) ?? null,
         occurredAt: item.occurredAt,
       })),
     };
