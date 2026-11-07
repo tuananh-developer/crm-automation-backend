@@ -146,7 +146,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/catalog/items?workflowRunId=' + $node['Code: Validate Requirements'].json.workflowRunId }} + '&n8nExecutionId=' + String($exec.id)",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/catalog/items?workflowRunId=' + $node['Code: Validate Requirements'].json.workflowRunId + '&n8nExecutionId=' + String($exec.id) }}",
         "options": {
           "timeout": 20000
         },

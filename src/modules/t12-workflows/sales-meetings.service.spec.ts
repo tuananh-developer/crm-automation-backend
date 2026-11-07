@@ -113,6 +113,40 @@ describe('SalesMeetingsService persistence idempotency', () => {
     n8nExecutionId: 'execution-1',
   };
 
+  it('renews the WF11 execution lease before exposing meeting context', async () => {
+    repositories.SalesMeeting.findOne.mockResolvedValue({ ...meeting });
+    repositories.WorkflowRun.findOne.mockResolvedValue({
+      ...workflowRun,
+      n8nExecutionId: 'execution-1',
+      claimExpiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const result = await service.getContext('meeting-1', 'execution-1');
+
+    expect(result.meeting.id).toBe('meeting-1');
+    expect(repositories.WorkflowRun.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        n8nExecutionId: 'execution-1',
+        claimExpiresAt: expect.any(Date),
+      }),
+    );
+  });
+
+  it('rejects WF11 meeting context reads from a stale execution owner', async () => {
+    repositories.SalesMeeting.findOne.mockResolvedValue({ ...meeting });
+    repositories.WorkflowRun.findOne.mockResolvedValue({
+      ...workflowRun,
+      n8nExecutionId: 'current-execution',
+      claimExpiresAt: new Date(Date.now() + 60_000),
+    });
+
+    await expect(
+      service.getContext('meeting-1', 'stale-execution'),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(repositories.WorkflowRun.save).not.toHaveBeenCalled();
+  });
+
   it('saves the redacted transcript and meeting reference in one transaction', async () => {
     repositories.SalesMeeting.findOne.mockResolvedValue({ ...meeting });
     repositories.WorkflowRun.findOne.mockResolvedValue({ ...workflowRun, n8nExecutionId: 'execution-1', claimExpiresAt: new Date(Date.now() + 60_000) });

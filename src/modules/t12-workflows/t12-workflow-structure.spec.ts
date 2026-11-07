@@ -127,6 +127,17 @@ describe('Tuấn Anh T12 workflow exports', () => {
     expect(wf11Url).toMatch(/^=\{=?.*\}\}$/);
   });
 
+  it('keeps the WF12 catalog lease heartbeat URL inside one n8n expression', () => {
+    const wf12 = readWorkflow(
+      'integrations/n8n/workflows/t12-wf12-quote-proposal.json',
+    );
+    const catalogUrl = wf12.nodes.find(
+      (node) => node.name === 'HTTP Request: Get Product and Pricing Catalog',
+    )?.parameters?.url;
+    expect(catalogUrl).toContain('&n8nExecutionId=');
+    expect(catalogUrl).toMatch(/^=\{=?.*\}\$/);
+  });
+
   it('keeps direct contact identifiers and free-form communication content out of AI prompts', () => {
     const checks = [
       [

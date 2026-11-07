@@ -8,7 +8,7 @@ describe('NextBestActionsService entity context', () => {
   const workflowRuns = { findOne: jest.fn() };
   const leads = { findOne: jest.fn() };
   const customers = { findOne: jest.fn() };
-  const executionClaims = { claim: jest.fn() };
+  const executionClaims = { claim: jest.fn(), heartbeat: jest.fn() };
   const emptyRepository = { find: jest.fn().mockResolvedValue([]), findOne: jest.fn().mockResolvedValue(null) };
   let service: NextBestActionsService;
 
@@ -90,6 +90,59 @@ describe('NextBestActionsService entity context', () => {
         n8nExecutionId: 'n8n-execution-2',
       }),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('renews the active execution lease before returning follow-up and segment context', async () => {
+    workflowRuns.findOne.mockResolvedValue({
+      id: workflowRunId,
+      workflowName: WF10_NAME,
+      leadId,
+      customerId: null,
+      status: WorkflowStatus.RUNNING,
+    });
+
+    await expect(
+      service.getFollowUpSegmentContext(
+        'Lead',
+        leadId,
+        workflowRunId,
+        'n8n-execution-1',
+      ),
+    ).resolves.toMatchObject({
+      followUps: [],
+      segments: [],
+      allowedActions: expect.any(Array),
+    });
+
+    expect(executionClaims.heartbeat).toHaveBeenCalledWith({
+      workflowRunId,
+      workflowName: WF10_NAME,
+      n8nExecutionId: 'n8n-execution-1',
+    });
+  });
+
+  it('does not return follow-up context when the lease heartbeat rejects a stale execution', async () => {
+    workflowRuns.findOne.mockResolvedValue({
+      id: workflowRunId,
+      workflowName: WF10_NAME,
+      leadId,
+      customerId: null,
+      status: WorkflowStatus.RUNNING,
+    });
+    executionClaims.heartbeat.mockRejectedValue(new ConflictException(
+      'Workflow execution no longer owns this claim',
+    ));
+
+    await expect(
+      service.getFollowUpSegmentContext(
+        'Lead',
+        leadId,
+        workflowRunId,
+        'stale-execution',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(emptyRepository.find).not.toHaveBeenCalled();
   });
 
   it('rejects context reads for terminal workflow runs', async () => {
