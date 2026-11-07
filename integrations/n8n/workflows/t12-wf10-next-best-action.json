@@ -367,7 +367,7 @@
           "conditions": [
             {
               "id": "2ef052d7-3878-4565-bc6d-67facf8454e0",
-              "leftValue": "={ $json.humanApprovalRequired }",
+              "leftValue": "={ $json.requiresHumanApproval }",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -415,7 +415,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Validate Action'].json.workflowRunId, entityType: $node['Code: Validate Action'].json.entityType, entityId: $node['Code: Validate Action'].json.entityId, recommendationId: $node['HTTP Request: Save Recommendation'].json.recommendationId || $node['HTTP Request: Save Recommendation'].json.data?.id, idempotencyKey: $node['Code: Validate Action'].json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Validate Action'].json.workflowRunId, entityType: $node['Code: Validate Action'].json.entityType, entityId: $node['Code: Validate Action'].json.entityId, recommendationId: $node['HTTP Request: Save Recommendation'].json.recommendationId || $node['HTTP Request: Save Recommendation'].json.data?.id, n8nExecutionId: String($exec.id), idempotencyKey: $node['Code: Validate Action'].json.workflowRunId } }}"
       },
       "id": "1ccdffaa-2fc7-498b-84bd-4ee41b10e2a8",
       "name": "HTTP Request: Create Review and Notification",
