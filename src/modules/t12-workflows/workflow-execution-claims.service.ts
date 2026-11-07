@@ -158,6 +158,19 @@ export class WorkflowExecutionClaimsService {
       if (run.status === WorkflowStatus.FAILED && run.n8nExecutionId === n8nExecutionId) {
         return { failed: true, duplicate: true, status: run.status };
       }
+      // An Error Trigger can fire after the backend committed the final
+      // approval/notification callback but n8n lost the HTTP response. Do not
+      // overwrite an already-finalized business outcome in that case.
+      if (
+        [WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL].includes(run.status) &&
+        run.n8nExecutionId === n8nExecutionId
+      ) {
+        return {
+          failed: false,
+          alreadyFinalized: true,
+          status: run.status,
+        };
+      }
       const activeRun = [WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status);
       const claimedByAnotherExecution =
         run.n8nExecutionId !== null && run.n8nExecutionId !== n8nExecutionId;
