@@ -60,7 +60,7 @@ describe('QuotesService approval workflow', () => {
     approvalRepository = {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((value) => value),
-      save: jest.fn().mockResolvedValue({ id: 'approval-1' }),
+      save: jest.fn().mockImplementation((value) => Promise.resolve({ id: 'approval-1', ...value })),
     };
     notificationRepository = {
       findOne: jest.fn().mockResolvedValue(null),
