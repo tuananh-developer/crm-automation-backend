@@ -49,7 +49,7 @@ describe('NextBestActionsService final review gate', () => {
       finishedAt: null,
       idempotencyKey: null,
       createdAt: new Date(),
-    } as WorkflowRun;
+    };
 
     recommendation = {
       id: dto().recommendationId,
