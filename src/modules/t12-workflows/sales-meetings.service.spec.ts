@@ -559,6 +559,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       attendeeIds: [],
       transcript:
         'The customer reviewed the enterprise proposal and agreed to the next delivery steps.',
+      meetingPurpose: 'Contact: Nguyen Van An, alice@example.com',
       sourceType: 'MEETING_TRANSCRIPT',
     };
     const actor: AuthenticatedUser = {
@@ -584,6 +585,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
         meetingId: 'meeting-1',
         workflowRunId: 'run-1',
         requestedBy: 'owner-1',
+        meetingPurpose: expect.not.stringContaining('Nguyen Van An'),
       }),
     );
     expect(result).toMatchObject({
