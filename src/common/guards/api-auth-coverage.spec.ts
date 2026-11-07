@@ -9,6 +9,7 @@ import { LeadSourcesController } from '../../modules/leads/lead-sources.controll
 import { LeadsController } from '../../modules/leads/leads.controller.js';
 import { UsersController } from '../../modules/users/users.controller.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
+import { JwtOrN8nAuthGuard } from './jwt-or-n8n-auth.guard.js';
 import { RolesGuard } from './roles.guard.js';
 import { ROLES_KEY } from '../decorators/roles.decorator.js';
 import { UserRole } from '../../modules/users/enums/user.enum.js';
@@ -16,7 +17,6 @@ import { UserRole } from '../../modules/users/enums/user.enum.js';
 const jwtProtectedControllers = [
   LeadsController,
   LeadSourcesController,
-  CustomersController,
   SegmentsController,
   UsersController,
 ] as const;
@@ -30,6 +30,48 @@ describe('API authentication guard coverage', () => {
       expect(guards).toContain(JwtAuthGuard);
     },
   );
+
+  it('secures CustomersController user-facing browser routes with JwtAuthGuard and hybrid routes with JwtOrN8nAuthGuard', () => {
+    const classGuards = Reflect.getMetadata('__guards__', CustomersController);
+    expect(classGuards).toBeUndefined();
+
+    const userFacingMethods = [
+      'findAll',
+      'findOne',
+      'triggerCustomer360',
+    ] as const;
+    for (const method of userFacingMethods) {
+      const handler = Object.getOwnPropertyDescriptor(
+        CustomersController.prototype,
+        method,
+      )?.value as object;
+      const guards = Reflect.getMetadata('__guards__', handler);
+      expect(guards).toContain(JwtAuthGuard);
+    }
+
+    const hybridMethods = [
+      'getCustomer360',
+      'getCustomerInteractions',
+      'getCustomerIntelligence',
+      'getCustomerFollowUps',
+      'getCustomerSegments',
+    ] as const;
+    for (const method of hybridMethods) {
+      const handler = Object.getOwnPropertyDescriptor(
+        CustomersController.prototype,
+        method,
+      )?.value as object;
+      const guards = Reflect.getMetadata('__guards__', handler);
+      expect(guards).toContain(JwtOrN8nAuthGuard);
+    }
+
+    const callbackHandler = Object.getOwnPropertyDescriptor(
+      CustomersController.prototype,
+      'handleCustomer360Callback',
+    )?.value as object;
+    const callbackGuards = Reflect.getMetadata('__guards__', callbackHandler);
+    expect(callbackGuards).toContain(N8nAuthGuard);
+  });
 
   it('restricts lead source creation to Admin while keeping source reads authenticated', () => {
     const createHandler = Object.getOwnPropertyDescriptor(

@@ -37,11 +37,11 @@ import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Customers')
 @Controller('customers')
-@UseGuards(JwtAuthGuard)
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
   @Get()
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get paginated customers' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
@@ -56,6 +56,7 @@ export class CustomersController {
   }
 
   @Get(':id')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get customer details by ID' })
   @ApiParam({ name: 'id', description: 'UUID of the customer' })
   @ApiResponse({ status: 200, type: CustomerResponseDto })
@@ -143,6 +144,7 @@ export class CustomersController {
   }
 
   @Post(':id/360/trigger')
+  @UseGuards(JwtAuthGuard)
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
