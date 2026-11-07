@@ -283,8 +283,21 @@ export class SalesMeetingsService {
     return { meeting, run };
   }
 
-  async getContext(meetingId: string) {
-    const { meeting } = await this.getMeetingRun(meetingId);
+  async getContext(meetingId: string, n8nExecutionId?: string) {
+    const { meeting, run } = await this.getMeetingRun(meetingId);
+    if (n8nExecutionId) {
+      if (run.n8nExecutionId !== n8nExecutionId) {
+        throw new ConflictException('Workflow execution no longer owns this claim');
+      }
+      const now = new Date();
+      if (run.claimExpiresAt && run.claimExpiresAt.getTime() <= now.getTime()) {
+        throw new ConflictException('Workflow execution claim lease has expired');
+      }
+      const rawLease = Number(process.env.N8N_WORKFLOW_CLAIM_LEASE_SECONDS);
+      const leaseSeconds = Number.isInteger(rawLease) && rawLease >= 60 && rawLease <= 3600 ? rawLease : 1200;
+      run.claimExpiresAt = new Date(now.getTime() + leaseSeconds * 1000);
+      await this.runs.save(run);
+    }
     const [lead, customer, attendees] = await Promise.all([
       meeting.leadId
         ? this.leads.findOne({
@@ -349,16 +362,17 @@ export class SalesMeetingsService {
         dto.meetingId,
         dto.workflowRunId,
       );
-      if (run.n8nExecutionId && run.n8nExecutionId !== n8nExecutionId) {
-        throw new ConflictException(
-          'WorkflowRun is already claimed by another n8n execution',
-        );
+      const now = new Date();
+      const currentLeaseActive = Boolean(run.claimExpiresAt) && run.claimExpiresAt!.getTime() > now.getTime();
+      if (run.n8nExecutionId && run.n8nExecutionId !== n8nExecutionId && currentLeaseActive) {
+        throw new ConflictException('WorkflowRun is already claimed by another n8n execution');
       }
-      if (!run.n8nExecutionId) {
-        run.n8nExecutionId = n8nExecutionId;
-        run.status = WorkflowStatus.RUNNING;
-        await manager.getRepository(WorkflowRun).save(run);
-      }
+      const rawLease = Number(process.env.N8N_WORKFLOW_CLAIM_LEASE_SECONDS);
+      const leaseSeconds = Number.isInteger(rawLease) && rawLease >= 60 && rawLease <= 3600 ? rawLease : 1200;
+      run.n8nExecutionId = n8nExecutionId;
+      run.claimExpiresAt = new Date(now.getTime() + leaseSeconds * 1000);
+      run.status = WorkflowStatus.RUNNING;
+      await manager.getRepository(WorkflowRun).save(run);
 
       const transcriptRepository = manager.getRepository(ConversationTranscript);
       const existing = await transcriptRepository.findOne({
