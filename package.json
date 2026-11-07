@@ -54,7 +54,8 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "swagger-ui-express": "^5.0.1",
-    "typeorm": "^1.1.1"
+    "typeorm": "^1.1.1",
+    "nodemailer": "^10.2.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",
