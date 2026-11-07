@@ -14,6 +14,7 @@ import {
   IsString,
   IsUUID,
   Max,
+  Matches,
   MaxLength,
   Min,
   MinLength,
@@ -195,6 +196,7 @@ export class SaveConversationTranscriptDto {
   @IsString()
   @MinLength(1)
   @MaxLength(255)
+  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
   n8nExecutionId!: string;
 }
 
@@ -577,5 +579,6 @@ export class ClaimQuoteEntityContextDto {
   @IsString()
   @MinLength(1)
   @MaxLength(255)
+  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
   n8nExecutionId!: string;
 }
