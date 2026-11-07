@@ -32,9 +32,11 @@ import {
   StartQuoteDraftDto,
   SubmitQuoteApprovalDto,
   UpdateCatalogItemDto,
+  ClaimQuoteEntityContextDto,
 } from './dto/index.js';
 import { calculateQuotePrice } from './utils/quote-pricing.util.js';
 import { hasSameQuoteDraftPayload } from './utils/quote-idempotency.util.js';
+import { WorkflowExecutionClaimsService } from './workflow-execution-claims.service.js';
 
 export const WF12_NAME = 'T12-WF12_QUOTE_PROPOSAL';
 
@@ -59,6 +61,7 @@ export class QuotesService {
     private readonly dataSource: DataSource,
     private readonly dispatcher: N8nWorkflowDispatchService,
     private readonly config: ConfigService,
+    private readonly executionClaims: WorkflowExecutionClaimsService,
   ) {}
 
   private requireKey(key?: string): string {
@@ -261,6 +264,25 @@ export class QuotesService {
     });
     if (!customer) throw new NotFoundException('Customer not found');
     return { entityType: 'Customer', entity: customer, workflowRunId };
+  }
+
+  async claimAndGetEntityContext(dto: ClaimQuoteEntityContextDto) {
+    const context = await this.getEntityContext(
+      dto.customerId,
+      dto.leadId,
+      dto.workflowRunId,
+    );
+    const claim = await this.executionClaims.claim({
+      workflowRunId: dto.workflowRunId,
+      workflowName: WF12_NAME,
+      n8nExecutionId: dto.n8nExecutionId,
+    });
+    if (!claim.claimed) {
+      throw new ConflictException(
+        'WorkflowRun is already claimed by another n8n execution or is no longer active',
+      );
+    }
+    return context;
   }
 
   async listCatalogForRun(workflowRunId: string) {
