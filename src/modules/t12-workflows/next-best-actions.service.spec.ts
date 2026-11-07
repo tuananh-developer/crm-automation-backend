@@ -23,17 +23,37 @@ describe('NextBestActionsService entity context', () => {
     );
   });
 
-  it('returns only the scoped lead profile for an active WF10 run', async () => {
-    const lead = { id: leadId, firstName: 'Alex', lastName: 'Nguyen', email: 'alex@example.test' };
+  it('returns only non-identifying business attributes for a scoped WF10 Lead', async () => {
+    const lead = {
+      id: leadId,
+      companyName: 'Acme',
+      companyWebsite: 'https://acme.example',
+      jobTitle: 'CTO',
+      companySize: 120,
+      industry: 'Software',
+      status: 'QUALIFIED',
+    };
     workflowRuns.findOne.mockResolvedValue({ id: workflowRunId, workflowName: WF10_NAME, leadId, customerId: null, status: WorkflowStatus.PENDING });
     leads.findOne.mockResolvedValue(lead);
     await expect(service.getEntityProfile('Lead', leadId, workflowRunId))
       .resolves.toEqual({ data: { ...lead, entityType: 'Lead' } });
     expect(workflowRuns.findOne).toHaveBeenCalledWith({ where: { id: workflowRunId, workflowName: WF10_NAME, leadId } });
-    expect(leads.findOne).toHaveBeenCalledWith(expect.objectContaining({
+    expect(leads.findOne).toHaveBeenCalledWith({
       where: { id: leadId },
-      select: expect.objectContaining({ id: true, email: true, phone: true, ownerId: true }),
-    }));
+      select: {
+        id: true,
+        companyName: true,
+        companyWebsite: true,
+        jobTitle: true,
+        companySize: true,
+        industry: true,
+        status: true,
+      },
+    });
+    const { data } = await service.getEntityProfile('Lead', leadId, workflowRunId);
+    for (const field of ['firstName', 'lastName', 'email', 'phone', 'ownerId']) {
+      expect(data).not.toHaveProperty(field);
+    }
   });
 
   it('does not expose a profile when the WorkflowRun is not scoped to the entity', async () => {
@@ -51,7 +71,15 @@ describe('NextBestActionsService entity context', () => {
       customerId: null,
       status: WorkflowStatus.PENDING,
     });
-    leads.findOne.mockResolvedValue({ id: leadId, email: 'alex@example.test' });
+    leads.findOne.mockResolvedValue({
+      id: leadId,
+      companyName: 'Acme',
+      companyWebsite: 'https://acme.example',
+      jobTitle: 'CTO',
+      companySize: 120,
+      industry: 'Software',
+      status: 'QUALIFIED',
+    });
     executionClaims.claim.mockResolvedValue({ claimed: true });
 
     await expect(
@@ -62,7 +90,16 @@ describe('NextBestActionsService entity context', () => {
         n8nExecutionId: 'n8n-execution-1',
       }),
     ).resolves.toEqual({
-      data: { id: leadId, email: 'alex@example.test', entityType: 'Lead' },
+      data: {
+        id: leadId,
+        companyName: 'Acme',
+        companyWebsite: 'https://acme.example',
+        jobTitle: 'CTO',
+        companySize: 120,
+        industry: 'Software',
+        status: 'QUALIFIED',
+        entityType: 'Lead',
+      },
     });
     expect(executionClaims.claim).toHaveBeenCalledWith({
       workflowRunId,
