@@ -43,6 +43,12 @@ function readWorkflow(path: string): WorkflowExport {
   ) as WorkflowExport;
 }
 
+function readFixture<T>(path: string): T {
+  return JSON.parse(
+    readFileSync(resolve(process.cwd(), path), 'utf8'),
+  ) as T;
+}
+
 describe('Tuấn Anh T12 workflow exports', () => {
   it.each(workflows)(
     '%s has exactly 12 reachable functional nodes and one trigger',
@@ -101,6 +107,65 @@ describe('Tuấn Anh T12 workflow exports', () => {
       }
     },
   );
+
+  it('provides synthetic trigger/request fixtures for all five owned workflows', () => {
+    const wf01 = readFixture<{
+      eventType: string;
+      version: number;
+      data: { leadId: string; workflowRunId: string };
+    }>('integrations/n8n/fixtures/wf01-qualification.event.json');
+    expect(wf01.eventType).toBe('lead.qualification.requested');
+    expect(wf01.version).toBe(1);
+    expect(wf01.data.leadId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(wf01.data.workflowRunId).toMatch(/^[0-9a-f-]{36}$/i);
+
+    const wf08 = readFixture<{
+      eventType: string;
+      version: number;
+      data: { workflowRunId: string; scope: string };
+    }>('integrations/n8n/fixtures/wf08-data-cleaning.event.json');
+    expect(wf08.eventType).toBe('data.cleaning.requested');
+    expect(wf08.version).toBe(1);
+    expect(wf08.data.scope).toBe('FILTER');
+    expect(wf08.data.workflowRunId).toMatch(/^[0-9a-f-]{36}$/i);
+
+    const wf10 = readFixture<{
+      entityType: string;
+      entityId: string;
+      workflowRunId: string;
+    }>('integrations/n8n/fixtures/wf10-next-best-action.request.json');
+    expect(wf10.entityType).toBe('Lead');
+    expect(wf10.entityId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(wf10.workflowRunId).toMatch(/^[0-9a-f-]{36}$/i);
+
+    const wf11 = readFixture<{
+      meetingId: string;
+      workflowRunId: string;
+      attendeeIds: string[];
+      transcript: string;
+      idempotencyKey: string;
+    }>('integrations/n8n/fixtures/wf11-sales-meeting.dispatch.json');
+    expect(wf11.meetingId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(wf11.workflowRunId).toBe(wf11.idempotencyKey);
+    expect(wf11.attendeeIds.length).toBeGreaterThan(0);
+    expect(wf11.transcript).toContain('jane@example.test');
+
+    const wf12 = readFixture<{
+      workflowRunId: string;
+      customerId: string;
+      requestedItems: Array<{ catalogItemId: string; quantity: number }>;
+      currency: string;
+    }>('integrations/n8n/fixtures/wf12-quote-proposal.dispatch.json');
+    expect(wf12.workflowRunId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(wf12.customerId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(wf12.requestedItems).toEqual([
+      expect.objectContaining({
+        catalogItemId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
+        quantity: expect.any(Number),
+      }),
+    ]);
+    expect(wf12.currency).toBe('VND');
+  });
 
   it('uses a separate shared Error Trigger workflow with a sanitized failure callback', () => {
     const handler = readWorkflow(
