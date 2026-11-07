@@ -70,6 +70,13 @@ export class NextBestActionCallbackDto {
   @IsUUID()
   workflowRunId!: string;
 
+  @ApiProperty({ minLength: 1, maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  n8nExecutionId!: string;
+
   @ApiProperty({ enum: ['Lead', 'Customer'] })
   @IsIn(['Lead', 'Customer'])
   entityType!: 'Lead' | 'Customer';
@@ -205,6 +212,13 @@ export class SaveMeetingSummaryDto {
   @IsUUID()
   workflowRunId!: string;
 
+  @ApiProperty({ minLength: 1, maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  n8nExecutionId!: string;
+
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   transcriptId!: string;
@@ -277,6 +291,13 @@ export class SaveMeetingActionItemsDto {
   @IsUUID()
   workflowRunId!: string;
 
+  @ApiProperty({ minLength: 1, maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  n8nExecutionId!: string;
+
   @ApiProperty({ type: [MeetingActionItemDto] })
   @IsArray()
   @ArrayMaxSize(100)
@@ -295,6 +316,13 @@ export class NotifyMeetingDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   workflowRunId!: string;
+
+  @ApiProperty({ minLength: 1, maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  @Matches(/\\S/, { message: 'n8nExecutionId must not be blank' })
+  n8nExecutionId!: string;
 
   @ApiProperty({ format: 'uuid' })
   @IsUUID()

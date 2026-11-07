@@ -553,10 +553,18 @@ export class NextBestActionsService {
         );
       }
 
+      const now = new Date();
+      const ownsActiveLease =
+        run.n8nExecutionId === dto.n8nExecutionId &&
+        Boolean(run.claimExpiresAt) &&
+        run.claimExpiresAt!.getTime() > now.getTime();
       const existing = await recommendationRepository.findOne({
         where: { workflowRunId: run.id },
       });
       if (existing) {
+        if (run.n8nExecutionId !== dto.n8nExecutionId) {
+          throw new ConflictException('Workflow execution no longer owns this recommendation');
+        }
         if (
           existing.entityType !== dto.entityType ||
           existing.entityId !== dto.entityId ||
@@ -565,6 +573,9 @@ export class NextBestActionsService {
           throw new ConflictException(
             'WorkflowRun already has a different Next Best Action recommendation',
           );
+        }
+        if (run.status !== WorkflowStatus.SUCCESS && !ownsActiveLease) {
+          throw new ConflictException('Workflow execution claim has expired or is no longer active');
         }
         return {
           id: existing.id,
@@ -577,6 +588,7 @@ export class NextBestActionsService {
       }
 
       if (
+        !ownsActiveLease ||
         ![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status)
       ) {
         throw new ConflictException(
@@ -596,6 +608,7 @@ export class NextBestActionsService {
         }),
       );
       run.status = WorkflowStatus.SUCCESS;
+      run.claimExpiresAt = null;
       run.finishedAt = new Date();
       run.outputPayload = {
         ...(run.outputPayload ?? {}),
