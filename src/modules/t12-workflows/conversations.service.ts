@@ -3,7 +3,6 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
-  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -33,6 +32,7 @@ import {
   UpdateActionItemDto,
   UpdateInternalRedactedContentDto,
 } from './dto/index.js';
+import { N8nWorkflowDispatchService } from './n8n-workflow-dispatch.service.js';
 
 export const WF09_NAME = 't12-wf09-conversation-summarizer';
 
@@ -96,6 +96,7 @@ export class ConversationsService {
     private readonly usersRepository: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
+    private readonly dispatcher: N8nWorkflowDispatchService,
   ) {}
 
   /**
@@ -176,6 +177,7 @@ export class ConversationsService {
 
   /**
    * Ingests a new conversation transcript and triggers AI Summarizer workflow (T12-WF09).
+   * Atomically persists WorkflowRun, ConversationTranscript and OutboxEvent in one transaction.
    */
   async createTranscript(dto: CreateTranscriptDto, user: AuthenticatedUser) {
     const rawContent = dto.rawTranscript || dto.content;
@@ -197,138 +199,63 @@ export class ConversationsService {
       .digest('hex');
     const idempotencyKey = `wf09:${user.id}:${dto.idempotencyKey || randomUUID()}`;
 
-    // Create WorkflowRun for execution tracking and correlation
-    const workflowRun = this.workflowRunsRepository.create({
-      workflowName: WF09_NAME,
-      status: WorkflowStatus.PENDING,
-      leadId: dto.leadId || null,
-      customerId: dto.customerId || null,
-      triggeredByUserId: user.id,
-      idempotencyKey,
-      inputPayload: {
-        sourceType: dto.sourceType || 'CALL',
-        customerId: dto.customerId || null,
+    return this.dataSource.transaction(async (manager) => {
+      const runRepo = manager.getRepository(WorkflowRun);
+      const transcriptRepo = manager.getRepository(ConversationTranscript);
+
+      const workflowRun = runRepo.create({
+        workflowName: WF09_NAME,
+        status: WorkflowStatus.PENDING,
         leadId: dto.leadId || null,
-        contentLength: safeTranscript.length,
-      },
-    });
-    const savedRun = await this.workflowRunsRepository.save(workflowRun);
-
-    const transcript = this.transcriptsRepository.create({
-      meetingId: dto.meetingId || null,
-      workflowRunId: savedRun.id,
-      sourceType: dto.sourceType || 'CALL',
-      redactedText: safeTranscript,
-      redactionMode: 'PII_REDACTION+backend',
-      contentHash,
-      idempotencyKey,
-    });
-    const savedTranscript = await this.transcriptsRepository.save(transcript);
-
-    // Asynchronously dispatch internal trigger to n8n
-    this.dispatchToN8n(
-      savedTranscript.id,
-      savedRun.id,
-      safeTranscript,
-      savedTranscript.sourceType,
-      dto.customerId,
-      dto.leadId,
-      user.id,
-    ).catch((err: unknown) => {
-      this.logger.warn(
-        `Failed to dispatch T12-WF09 to n8n: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
-
-    return {
-      message: 'Transcript ingested and AI summarization initiated',
-      transcriptId: savedTranscript.id,
-      workflowRunId: savedRun.id,
-      processingStatus: savedRun.status,
-      redactedContent: savedTranscript.redactedText,
-      createdAt: savedTranscript.createdAt,
-    };
-  }
-
-  private async dispatchToN8n(
-    transcriptId: string,
-    workflowRunId: string,
-    redactedContent: string,
-    sourceType: string,
-    customerId?: string,
-    leadId?: string,
-    createdBy?: string,
-  ) {
-    const n8nBaseUrl =
-      this.configService.get<string>('N8N_INTERNAL_URL') ||
-      this.configService.get<string>('N8N_WEBHOOK_URL') ||
-      'http://localhost:5678';
-    const webhookPath = '/webhook/t12-wf09-conversation-summarizer';
-    const url = `${n8nBaseUrl.replace(/\/+$/, '')}${webhookPath}`;
-
-    const payload = {
-      transcriptId,
-      workflowRunId,
-      customerId: customerId || null,
-      leadId: leadId || null,
-      sourceType,
-      redactedContent,
-      createdBy: createdBy || null,
-      timestamp: new Date().toISOString(),
-    };
-
-    const apiKey =
-      this.configService.get<string>('N8N_API_KEY') ||
-      this.configService.get<string>('N8N_WEBHOOK_SECRET');
-
-    if (!apiKey) {
-      const message =
-        'N8N_API_KEY is not configured; cannot securely dispatch to n8n (Fail-Closed)';
-      this.logger.error(message);
-      await this.workflowRunsRepository.update(workflowRunId, {
-        status: WorkflowStatus.FAILED,
-        errorMessage: message,
-        finishedAt: new Date(),
-      });
-      throw new InternalServerErrorException(message);
-    }
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-N8N-API-KEY': apiKey,
+        customerId: dto.customerId || null,
+        triggeredByUserId: user.id,
+        idempotencyKey,
+        inputPayload: {
+          sourceType: dto.sourceType || 'CALL',
+          customerId: dto.customerId || null,
+          leadId: dto.leadId || null,
+          contentLength: safeTranscript.length,
         },
-        body: JSON.stringify(payload),
       });
+      const savedRun = await runRepo.save(workflowRun);
 
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        const message = `n8n webhook returned HTTP ${response.status}: ${errorText.slice(0, 300)}`;
-        this.logger.error(`Error dispatching T12-WF09: ${message}`);
+      const transcript = transcriptRepo.create({
+        meetingId: dto.meetingId || null,
+        workflowRunId: savedRun.id,
+        sourceType: dto.sourceType || 'CALL',
+        redactedText: safeTranscript,
+        redactionMode: 'PII_REDACTION+backend',
+        contentHash,
+        idempotencyKey,
+      });
+      const savedTranscript = await transcriptRepo.save(transcript);
 
-        await this.workflowRunsRepository.update(workflowRunId, {
-          status: WorkflowStatus.FAILED,
-          errorMessage: message,
-          finishedAt: new Date(),
-        });
-        return;
-      }
-
-      this.logger.log(
-        `T12-WF09 successfully dispatched to n8n webhook: ${url}`,
+      // Persist durable HTTP outbox event in the same transaction
+      await this.dispatcher.enqueue(
+        manager,
+        'N8N_WF09_WEBHOOK_URL',
+        'internal/t12-wf09-conversation-summarizer',
+        {
+          transcriptId: savedTranscript.id,
+          workflowRunId: savedRun.id,
+          customerId: dto.customerId || null,
+          leadId: dto.leadId || null,
+          sourceType: savedTranscript.sourceType,
+          redactedContent: safeTranscript,
+          createdBy: user.id,
+          timestamp: new Date().toISOString(),
+        },
       );
-    } catch (err: unknown) {
-      const message = `n8n dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
-      this.logger.error(`Error dispatching T12-WF09: ${message}`);
 
-      await this.workflowRunsRepository.update(workflowRunId, {
-        status: WorkflowStatus.FAILED,
-        errorMessage: message,
-        finishedAt: new Date(),
-      });
-    }
+      return {
+        message: 'Transcript ingested and AI summarization initiated',
+        transcriptId: savedTranscript.id,
+        workflowRunId: savedRun.id,
+        processingStatus: savedRun.status,
+        redactedContent: savedTranscript.redactedText,
+        createdAt: savedTranscript.createdAt,
+      };
+    });
   }
 
   async getTranscript(id: string, user: AuthenticatedUser) {
@@ -658,10 +585,8 @@ export class ConversationsService {
                 ? new Date(item.dueDate)
                 : null,
             confidence: item.confidence ?? 0.85,
-            requiresConfirmation: item.approvalState
-              ? item.approvalState === 'PROPOSED'
-              : true,
-            status: item.status || 'PENDING_CONFIRMATION',
+            requiresConfirmation: true, // Always require human confirmation; AI cannot auto-approve
+            status: 'PENDING_CONFIRMATION', // Initial canonical confirmation state
             idempotencyKey: `wf09:${workflowRun.id}:action:${itemHash}`,
           });
           savedItems.push(await manager.save(actionItem));
@@ -778,10 +703,8 @@ export class ConversationsService {
               ? new Date(item.dueDate)
               : null,
           confidence: item.confidence ?? 0.85,
-          requiresConfirmation: item.approvalState
-            ? item.approvalState === 'PROPOSED'
-            : true,
-          status: item.status || 'PENDING_CONFIRMATION',
+          requiresConfirmation: true, // Always require human confirmation; AI cannot auto-approve
+          status: 'PENDING_CONFIRMATION', // Initial canonical confirmation state
           idempotencyKey: `wf09:${summary.workflowRunId}:action:${itemHash}`,
         });
         savedItems.push(await this.actionItemsRepository.save(actionItem));

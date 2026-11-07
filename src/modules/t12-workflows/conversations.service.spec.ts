@@ -33,6 +33,7 @@ describe('ConversationsService', () => {
   let usersRepository: any;
   let dataSource: any;
   let configService: any;
+  let dispatcher: any;
 
   const mockAdminUser: AuthenticatedUser = {
     id: 'admin-uuid',
@@ -151,6 +152,26 @@ describe('ConversationsService', () => {
             }
             return [];
           }),
+          getRepository: jest.fn((entityClass: any) => {
+            if (entityClass === ConversationTranscript) {
+              return transcriptsRepository;
+            }
+            if (entityClass === WorkflowRun) {
+              return workflowRunsRepository;
+            }
+            if (entityClass === ConversationSummary) {
+              return summariesRepository;
+            }
+            if (entityClass === ConversationActionItem) {
+              return actionItemsRepository;
+            }
+            return {
+              save: jest.fn((e: any) =>
+                Promise.resolve({ ...e, id: e.id || 'saved-uuid' }),
+              ),
+              create: jest.fn((dto: any) => ({ ...dto, id: 'created-uuid' })),
+            };
+          }),
         };
         return await cb(manager);
       }),
@@ -164,6 +185,10 @@ describe('ConversationsService', () => {
       }),
     };
 
+    dispatcher = {
+      enqueue: jest.fn().mockResolvedValue({ id: 'outbox-uuid' }),
+    };
+
     service = new ConversationsService(
       transcriptsRepository,
       summariesRepository,
@@ -175,6 +200,7 @@ describe('ConversationsService', () => {
       usersRepository,
       dataSource,
       configService,
+      dispatcher,
     );
   });
 
@@ -805,6 +831,212 @@ describe('ConversationsService', () => {
           approvalState: ActionItemApprovalState.APPROVED,
           assignedTo: mockSalesUser2.id,
           title: 'Admin renamed action item',
+        }),
+      );
+    });
+  });
+
+  describe('atomic ingestion and durable outbox boundary', () => {
+    it('atomically persists WorkflowRun, ConversationTranscript and enqueues OutboxEvent in one transaction', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: mockSalesUser1.id,
+      });
+
+      const result = await service.createTranscript(
+        {
+          customerId: 'customer-1',
+          content: 'Discussed renewal contract terms with client.',
+          sourceType: 'CALL',
+        },
+        mockSalesUser1,
+      );
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(workflowRunsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowName: 't12-wf09-conversation-summarizer',
+          status: WorkflowStatus.PENDING,
+          customerId: 'customer-1',
+          triggeredByUserId: mockSalesUser1.id,
+        }),
+      );
+      expect(transcriptsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowRunId: 'run-uuid',
+          sourceType: 'CALL',
+          redactionMode: 'PII_REDACTION+backend',
+        }),
+      );
+      expect(dispatcher.enqueue).toHaveBeenCalledWith(
+        expect.anything(),
+        'N8N_WF09_WEBHOOK_URL',
+        'internal/t12-wf09-conversation-summarizer',
+        expect.objectContaining({
+          transcriptId: 'transcript-uuid',
+          workflowRunId: 'run-uuid',
+          customerId: 'customer-1',
+          sourceType: 'CALL',
+          createdBy: mockSalesUser1.id,
+        }),
+      );
+      expect(result).toMatchObject({
+        transcriptId: 'transcript-uuid',
+        workflowRunId: 'run-uuid',
+        processingStatus: WorkflowStatus.PENDING,
+      });
+    });
+
+    it('fault injection: rolls back transaction and throws when outbox enqueue fails, leaving no orphaned records', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: mockSalesUser1.id,
+      });
+      dispatcher.enqueue.mockRejectedValueOnce(
+        new Error('Outbox write failure: broker unavailable'),
+      );
+
+      await expect(
+        service.createTranscript(
+          {
+            customerId: 'customer-1',
+            content: 'Discussed renewal terms.',
+          },
+          mockSalesUser1,
+        ),
+      ).rejects.toThrow('Outbox write failure: broker unavailable');
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('fault injection: rolls back transaction when database persistence fails before outbox enqueue', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: mockSalesUser1.id,
+      });
+      workflowRunsRepository.save.mockRejectedValueOnce(
+        new Error('Database write error: disk full'),
+      );
+
+      await expect(
+        service.createTranscript(
+          {
+            customerId: 'customer-1',
+            content: 'Discussed renewal terms.',
+          },
+          mockSalesUser1,
+        ),
+      ).rejects.toThrow('Database write error: disk full');
+
+      expect(dispatcher.enqueue).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('human confirmation gate enforcement for AI action items', () => {
+    it('ignores AI-supplied approvalState and status in handleCallback, unconditionally forcing PROPOSED and PENDING_CONFIRMATION', async () => {
+      transcriptsRepository.findOne.mockResolvedValue({
+        id: 't-1',
+        workflowRunId: 'run-1',
+      });
+      workflowRunsRepository.findOne.mockResolvedValue({
+        id: 'run-1',
+        workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.RUNNING,
+        triggeredByUserId: mockSalesUser1.id,
+      });
+
+      const res = await service.handleCallback({
+        transcriptId: 't-1',
+        workflowRunId: 'run-1',
+        status: 'SUCCESS',
+        summaryText: 'Meeting summary discussion',
+        actionItems: [
+          {
+            title: 'Deploy contract to production',
+            status: 'COMPLETED', // Attacker / AI attempts to bypass confirmation
+            approvalState: 'APPROVED', // Attacker / AI attempts to bypass confirmation
+            confidence: 0.99,
+          },
+          {
+            title: 'Reject vendor proposal',
+            status: 'REJECTED',
+            approvalState: 'REJECTED',
+            confidence: 0.95,
+          },
+        ],
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.actionItemCount).toBe(2);
+
+      // Verify that manager.create was called with requiresConfirmation: true and status: 'PENDING_CONFIRMATION'
+      // Regardless of the incoming AI values
+      const managerTransaction = dataSource.transaction.mock.calls[0][0];
+      const savedActionItems: any[] = [];
+      const mockManager = {
+        findOne: jest.fn((entity: any) => {
+          if (entity === ConversationTranscript) {
+            return Promise.resolve({ id: 't-1', workflowRunId: 'run-1' });
+          }
+          if (entity === WorkflowRun) {
+            return Promise.resolve({
+              id: 'run-1',
+              workflowName: 't12-wf09-conversation-summarizer',
+              status: WorkflowStatus.RUNNING,
+              triggeredByUserId: mockSalesUser1.id,
+            });
+          }
+          if (entity === ConversationSummary) {
+            return Promise.resolve(null);
+          }
+          return Promise.resolve(null);
+        }),
+        find: jest.fn().mockResolvedValue([]),
+        create: jest.fn((entity: any, dto: any) => {
+          if (entity === ConversationActionItem) {
+            savedActionItems.push(dto);
+          }
+          return { ...dto, id: 'item-uuid' };
+        }),
+        save: jest.fn((entity: any) =>
+          Promise.resolve({ ...entity, id: entity.id || 'saved-uuid' }),
+        ),
+      };
+
+      await managerTransaction(mockManager);
+
+      expect(savedActionItems.length).toBe(2);
+      for (const item of savedActionItems) {
+        expect(item.status).toBe('PENDING_CONFIRMATION');
+        expect(item.requiresConfirmation).toBe(true);
+      }
+    });
+
+    it('ignores incoming approvalState and status in saveInternalActionItems, forcing PENDING_CONFIRMATION and requiresConfirmation: true', async () => {
+      summariesRepository.findOne.mockResolvedValue({
+        id: 'summary-1',
+        workflowRunId: 'run-1',
+        transcript: { createdBy: mockSalesUser1.id },
+      });
+      actionItemsRepository.find.mockResolvedValue([]);
+
+      const res = await service.saveInternalActionItems('summary-1', {
+        actionItems: [
+          {
+            title: 'Sign enterprise agreement',
+            status: 'COMPLETED',
+            approvalState: 'APPROVED',
+            confidence: 0.98,
+          },
+        ],
+      });
+
+      expect(res.success).toBe(true);
+      expect(actionItemsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Sign enterprise agreement',
+          status: 'PENDING_CONFIRMATION',
+          requiresConfirmation: true,
         }),
       );
     });
