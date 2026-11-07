@@ -143,11 +143,19 @@ describe('SalesMeetingsService persistence idempotency', () => {
       n8nExecutionId: 'current-execution',
       claimExpiresAt: new Date(Date.now() + 60_000),
     });
+    executionClaims.heartbeat.mockRejectedValueOnce(
+      new ConflictException('Workflow execution no longer owns this claim'),
+    );
 
     await expect(
       service.getContext('meeting-1', 'stale-execution'),
     ).rejects.toBeInstanceOf(ConflictException);
 
+    expect(executionClaims.heartbeat).toHaveBeenCalledWith({
+      workflowRunId: 'run-1',
+      workflowName: 'T12-WF11_SALES_MEETING',
+      n8nExecutionId: 'stale-execution',
+    });
     expect(repositories.WorkflowRun.save).not.toHaveBeenCalled();
   });
 
