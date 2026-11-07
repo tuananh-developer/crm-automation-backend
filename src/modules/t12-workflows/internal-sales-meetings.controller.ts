@@ -27,7 +27,7 @@ export class InternalSalesMeetingsController {
   @ApiOperation({ summary: 'Read meeting and attendee CRM context' })
   getContext(
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
-    @Query('n8nExecutionId') n8nExecutionId?: string,
+    @Query('n8nExecutionId') n8nExecutionId: string,
   ) {
     return this.service.getContext(meetingId, n8nExecutionId);
   }

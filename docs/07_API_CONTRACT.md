@@ -117,7 +117,7 @@ CustomerTask supports retention tasks from WF06, feedback escalation from WF14 a
 | `POST /api/v1/segments/:segmentId/evaluate-all`                                         | Evaluate eligible Customers for one active segment; Sales is limited to Customers created by that actor. |
 | `GET /api/v1/segments/:segmentId/customers`                                             | List membership; Sales sees only Customers created by that actor.                                        |
 
-- `POST /api/v1/internal/n8n/next-best-actions/claim-and-entity-context` — machine-authenticated WF10 request; validates entity/run scope and atomically claims the run before returning context. A competing execution receives HTTP 409. `GET /follow-up-segment-context` also renews the claim lease for the same `n8nExecutionId`.
+- `POST /api/v1/internal/n8n/next-best-actions/claim-and-entity-context` — machine-authenticated WF10 request; validates entity/run scope and atomically claims the run before returning context. A competing execution receives HTTP 409. `GET /api/v1/internal/n8n/next-best-actions/follow-up-segment-context` requires the current `n8nExecutionId` and renews the WF10 claim lease.
 
 ## 7. Data Cleaning APIs
 
@@ -130,6 +130,8 @@ CustomerTask supports retention tasks from WF06, feedback escalation from WF14 a
 Apply DTO cannot force safety/approval; the backend reloads each target and enforces allowlist, freshness, permission, transaction, idempotency and AuditLog.
 
 ## 8. Conversation, meetings and feedback APIs
+
+- `GET /api/v1/internal/n8n/sales-meetings/:meetingId/context` — requires the current `n8nExecutionId` and renews the WF11 claim lease.
 
 - `POST/GET /api/v1/sales-meetings`; `GET/PATCH /api/v1/sales-meetings/:meetingId`.
 - `POST /api/v1/conversation-transcripts` — validated ingest through NestJS; redact before AI dispatch.

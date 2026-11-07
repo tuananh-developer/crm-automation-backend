@@ -66,7 +66,7 @@ describe('QuotesService workflow execution ownership', () => {
       finishedAt: null,
       idempotencyKey: workflowRunId,
       createdAt: new Date(),
-    } as WorkflowRun;
+    };
 
     workflowRunRepository = {
       findOne: jest.fn().mockResolvedValue(run),

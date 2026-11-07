@@ -1,7 +1,6 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import {
   IsIn,
-  IsOptional,
   IsString,
   IsUUID,
   Matches,
@@ -22,13 +21,6 @@ export class NextBestActionContextQueryDto {
   @IsUUID()
   workflowRunId!: string;
 
-  @ApiPropertyOptional({ minLength: 1, maxLength: 255 })
-  @IsOptional()
-  @IsString()
-  @MinLength(1)
-  @MaxLength(255)
-  @Matches(/\S/, { message: 'n8nExecutionId must not be blank' })
-  n8nExecutionId?: string;
 }
 
 

@@ -311,25 +311,10 @@ export class SalesMeetingsService {
     return { meeting, run };
   }
 
-  async getContext(meetingId: string, n8nExecutionId?: string) {
+  async getContext(meetingId: string, n8nExecutionId: string) {
     const { meeting, run } = await this.getMeetingRun(meetingId);
-    if (n8nExecutionId) {
-      if (run.n8nExecutionId !== n8nExecutionId) {
-        throw new ConflictException('Workflow execution no longer owns this claim');
-      }
-      const now = new Date();
-      if (
-        ![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status) ||
-        !run.claimExpiresAt ||
-        run.claimExpiresAt.getTime() <= now.getTime()
-      ) {
-        throw new ConflictException('Workflow execution claim lease has expired or is no longer active');
-      }
-      const rawLease = Number(process.env.N8N_WORKFLOW_CLAIM_LEASE_SECONDS);
-      const leaseSeconds = Number.isInteger(rawLease) && rawLease >= 60 && rawLease <= 3600 ? rawLease : 1200;
-      run.claimExpiresAt = new Date(now.getTime() + leaseSeconds * 1000);
-      await this.runs.save(run);
-    }
+    this.renewOwnedExecutionLease(run, n8nExecutionId);
+    await this.runs.save(run);
     const [lead, customer, attendees] = await Promise.all([
       meeting.leadId
         ? this.leads.findOne({

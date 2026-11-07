@@ -54,7 +54,7 @@ describe('NextBestActionsService callback ownership', () => {
       finishedAt: null,
       idempotencyKey: null,
       createdAt: new Date(),
-    } as WorkflowRun;
+    };
 
     workflowRuns = { findOne: jest.fn().mockResolvedValue(run) };
     runRepository = {

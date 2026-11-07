@@ -438,16 +438,14 @@ export class NextBestActionsService {
     entityType: 'Lead' | 'Customer',
     entityId: string,
     workflowRunId: string,
-    n8nExecutionId?: string,
+    n8nExecutionId: string,
   ) {
     await this.getScopedRun(entityType, entityId, workflowRunId);
-    if (n8nExecutionId) {
-      await this.executionClaims.heartbeat({
-        workflowRunId,
-        workflowName: WF10_NAME,
-        n8nExecutionId,
-      });
-    }
+    await this.executionClaims.heartbeat({
+      workflowRunId,
+      workflowName: WF10_NAME,
+      n8nExecutionId,
+    });
     let followUps: LeadFollowUpEnrollment[] = [];
     let segments: CustomerSegment[] = [];
     if (entityType === 'Lead') {

@@ -83,7 +83,7 @@ export class InternalNextBestActionsController {
     summary:
       'Read follow-up and segment context plus backend allowlisted actions',
   })
-  getFollowUpSegmentContext(@Query() query: NextBestActionContextQueryDto) {
+  getFollowUpSegmentContext(@Query() query: ClaimNextBestActionContextDto) {
     return this.service.getFollowUpSegmentContext(
       query.entityType,
       query.entityId,
