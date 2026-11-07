@@ -29,9 +29,7 @@ import {
 @Controller('internal/n8n/next-best-actions')
 @UseGuards(N8nAuthGuard)
 export class InternalNextBestActionsController {
-  constructor(
-    private readonly service: NextBestActionsService,
-  ) {}
+  constructor(private readonly service: NextBestActionsService) {}
 
   @Get('entity-context')
   @ApiOperation({ summary: 'Read scoped Lead/Customer profile for WF10' })
