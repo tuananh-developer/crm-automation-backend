@@ -17,6 +17,14 @@ export const CLAIMABLE_T12_WORKFLOWS = [
 
 export type ClaimableT12Workflow = (typeof CLAIMABLE_T12_WORKFLOWS)[number];
 
+export const FAILABLE_WORKFLOW_NAMES = [
+  'lead-qualification',
+  'UC10_DATA_CLEANING',
+  ...CLAIMABLE_T12_WORKFLOWS,
+] as const;
+
+export type FailableWorkflowName = (typeof FAILABLE_WORKFLOW_NAMES)[number];
+
 export class ClaimWorkflowExecutionDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
@@ -40,9 +48,9 @@ export class FailWorkflowExecutionDto {
   @IsUUID()
   workflowRunId?: string;
 
-  @ApiProperty({ enum: CLAIMABLE_T12_WORKFLOWS })
-  @IsIn(CLAIMABLE_T12_WORKFLOWS)
-  workflowName!: ClaimableT12Workflow;
+  @ApiProperty({ enum: FAILABLE_WORKFLOW_NAMES })
+  @IsIn(FAILABLE_WORKFLOW_NAMES)
+  workflowName!: FailableWorkflowName;
 
   @ApiProperty({ minLength: 1, maxLength: 255 })
   @IsString()
