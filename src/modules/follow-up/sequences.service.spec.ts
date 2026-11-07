@@ -338,7 +338,9 @@ describe('SequencesService', () => {
 
   describe('updateStep', () => {
     it('should reject changing an active step to an unsupported channel/action', async () => {
-      (stepsRepo.findOne as jest.Mock).mockResolvedValue(mockStep1);
+      (stepsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockStep1,
+      });
       (sequencesRepo.findOne as jest.Mock).mockResolvedValue(mockSequence);
 
       await expect(
