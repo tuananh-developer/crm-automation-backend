@@ -111,6 +111,25 @@ describe('NextBestActionsService callback ownership', () => {
     }));
   });
 
+  it('keeps the claim active until a human-approval recommendation is finalized', async () => {
+    const approvalCallback = callback();
+    approvalCallback.recommendations[0].actionCode = 'SCHEDULE_DISCOVERY_CALL';
+
+    await expect(service.saveRecommendation(approvalCallback)).resolves.toMatchObject({
+      recommendationId: 'recommendation-1',
+      requiresHumanApproval: true,
+    });
+    expect(runRepository.save).toHaveBeenCalledWith(expect.objectContaining({
+      status: WorkflowStatus.RUNNING,
+      claimExpiresAt: expect.any(Date),
+      finishedAt: null,
+      outputPayload: expect.objectContaining({
+        recommendationId: 'recommendation-1',
+        requiresHumanApproval: true,
+      }),
+    }));
+  });
+
   it('rejects a callback from a different execution after a lease takeover', async () => {
     run.n8nExecutionId = 'newer-execution';
     await expect(service.saveRecommendation(callback())).rejects.toBeInstanceOf(ConflictException);
