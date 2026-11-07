@@ -120,6 +120,8 @@ describe('Tuấn Anh T12 workflow exports', () => {
       (node) => node.name === 'Code: Normalize Failure Event',
     )?.parameters?.jsCode ?? '';
     expect(normalizer).toContain('findWorkflowRunId(execution.data) || findWorkflowRunId(event.data)');
+    expect(normalizer).toContain("['WF01','lead-qualification']");
+    expect(normalizer).toContain("['WF08','UC10_DATA_CLEANING']");
     expect(handler.settings?.errorWorkflow).toBeUndefined();
   });
 
