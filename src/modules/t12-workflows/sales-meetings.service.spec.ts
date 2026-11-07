@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
@@ -46,6 +51,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
   let dataSource: { transaction: jest.Mock };
   let manager: { getRepository: jest.Mock };
   let dispatcher: { enqueue: jest.Mock };
+  let configService: { get: jest.Mock };
 
   beforeEach(() => {
     const makeRepository = (id: string) => ({
@@ -78,6 +84,9 @@ describe('SalesMeetingsService persistence idempotency', () => {
     };
 
     dispatcher = { enqueue: jest.fn().mockResolvedValue({ id: 'outbox-1' }) };
+    configService = {
+      get: jest.fn((key: string) => (key === 'NODE_ENV' ? 'test' : undefined)),
+    };
 
     service = new SalesMeetingsService(
       repositories.WorkflowRun as Repository<WorkflowRun>,
@@ -90,6 +99,7 @@ describe('SalesMeetingsService persistence idempotency', () => {
       repositories.ConversationActionItem as Repository<ConversationActionItem>,
       dataSource as unknown as DataSource,
       dispatcher,
+      configService as unknown as ConfigService,
     );
   });
 
@@ -500,4 +510,32 @@ describe('SalesMeetingsService persistence idempotency', () => {
     });
   });
 
+  it('blocks new transcript processing in production until policy is explicitly enabled', async () => {
+    configService.get.mockImplementation((key: string) =>
+      key === 'NODE_ENV' ? 'production' : undefined,
+    );
+
+    const dto: StartSalesMeetingDto = {
+      leadId: 'lead-1',
+      attendeeIds: [],
+      transcript: 'The customer discussed the proposal and the delivery timeline.',
+      sourceType: 'MEETING_TRANSCRIPT',
+    };
+    const actor: AuthenticatedUser = {
+      id: 'owner-1',
+      name: 'Owner',
+      email: 'owner@example.com',
+      role: UserRole.SALES,
+      status: UserStatus.ACTIVE,
+      lastLoginAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    await expect(
+      service.request(dto, actor, 'meeting-key-0001'),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(repositories.WorkflowRun.findOne).not.toHaveBeenCalled();
+    expect(dispatcher.enqueue).not.toHaveBeenCalled();
+  });
 });
