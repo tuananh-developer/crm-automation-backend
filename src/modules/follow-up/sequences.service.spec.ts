@@ -302,6 +302,21 @@ describe('SequencesService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
+    it('should reject an active non-email action because no provider is configured', async () => {
+      (sequencesRepo.findOne as jest.Mock).mockResolvedValue(mockSequence);
+      (stepsRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.createStep('seq-123', {
+          stepOrder: 3,
+          channel: 'PHONE',
+          actionType: 'SCHEDULE_CALL',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(stepsRepo.save).not.toHaveBeenCalled();
+    });
+
     it('should create step in sequence', async () => {
       (sequencesRepo.findOne as jest.Mock).mockResolvedValue(mockSequence);
       (stepsRepo.findOne as jest.Mock).mockResolvedValue(null);
@@ -321,7 +336,45 @@ describe('SequencesService', () => {
 
   // ── Lead Follow-Up Enrollment (UC05) Tests ────────────────────────────────
 
+  describe('updateStep', () => {
+    it('should reject changing an active step to an unsupported channel/action', async () => {
+      (stepsRepo.findOne as jest.Mock).mockResolvedValue(mockStep1);
+      (sequencesRepo.findOne as jest.Mock).mockResolvedValue(mockSequence);
+
+      await expect(
+        service.updateStep('step-1', {
+          channel: 'MESSAGE',
+          actionType: 'SEND_SMS',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(stepsRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
   describe('enrollLead', () => {
+    it('should reject enrollment when any active step has no configured provider', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue(mockLead);
+      (sequencesRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockSequence,
+        steps: [
+          mockStep1,
+          { ...mockStep2, channel: 'MESSAGE', actionType: 'SEND_SMS' },
+        ],
+      });
+
+      await expect(
+        service.enrollLead(
+          { leadId: 'lead-123', sequenceId: 'seq-123' },
+          actor,
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(enrollmentsRepo.create).not.toHaveBeenCalled();
+      expect(executionsRepo.create).not.toHaveBeenCalled();
+    });
+
+
     it('should throw NotFoundException if lead does not exist', async () => {
       (leadsRepo.findOne as jest.Mock).mockResolvedValue(null);
 

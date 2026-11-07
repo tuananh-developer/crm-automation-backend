@@ -25,7 +25,10 @@ import {
 import { Lead } from '../leads/entities/lead.entity.js';
 import { Customer } from '../customers/entities/customer.entity.js';
 import { AuditLog } from '../audit/entities/audit-log.entity.js';
-import { N8nClientService } from '../../infrastructure/n8n/n8n-client.service.js';
+import {
+  N8nClientService,
+  N8nWebhookError,
+} from '../../infrastructure/n8n/n8n-client.service.js';
 import {
   EnrollLeadDto,
   ExecuteFollowUpDto,
@@ -38,6 +41,10 @@ import type {
 } from './interfaces/index.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole } from '../users/enums/user.enum.js';
+import {
+  getUnsupportedFollowUpActionMessage,
+  isSupportedFollowUpAction,
+} from './follow-up-action.js';
 
 export const DEFAULT_MAX_RETRIES = 3;
 export const DEFAULT_RETRY_DELAY_MINUTES = 10;
@@ -108,6 +115,12 @@ export class FollowUpService {
       throw new NotFoundException(
         `No active follow-up step available for enrollment '${enrollment.id}'`,
       );
+    }
+
+    // This release ships only an EMAIL/SEND_EMAIL adapter. Reject unsupported
+    // steps before creating a RUNNING claim or contacting the provider.
+    if (!isSupportedFollowUpAction(step.channel, step.actionType)) {
+      return this.skipUnsupportedAction(enrollment.id, step, actor);
     }
 
     const customer = await this.loadCustomer(lead);
@@ -243,7 +256,11 @@ export class FollowUpService {
       response =
         await this.n8nClientService.triggerWebhook<N8nFollowUpResponse>(
           this.getWebhookPath(),
-          execution.requestPayload as Record<string, unknown>,
+          {
+            executionId: execution.id,
+            enrollmentId: execution.enrollmentId,
+            stepId: execution.stepId,
+          },
         );
     } catch (error: unknown) {
       return this.handleFailure(
@@ -252,6 +269,7 @@ export class FollowUpService {
         error instanceof Error ? error.message : String(error),
         null,
         maxRetries,
+        error instanceof N8nWebhookError ? error.retryable : true,
       );
     }
 
@@ -268,6 +286,7 @@ export class FollowUpService {
         errorMessage,
         response as Record<string, unknown> | null,
         maxRetries,
+        response?.retryable !== false,
       );
     }
 
@@ -421,7 +440,8 @@ export class FollowUpService {
             execution.startedAt = null;
             execution.completedAt = null;
             execution.scheduledAt = new Date(
-              Date.now() + this.getRetryDelayMinutes() * 60_000,
+              Date.now() +
+                this.getRetryDelayMinutes(previousRetryCount) * 60_000,
             );
             retryScheduled = true;
           }
@@ -792,6 +812,135 @@ export class FollowUpService {
     });
   }
 
+  private async skipUnsupportedAction(
+    enrollmentId: string,
+    step: FollowUpStep,
+    actor?: AuthenticatedUser,
+  ): Promise<ExecuteFollowUpResult> {
+    const skippedAt = new Date();
+    const errorMessage = getUnsupportedFollowUpActionMessage(
+      step.channel,
+      step.actionType,
+    );
+
+    const skippedExecution = await this.dataSource.transaction(async (manager) => {
+      const enrollmentsRepository = manager.getRepository(
+        LeadFollowUpEnrollment,
+      );
+      const executionsRepository = manager.getRepository(FollowUpExecution);
+      const auditLogRepository = manager.getRepository(AuditLog);
+
+      // Keep the lifecycle lock order: enrollment first, then execution.
+      const lockedEnrollment = await enrollmentsRepository.findOne({
+        where: { id: enrollmentId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!lockedEnrollment) {
+        throw new NotFoundException('Follow-up enrollment not found');
+      }
+      if (lockedEnrollment.status !== EnrollmentStatus.ACTIVE) {
+        throw new ConflictException(
+          `Follow-up enrollment '${lockedEnrollment.id}' is '${lockedEnrollment.status}' and cannot execute steps`,
+        );
+      }
+      if (step.sequenceId !== lockedEnrollment.sequenceId) {
+        throw new BadRequestException(
+          `Step '${step.id}' does not belong to sequence '${lockedEnrollment.sequenceId}' of enrollment '${lockedEnrollment.id}'`,
+        );
+      }
+      await this.assertEnrollmentAccessInTransaction(
+        manager,
+        lockedEnrollment,
+        actor,
+      );
+
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `follow-up-execution:${lockedEnrollment.id}:${step.id}`,
+      ]);
+
+      const existing = await executionsRepository.findOne({
+        where: { enrollmentId: lockedEnrollment.id, stepId: step.id },
+        order: { createdAt: 'DESC' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (
+        existing &&
+        [
+          ExecutionStatus.RUNNING,
+          ExecutionStatus.SUCCESS,
+          ExecutionStatus.FAILED,
+        ].includes(existing.status)
+      ) {
+        throw new ConflictException(
+          `Follow-up execution '${existing.id}' is '${existing.status}' and cannot be skipped for an unsupported action`,
+        );
+      }
+      if (existing?.status === ExecutionStatus.SKIPPED) {
+        return existing;
+      }
+
+      const record =
+        existing ??
+        executionsRepository.create({
+          enrollmentId: lockedEnrollment.id,
+          stepId: step.id,
+          status: ExecutionStatus.SKIPPED,
+          scheduledAt: skippedAt,
+          startedAt: null,
+          completedAt: skippedAt,
+          providerMessageId: null,
+          requestPayload: null,
+          responsePayload: null,
+          errorMessage,
+          retryCount: 0,
+        });
+
+      const previousStatus = record.status;
+      record.status = ExecutionStatus.SKIPPED;
+      record.startedAt = null;
+      record.completedAt = skippedAt;
+      record.errorMessage = errorMessage;
+      record.responsePayload = {
+        code: 'FOLLOW_UP_ACTION_UNSUPPORTED',
+        channel: step.channel,
+        actionType: step.actionType,
+      };
+      const savedExecution = await executionsRepository.save(record);
+
+      await auditLogRepository.save(
+        auditLogRepository.create({
+          userId: lockedEnrollment.assignedBy,
+          action: 'FOLLOW_UP_SKIPPED',
+          entityType: 'FollowUpExecution',
+          entityId: savedExecution.id,
+          oldValue: { status: previousStatus },
+          newValue: { status: ExecutionStatus.SKIPPED },
+          metadata: {
+            enrollmentId: lockedEnrollment.id,
+            stepId: step.id,
+            channel: step.channel,
+            actionType: step.actionType,
+            reason: 'FOLLOW_UP_ACTION_UNSUPPORTED',
+          },
+          ipAddress: null,
+          userAgent: null,
+        }),
+      );
+
+      return savedExecution;
+    });
+
+    this.logger.warn(
+      `Skipped follow-up step ${step.id}: unsupported action ${step.channel}/${step.actionType}`,
+    );
+    return {
+      execution: skippedExecution,
+      status: skippedExecution.status,
+      retryCount: skippedExecution.retryCount,
+      message: errorMessage,
+    };
+  }
+
   private async handleSuccess(
     execution: FollowUpExecution,
     step: FollowUpStep,
@@ -946,6 +1095,7 @@ export class FollowUpService {
     errorMessage: string,
     responsePayload: Record<string, unknown> | null,
     maxRetries: number,
+    retryable = true,
   ): Promise<ExecuteFollowUpResult> {
     const failedAt = new Date();
 
@@ -984,6 +1134,7 @@ export class FollowUpService {
       currentExecution.responsePayload = responsePayload;
 
       const canRetry =
+        retryable &&
         enrollment.status !== EnrollmentStatus.CANCELLED &&
         enrollment.status !== EnrollmentStatus.COMPLETED &&
         currentExecution.retryCount < maxRetries;
@@ -996,7 +1147,8 @@ export class FollowUpService {
         currentExecution.startedAt = null;
         currentExecution.completedAt = null;
         currentExecution.scheduledAt = new Date(
-          failedAt.getTime() + this.getRetryDelayMinutes() * 60_000,
+          failedAt.getTime() +
+            this.getRetryDelayMinutes(previousRetryCount) * 60_000,
         );
         retryScheduled = true;
       }
@@ -1343,11 +1495,13 @@ export class FollowUpService {
     );
   }
 
-  private getRetryDelayMinutes(): number {
-    return this.configService.get<number>(
-      'FOLLOW_UP_RETRY_DELAY_MINUTES',
-      DEFAULT_RETRY_DELAY_MINUTES,
+  private getRetryDelayMinutes(retryCount: number): number {
+    const retryDelays = [1, 5, 15];
+    const index = Math.min(
+      Math.max(retryCount, 0),
+      retryDelays.length - 1,
     );
+    return retryDelays[index];
   }
 
   private assertLeadAccess(lead: Lead, actor: AuthenticatedUser): void {

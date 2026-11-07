@@ -245,6 +245,37 @@ describe('FollowUpService', () => {
       );
     });
 
+    it('should persist unsupported legacy steps as SKIPPED without calling n8n', async () => {
+      const unsupportedStep = buildStep({
+        channel: 'PHONE',
+        actionType: 'SCHEDULE_CALL',
+      });
+      (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(unsupportedStep);
+
+      const result = await service.execute(dto);
+
+      expect(result.status).toBe(ExecutionStatus.SKIPPED);
+      expect(result.message).toContain('Only EMAIL/SEND_EMAIL is currently available');
+      expect(n8nClientService.triggerWebhook).not.toHaveBeenCalled();
+      expect(executionsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: ExecutionStatus.SKIPPED,
+          errorMessage: expect.stringContaining('PHONE/SCHEDULE_CALL'),
+          responsePayload: expect.objectContaining({
+            code: 'FOLLOW_UP_ACTION_UNSUPPORTED',
+          }),
+        }),
+      );
+      expect(auditLogRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'FOLLOW_UP_SKIPPED',
+          metadata: expect.objectContaining({
+            reason: 'FOLLOW_UP_ACTION_UNSUPPORTED',
+          }),
+        }),
+      );
+    });
+
     it('should execute the follow-up successfully and return execution, status, retryCount and message', async () => {
       // No further step in the sequence
       (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(null);
@@ -258,11 +289,11 @@ describe('FollowUpService', () => {
       expect(result.message).toContain('executed successfully');
       expect(n8nClientService.triggerWebhook).toHaveBeenCalledWith(
         'follow-up-execute',
-        expect.objectContaining({
+        {
+          executionId: 'execution-1',
           enrollmentId: 'enrollment-1',
           stepId: 'step-1',
-          channel: 'EMAIL',
-        }),
+        },
       );
     });
 
@@ -273,14 +304,11 @@ describe('FollowUpService', () => {
 
       expect(n8nClientService.triggerWebhook).toHaveBeenCalledWith(
         'follow-up-execute',
-        expect.objectContaining({
+        {
           executionId: 'execution-1',
-          recipient: 'john.doe@example.com',
-          subject: 'Trao đổi về Acme Corp',
-          message:
-            'Xin chào John,\nchúng tôi muốn trao đổi thêm với bạn về nhu cầu của Acme Corp.',
-          attempt: 1,
-        }),
+          enrollmentId: 'enrollment-1',
+          stepId: 'step-1',
+        },
       );
     });
 
@@ -546,7 +574,11 @@ describe('FollowUpService', () => {
       expect(executionsRepository.create).not.toHaveBeenCalled();
       expect(n8nClientService.triggerWebhook).toHaveBeenCalledWith(
         'follow-up-execute',
-        expect.objectContaining({ attempt: 2 }),
+        {
+          executionId: 'execution-1',
+          enrollmentId: 'enrollment-1',
+          stepId: 'step-1',
+        },
       );
     });
 
