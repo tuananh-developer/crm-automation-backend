@@ -22,21 +22,43 @@ describe('QuotesService entity context', () => {
     );
   });
 
-  it('returns customer context only when the WorkflowRun belongs to that customer', async () => {
-    const customer = { id: customerId, name: 'Acme Ltd', email: 'buyer@example.test', companyName: 'Acme' };
+  it('returns only non-identifying business attributes for the scoped WF12 customer', async () => {
+    const customer = {
+      id: customerId,
+      companyName: 'Acme',
+      companyWebsite: 'https://acme.example',
+      jobTitle: 'Procurement',
+      industry: 'Software',
+    };
     runs.findOne.mockResolvedValue({ id: workflowRunId, workflowName: WF12_NAME, customerId, leadId: null });
     customers.findOne.mockResolvedValue(customer);
     await expect(service.getEntityContext(customerId, undefined, workflowRunId))
       .resolves.toEqual({ entityType: 'Customer', entity: customer, workflowRunId });
     expect(runs.findOne).toHaveBeenCalledWith({ where: { id: workflowRunId, workflowName: WF12_NAME } });
-    expect(customers.findOne).toHaveBeenCalledWith(expect.objectContaining({
+    expect(customers.findOne).toHaveBeenCalledWith({
       where: { id: customerId },
-      select: expect.objectContaining({ id: true, email: true, createdBy: true }),
-    }));
+      select: {
+        id: true,
+        companyName: true,
+        companyWebsite: true,
+        jobTitle: true,
+        industry: true,
+      },
+    });
+    const result = await service.getEntityContext(customerId, undefined, workflowRunId);
+    for (const field of ['name', 'email', 'phone', 'createdBy']) {
+      expect(result.entity).not.toHaveProperty(field);
+    }
   });
 
   it('claims an active run before returning customer context', async () => {
-    const customer = { id: customerId, name: 'Acme Ltd', email: 'buyer@example.test' };
+    const customer = {
+      id: customerId,
+      companyName: 'Acme',
+      companyWebsite: 'https://acme.example',
+      jobTitle: 'Procurement',
+      industry: 'Software',
+    };
     runs.findOne.mockResolvedValue({
       id: workflowRunId, workflowName: WF12_NAME, customerId, leadId: null,
     });
