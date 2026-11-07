@@ -36,7 +36,7 @@ Internal n8n routes (`N8nAuthGuard`):
 - `POST /api/v1/internal/n8n/next-best-actions/callback`
 - `POST /api/v1/internal/n8n/next-best-actions/review`
 
-Backend allowlist is authoritative. The backend overwrites `requiresApproval` based on the allowlist and confidence; the model cannot downgrade an action's approval requirement. Evidence IDs are verified against the authorized entity. Existing ReviewTask schema requires a Lead; Lead recommendations requiring review create/reuse a ReviewTask, while Customer recommendations create an owner notification and remain pending approval. No action is executed automatically.
+Backend allowlist is authoritative. The backend overwrites `requiresApproval` based on the allowlist and confidence; the model cannot downgrade an action's approval requirement. The recommendation callback keeps the execution claim active when approval is needed; the IF node reads the backend `requiresHumanApproval` field, and the review callback records the `n8nExecutionId`, creates/reuses the review or notification, then releases the claim. The non-approval path finalizes the run in the recommendation callback. Evidence IDs are verified against the authorized entity. Existing ReviewTask schema requires a Lead; Lead recommendations requiring review create/reuse a ReviewTask, while Customer recommendations create an owner notification and remain pending approval. No action is executed automatically.
 
 ## WF11 — Sales Meeting
 
