@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -21,7 +22,7 @@ export class FeedbackCallbackDto {
 
   @ApiProperty({ description: 'Execution status', enum: ['SUCCESS', 'FAILED'] })
   @IsNotEmpty()
-  @IsString()
+  @IsIn(['SUCCESS', 'FAILED'])
   status!: 'SUCCESS' | 'FAILED';
 
   @ApiPropertyOptional({

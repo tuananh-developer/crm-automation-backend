@@ -170,6 +170,21 @@ export class OutboxPublisher {
                 [workflowRunId],
               );
             }
+
+            if (
+              (failedRun.affected ?? 0) === 1 &&
+              event.destination === 'N8N_WF14_WEBHOOK_URL'
+            ) {
+              await manager.query(
+                `UPDATE customer_feedback
+                 SET status = 'FAILED', error_message = $2, updated_at = NOW()
+                 WHERE workflow_run_id = $1 AND status = 'NEW'`,
+                [
+                  workflowRunId,
+                  `n8n dispatch failed: ${message}`.slice(0, 1000),
+                ],
+              );
+            }
           }
         }
       });
@@ -184,6 +199,7 @@ export class OutboxPublisher {
       'N8N_WF10_WEBHOOK_URL',
       'N8N_WF11_WEBHOOK_URL',
       'N8N_WF12_WEBHOOK_URL',
+      'N8N_WF14_WEBHOOK_URL',
     ] as const;
     if (
       !event.destination ||

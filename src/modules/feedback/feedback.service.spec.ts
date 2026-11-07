@@ -5,17 +5,31 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { FeedbackService } from './feedback.service.js';
-import { FeedbackStatus } from './entities/customer-feedback.entity.js';
 import {
+  CustomerFeedback,
+  FeedbackStatus,
+} from './entities/customer-feedback.entity.js';
+import {
+  CustomerTask,
   CustomerTaskPriority,
   CustomerTaskStatus,
 } from './entities/customer-task.entity.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import {
+  OutboxEvent,
+  OutboxTransport,
+} from '../../infrastructure/rabbitmq/entities/outbox-event.entity.js';
+import { OutboxPublisher } from '../../infrastructure/rabbitmq/outbox-publisher.service.js';
+import type { DataSource } from 'typeorm';
+import type { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import type { ConfigService } from '@nestjs/config';
 
 describe('FeedbackService', () => {
   let service: FeedbackService;
@@ -24,7 +38,10 @@ describe('FeedbackService', () => {
   let customersRepository: any;
   let workflowRunsRepository: any;
   let notificationsRepository: any;
+  let outboxEventsRepository: any;
   let configService: any;
+  let dataSourceMock: any;
+  let dispatcherMock: any;
 
   const mockAdminUser: AuthenticatedUser = {
     id: 'admin-uuid',
@@ -108,12 +125,44 @@ describe('FeedbackService', () => {
       ),
     };
 
+    outboxEventsRepository = {
+      create: jest.fn((dto: any) => ({ ...dto, id: 'outbox-uuid' })),
+      save: jest.fn((entity: any) =>
+        Promise.resolve({
+          ...entity,
+          id: entity.id || 'outbox-uuid',
+        }),
+      ),
+    };
+
     configService = {
       get: jest.fn((key: string) => {
         if (key === 'N8N_INTERNAL_URL') return 'http://localhost:5678';
         if (key === 'N8N_API_KEY') return 'test-api-key';
         return null;
       }),
+    };
+
+    dataSourceMock = {
+      transaction: jest.fn(async (cb: (manager: any) => Promise<any>) => {
+        const manager = {
+          getRepository: jest.fn((entity: any) => {
+            if (entity === CustomerFeedback) return feedbackRepository;
+            if (entity === WorkflowRun) return workflowRunsRepository;
+            if (entity === CustomerTask) return customerTasksRepository;
+            if (entity === OutboxEvent) return outboxEventsRepository;
+            return {
+              create: jest.fn((dto) => ({ ...dto, id: 'mock-id' })),
+              save: jest.fn((e) => Promise.resolve({ ...e, id: 'mock-id' })),
+            };
+          }),
+        };
+        return cb(manager);
+      }),
+    };
+
+    dispatcherMock = {
+      enqueue: jest.fn().mockResolvedValue({ id: 'outbox-uuid' }),
     };
 
     service = new FeedbackService(
@@ -123,6 +172,8 @@ describe('FeedbackService', () => {
       workflowRunsRepository,
       notificationsRepository,
       configService,
+      dataSourceMock,
+      dispatcherMock,
     );
   });
 
@@ -257,6 +308,180 @@ describe('FeedbackService', () => {
           mockSalesUser1,
         ),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('atomically commits CustomerFeedback, WorkflowRun, and enqueues OutboxEvent in the same transaction without direct HTTP fetch', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        name: 'Nguyen Van Test',
+        email: 'test@example.com',
+        companyName: 'Acme Corp',
+        createdBy: mockSalesUser1.id,
+      });
+
+      const fetchSpy = jest.spyOn(global, 'fetch');
+
+      const result = await service.createFeedback(
+        {
+          customerId: 'customer-1',
+          content: 'Excellent service and great turnaround',
+          rating: 5,
+          source: 'WEB',
+        },
+        mockSalesUser1,
+      );
+
+      expect(result.feedbackId).toBe('feedback-uuid');
+      expect(result.workflowRunId).toBe('run-uuid');
+      expect(dataSourceMock.transaction).toHaveBeenCalledTimes(1);
+      expect(feedbackRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customerId: 'customer-1',
+          status: FeedbackStatus.NEW,
+          rating: 5,
+        }),
+      );
+      expect(workflowRunsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowName: 't12-wf14-customer-feedback',
+          customerId: 'customer-1',
+          triggeredByUserId: mockSalesUser1.id,
+          status: WorkflowStatus.PENDING,
+        }),
+      );
+      expect(dispatcherMock.enqueue).toHaveBeenCalledWith(
+        expect.anything(),
+        'N8N_WF14_WEBHOOK_URL',
+        't12-wf14-customer-feedback',
+        expect.objectContaining({
+          feedbackId: 'feedback-uuid',
+          workflowRunId: 'run-uuid',
+          customerId: 'customer-1',
+          safeContent: 'Excellent service and great turnaround',
+          rating: 5,
+        }),
+      );
+
+      // Asserts direct HTTP fetch is NOT invoked during the service request lifecycle
+      expect(fetchSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+    });
+
+    it('fault injection: rolls back transaction when outbox enqueue fails, preventing orphaned Feedback or WorkflowRun', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: mockSalesUser1.id,
+      });
+
+      dispatcherMock.enqueue.mockRejectedValueOnce(
+        new Error('Outbox broker table locked / write failed'),
+      );
+
+      await expect(
+        service.createFeedback(
+          {
+            customerId: 'customer-1',
+            content: 'Feedback fault injection test',
+          },
+          mockSalesUser1,
+        ),
+      ).rejects.toThrow('Outbox broker table locked / write failed');
+
+      expect(dataSourceMock.transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws InternalServerErrorException when N8N_API_KEY is missing (Fail-Closed)', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: mockSalesUser1.id,
+      });
+      configService.get.mockReturnValue(null);
+
+      await expect(
+        service.createFeedback(
+          {
+            customerId: 'customer-1',
+            content: 'Feedback test without API key',
+          },
+          mockSalesUser1,
+        ),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
+    });
+
+    it('Outbox recovery: OutboxPublisher dispatches pending WF14 outbox event and transitions WorkflowRun to RUNNING', async () => {
+      const workflowRunId = '99999999-9999-4999-8999-999999999999';
+      const outboxEventRecord = {
+        id: 'outbox-event-1',
+        eventType: 'n8n.workflow.dispatch.requested',
+        transport: OutboxTransport.HTTP,
+        destination: 'N8N_WF14_WEBHOOK_URL',
+        destinationPath: 't12-wf14-customer-feedback',
+        payload: {
+          feedbackId: 'feedback-uuid',
+          workflowRunId,
+          customerId: 'customer-1',
+        },
+        attempts: 0,
+        lockToken: 'lock-token-1',
+      };
+
+      const outboxManager = {
+        query: jest.fn().mockResolvedValueOnce([outboxEventRecord]),
+        getRepository: jest.fn().mockImplementation((entity: unknown) => {
+          if (entity === WorkflowRun) {
+            return {
+              update: jest.fn().mockResolvedValue({ affected: 1 }),
+            };
+          }
+          return {
+            update: jest.fn().mockResolvedValue({ affected: 1 }),
+          };
+        }),
+      };
+
+      const outboxDataSource = {
+        isInitialized: true,
+        transaction: jest.fn(async (cb: (m: any) => Promise<any>) =>
+          cb(outboxManager),
+        ),
+      };
+
+      const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+      } as Response);
+
+      const publisherConfig = {
+        get: jest.fn((key: string) => {
+          if (key === 'N8N_WF14_WEBHOOK_URL') {
+            return 'https://n8n.example/webhook/t12-wf14-customer-feedback';
+          }
+          if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+          return undefined;
+        }),
+      };
+
+      const publisher = new OutboxPublisher(
+        outboxDataSource as unknown as DataSource,
+        {} as unknown as RabbitMQService,
+        publisherConfig as unknown as ConfigService,
+      );
+
+      await publisher.publishPendingEvents();
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'https://n8n.example/webhook/t12-wf14-customer-feedback',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'X-N8N-API-KEY': 'test-n8n-secret',
+            'Idempotency-Key': workflowRunId,
+          }),
+          body: JSON.stringify(outboxEventRecord.payload),
+        }),
+      );
+
+      fetchSpy.mockRestore();
     });
   });
 

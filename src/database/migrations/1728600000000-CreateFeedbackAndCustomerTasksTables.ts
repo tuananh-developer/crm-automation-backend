@@ -127,15 +127,78 @@ export class CreateFeedbackAndCustomerTasksTables1728600000000 implements Migrat
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    // 1. Revert WF14-specific relations, constraints, and data from shared customer_tasks table
     await queryRunner.query(`
-      ALTER TABLE "notifications"
-      DROP COLUMN IF EXISTS "severity";
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'customer_tasks') THEN
+          -- Drop foreign key constraint referencing customer_feedback
+          IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_customer_tasks_customer_feedback_id') THEN
+            ALTER TABLE "customer_tasks" DROP CONSTRAINT "FK_customer_tasks_customer_feedback_id";
+          END IF;
+
+          -- Drop index on customer_feedback_id
+          DROP INDEX IF EXISTS "idx_customer_tasks_feedback_id";
+
+          -- Clean up tasks specifically originating from customer feedback
+          DELETE FROM "customer_tasks" WHERE "customer_feedback_id" IS NOT NULL;
+
+          -- Drop feedback column from shared table
+          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'customer_tasks' AND column_name = 'customer_feedback_id') THEN
+            ALTER TABLE "customer_tasks" DROP COLUMN "customer_feedback_id";
+          END IF;
+        END IF;
+      END $$;
     `);
+
+    // 2. Safely drop customer_feedback table exclusively owned by WF14
     await queryRunner.query(`
-      DROP TABLE IF EXISTS "customer_tasks";
+      DROP TABLE IF EXISTS "customer_feedback" CASCADE;
     `);
+
+    // 3. Ownership-safe handling of shared customer_tasks:
+    // customer_tasks is a canonical shared entity (used by PR #49 Churn Assessment and others).
+    // NEVER drop customer_tasks if it was created/managed by another migration or contains non-feedback data.
     await queryRunner.query(`
-      DROP TABLE IF EXISTS "customer_feedback";
+      DO $$
+      DECLARE
+        has_table boolean := false;
+        has_churn_cols boolean := false;
+        churn_migrated boolean := false;
+        row_count int := 0;
+      BEGIN
+        SELECT EXISTS (
+          SELECT 1 FROM information_schema.tables WHERE table_name = 'customer_tasks'
+        ) INTO has_table;
+
+        IF has_table THEN
+          -- Check if churn columns exist
+          SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'customer_tasks'
+              AND column_name IN ('churn_assessment_id', 'assessment_id')
+          ) INTO has_churn_cols;
+
+          -- Check if churn migration is recorded in migrations table
+          IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'migrations') THEN
+            SELECT EXISTS (
+              SELECT 1 FROM "migrations" WHERE "name" LIKE '%CustomerChurn%'
+            ) INTO churn_migrated;
+          END IF;
+
+          -- Check if any non-feedback rows remain
+          EXECUTE 'SELECT count(*) FROM "customer_tasks"' INTO row_count;
+
+          -- If table is neither shared with churn nor holds any remaining rows, safe to drop
+          IF NOT has_churn_cols AND NOT churn_migrated AND row_count = 0 THEN
+            EXECUTE 'DROP TABLE IF EXISTS "customer_tasks" CASCADE';
+          END IF;
+        END IF;
+      END $$;
     `);
+
+    // 4. Do NOT drop notifications.severity column.
+    // The severity column on notifications is owned by the notifications / lead intelligence features (PR #53/#54).
+    // Reverting WF14 must preserve shared schema dependencies intact.
   }
 }

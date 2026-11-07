@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import {
   CustomerFeedback,
   FeedbackStatus,
@@ -24,6 +24,12 @@ import { Customer } from '../customers/entities/customer.entity.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
+import {
+  OutboxEvent,
+  OutboxEventStatus,
+  OutboxTransport,
+} from '../../infrastructure/rabbitmq/entities/outbox-event.entity.js';
+import { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispatch.service.js';
 import {
   CreateCustomerTaskDto,
   CreateFeedbackDto,
@@ -56,6 +62,9 @@ export class FeedbackService {
 
     @Optional()
     private readonly dataSource?: DataSource,
+
+    @Optional()
+    private readonly dispatcher?: N8nWorkflowDispatchService,
   ) {}
 
   public redactSensitiveContent(rawText: string): string {
@@ -109,10 +118,114 @@ export class FeedbackService {
   async createFeedback(dto: CreateFeedbackDto, user: AuthenticatedUser) {
     const customer = await this.validateCustomerAccess(user, dto.customerId);
 
+    const apiKey =
+      this.configService.get<string>('N8N_API_KEY') ||
+      this.configService.get<string>('N8N_WEBHOOK_SECRET');
+
+    if (!apiKey) {
+      const errorMsg =
+        'N8N_API_KEY is not configured; cannot securely dispatch to n8n (Fail-Closed)';
+      this.logger.error(errorMsg);
+      throw new InternalServerErrorException(errorMsg);
+    }
+
     const safeContent = this.redactSensitiveContent(dto.content);
 
+    const executeInTransaction = async (manager: EntityManager) => {
+      const feedbackRepo = manager.getRepository(CustomerFeedback);
+      const runsRepo = manager.getRepository(WorkflowRun);
+
+      const feedback = feedbackRepo.create({
+        customerId: customer.id,
+        source: dto.source || 'WEB',
+        content: safeContent,
+        contentRedacted: safeContent,
+        rating: dto.rating ?? null,
+        status: FeedbackStatus.NEW,
+        receivedAt: new Date(),
+      });
+      const savedFeedback = await feedbackRepo.save(feedback);
+
+      const workflowRun = runsRepo.create({
+        workflowName: 't12-wf14-customer-feedback',
+        customerId: customer.id,
+        triggeredByUserId: user.id,
+        status: WorkflowStatus.PENDING,
+        startedAt: new Date(),
+        inputPayload: {
+          feedbackId: savedFeedback.id,
+          customerId: customer.id,
+          rating: savedFeedback.rating,
+          source: savedFeedback.source,
+        },
+      });
+      const savedRun = await runsRepo.save(workflowRun);
+
+      savedFeedback.workflowRunId = savedRun.id;
+      await feedbackRepo.save(savedFeedback);
+
+      const dispatchPayload = {
+        feedbackId: savedFeedback.id,
+        workflowRunId: savedRun.id,
+        customerId: customer.id,
+        customerName: customer.name,
+        companyName: customer.companyName,
+        createdBy: customer.createdBy,
+        safeContent,
+        rating: savedFeedback.rating,
+        source: savedFeedback.source,
+        channel: savedFeedback.channel || 'WEB',
+        timestamp: savedFeedback.receivedAt.toISOString(),
+      };
+
+      if (this.dispatcher) {
+        await this.dispatcher.enqueue(
+          manager,
+          'N8N_WF14_WEBHOOK_URL',
+          't12-wf14-customer-feedback',
+          dispatchPayload,
+        );
+      } else {
+        const outboxRepo = manager.getRepository(OutboxEvent);
+        const outboxEvent = outboxRepo.create({
+          eventType: 'n8n.workflow.dispatch.requested',
+          exchange: '',
+          routingKey: '',
+          transport: OutboxTransport.HTTP,
+          destination: 'N8N_WF14_WEBHOOK_URL',
+          destinationPath: 't12-wf14-customer-feedback',
+          payload: dispatchPayload,
+          status: OutboxEventStatus.PENDING,
+          attempts: 0,
+          lastError: null,
+          nextAttemptAt: null,
+          publishedAt: null,
+          lockedUntil: null,
+          lockToken: null,
+        });
+        await outboxRepo.save(outboxEvent);
+      }
+
+      this.logger.log(
+        `Created WorkflowRun ${savedRun.id} and enqueued OutboxEvent for feedback ${savedFeedback.id} of customer ${customer.id}`,
+      );
+
+      return {
+        message: 'Customer feedback received and queued for AI classification',
+        feedbackId: savedFeedback.id,
+        workflowRunId: savedRun.id,
+        status: savedFeedback.status,
+        receivedAt: savedFeedback.receivedAt,
+      };
+    };
+
+    if (this.dataSource) {
+      return await this.dataSource.transaction(executeInTransaction);
+    }
+
+    // Fallback for mocks without DataSource
     const feedback = this.feedbackRepository.create({
-      customerId: dto.customerId,
+      customerId: customer.id,
       source: dto.source || 'WEB',
       content: safeContent,
       contentRedacted: safeContent,
@@ -120,10 +233,8 @@ export class FeedbackService {
       status: FeedbackStatus.NEW,
       receivedAt: new Date(),
     });
-
     const savedFeedback = await this.feedbackRepository.save(feedback);
 
-    // Create correlated WorkflowRun
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 't12-wf14-customer-feedback',
       customerId: customer.id,
@@ -137,23 +248,9 @@ export class FeedbackService {
         source: savedFeedback.source,
       },
     });
-
     const savedRun = await this.workflowRunsRepository.save(workflowRun);
-
     savedFeedback.workflowRunId = savedRun.id;
     await this.feedbackRepository.save(savedFeedback);
-
-    // Asynchronously dispatch internal trigger to n8n
-    this.dispatchToN8n(
-      savedFeedback.id,
-      savedRun.id,
-      safeContent,
-      customer,
-    ).catch((err: unknown) => {
-      this.logger.warn(
-        `Failed to dispatch T12-WF14 to n8n: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
 
     return {
       message: 'Customer feedback received and queued for AI classification',
@@ -162,101 +259,6 @@ export class FeedbackService {
       status: savedFeedback.status,
       receivedAt: savedFeedback.receivedAt,
     };
-  }
-
-  private async dispatchToN8n(
-    feedbackId: string,
-    workflowRunId: string,
-    safeContent: string,
-    customer: Customer,
-  ): Promise<void> {
-    const n8nBaseUrl =
-      this.configService.get<string>('N8N_INTERNAL_URL') ||
-      this.configService.get<string>('N8N_WEBHOOK_URL') ||
-      'http://localhost:5678';
-    const webhookPath = '/webhook/t12-wf14-customer-feedback';
-    const url = `${n8nBaseUrl.replace(/\/+$/, '')}${webhookPath}`;
-
-    const payload = {
-      feedbackId,
-      workflowRunId,
-      customerId: customer.id,
-      customerName: customer.name,
-      companyName: customer.companyName,
-      createdBy: customer.createdBy,
-      safeContent,
-      timestamp: new Date().toISOString(),
-    };
-
-    const apiKey =
-      this.configService.get<string>('N8N_API_KEY') ||
-      this.configService.get<string>('N8N_WEBHOOK_SECRET');
-
-    if (!apiKey) {
-      const errorMsg =
-        'N8N_API_KEY is not configured; cannot securely dispatch to n8n (Fail-Closed)';
-      this.logger.error(errorMsg);
-      await this.handleDispatchFailure(feedbackId, workflowRunId, errorMsg);
-      throw new InternalServerErrorException(errorMsg);
-    }
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-N8N-API-KEY': apiKey,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => '');
-        const errorMsg = `n8n webhook returned HTTP ${response.status}: ${errText.slice(0, 300)}`;
-        this.logger.error(`Failed to dispatch T12-WF14 to n8n: ${errorMsg}`);
-        await this.handleDispatchFailure(feedbackId, workflowRunId, errorMsg);
-        return;
-      }
-
-      this.logger.log(
-        `T12-WF14 successfully dispatched to n8n webhook: ${url}`,
-      );
-    } catch (err: unknown) {
-      const errorMsg = `Network error dispatching T12-WF14: ${err instanceof Error ? err.message : String(err)}`;
-      this.logger.error(errorMsg);
-      await this.handleDispatchFailure(feedbackId, workflowRunId, errorMsg);
-    }
-  }
-
-  private async handleDispatchFailure(
-    feedbackId: string,
-    workflowRunId: string,
-    errorMessage: string,
-  ): Promise<void> {
-    try {
-      const feedback = await this.feedbackRepository.findOne({
-        where: { id: feedbackId },
-      });
-      if (feedback) {
-        feedback.status = FeedbackStatus.FAILED;
-        feedback.errorMessage = errorMessage;
-        await this.feedbackRepository.save(feedback);
-      }
-
-      const workflowRun = await this.workflowRunsRepository.findOne({
-        where: { id: workflowRunId },
-      });
-      if (workflowRun) {
-        workflowRun.status = WorkflowStatus.FAILED;
-        workflowRun.finishedAt = new Date();
-        workflowRun.errorMessage = errorMessage;
-        await this.workflowRunsRepository.save(workflowRun);
-      }
-    } catch (persistErr: unknown) {
-      this.logger.error(
-        `Failed to record dispatch failure for feedback ${feedbackId}: ${persistErr instanceof Error ? persistErr.message : String(persistErr)}`,
-      );
-    }
   }
 
   async getFeedback(id: string, user: AuthenticatedUser) {
