@@ -7,6 +7,7 @@ import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import { RabbitMQModule } from '../../infrastructure/rabbitmq/rabbitmq.module.js';
 import { DataCleaningService } from './data-cleaning.service.js';
 import { DataCleaningController } from './data-cleaning.controller.js';
+import { InternalDataCleaningController } from './internal-data-cleaning.controller.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { AuthModule } from '../auth/auth.module.js';
 
@@ -17,7 +18,7 @@ import { AuthModule } from '../auth/auth.module.js';
     ConfigModule,
     AuthModule,
   ],
-  controllers: [DataCleaningController],
+  controllers: [DataCleaningController, InternalDataCleaningController],
   providers: [DataCleaningService, N8nAuthGuard],
   exports: [DataCleaningService],
 })

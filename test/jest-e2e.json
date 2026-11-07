@@ -12,10 +12,10 @@
     ]
   },
   "moduleNameMapper": {
-    "^(\\.{1,2}/.*)\\.js$": "$1",
+    "^@/(.*)$": "<rootDir>/../src/$1",
     "^@module/(.*)$": "<rootDir>/../src/common/$1",
     "^@config/(.*)$": "<rootDir>/../src/config/$1",
-    "^@/(.*)$": "<rootDir>/../src/$1"
+    "^(\\.{1,2}/.*)\\.js$": "$1"
   },
   "transformIgnorePatterns": [
     "node_modules/(?!(@nestjs)/)"

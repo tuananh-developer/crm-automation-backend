@@ -21,6 +21,7 @@ import { AuditLog } from '../audit/entities/audit-log.entity.js';
 import type { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
+import { CRM_EVENTS } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
 
 describe('LeadsService', () => {
   let service: LeadsService;
@@ -170,6 +171,7 @@ describe('LeadsService', () => {
         return leadsRepository;
       }),
       query: jest.fn().mockResolvedValue([]),
+      save: jest.fn().mockImplementation((_target: unknown, value?: unknown) => leadsRepository.save!(value as Lead)),
     };
 
     const transactionMock: jest.Mock = jest.fn(
@@ -182,13 +184,7 @@ describe('LeadsService', () => {
     };
 
     rabbitmqService = {
-      publishLeadCreated: jest.fn().mockResolvedValue({
-        eventId: 'event-123',
-        eventType: 'lead.created',
-        version: 1,
-        occurredAt: new Date().toISOString(),
-        data: { leadId: 'lead-123' },
-      }),
+      enqueueEvent: jest.fn().mockResolvedValue({ id: 'outbox-123' }),
     };
 
     service = new LeadsService(
@@ -229,8 +225,8 @@ describe('LeadsService', () => {
       expect(leadSourcesRepository.findOne).toHaveBeenCalledWith({
         where: { id: 'source-123' },
       });
-      expect(rabbitmqService.publishLeadCreated).toHaveBeenCalledWith(
-        'lead-123',
+      expect(rabbitmqService.enqueueEvent).toHaveBeenCalledWith(
+        expect.anything(), CRM_EVENTS.LEAD_CREATED, { leadId: 'lead-123' },
       );
     });
 
@@ -249,7 +245,7 @@ describe('LeadsService', () => {
       ).rejects.toThrow(ConflictException);
 
       expect(leadsRepository.save).not.toHaveBeenCalled();
-      expect(rabbitmqService.publishLeadCreated).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
     it('should throw ConflictException if duplicate email race condition triggers 23505 QueryFailedError on save', async () => {
@@ -281,7 +277,7 @@ describe('LeadsService', () => {
         ),
       ).rejects.toThrow(ConflictException);
 
-      expect(rabbitmqService.publishLeadCreated).not.toHaveBeenCalled();
+      expect(rabbitmqService.enqueueEvent).not.toHaveBeenCalled();
     });
 
     it('should throw NotFoundException if sourceId does not exist', async () => {
@@ -492,6 +488,10 @@ describe('LeadsService', () => {
 
       const result = await service.convert('lead-123', adminActor);
 
+      expect(leadsRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'lead-123' },
+        lock: { mode: 'pessimistic_write' },
+      });
       expect(customersRepository.find).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { email: 'john.doe@example.com' },

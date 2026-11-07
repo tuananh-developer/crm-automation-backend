@@ -15,9 +15,8 @@ export class ScoringCallbackDto {
   @IsUUID()
   leadId!: string;
 
-  @IsOptional()
   @IsUUID()
-  workflowRunId?: string;
+  workflowRunId!: string;
 
   /**
    * Execution status from n8n / external service: 'SUCCESS' | 'FAILED'.

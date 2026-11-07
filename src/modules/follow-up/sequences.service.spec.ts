@@ -19,7 +19,9 @@ import type { Lead } from '../leads/entities/lead.entity.js';
 import type { User } from '../users/entities/user.entity.js';
 import type { Interaction } from '../leads/entities/interaction.entity.js';
 import type { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
+import { CRM_EVENTS } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 describe('SequencesService', () => {
   let service: SequencesService;
@@ -42,6 +44,16 @@ describe('SequencesService', () => {
     lastLoginAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+  };
+  const actor: AuthenticatedUser = {
+    id: mockUser.id,
+    name: mockUser.name,
+    email: mockUser.email,
+    role: mockUser.role,
+    status: mockUser.status,
+    lastLoginAt: null,
+    createdAt: mockUser.createdAt,
+    updatedAt: mockUser.updatedAt,
   };
 
   const mockLead: Lead = {
@@ -169,6 +181,7 @@ describe('SequencesService', () => {
     };
 
     rabbitmqService = {
+      enqueueEvent: jest.fn().mockResolvedValue({ id: 'outbox-followup-1' }),
       publishEvent: jest.fn().mockResolvedValue({
         eventId: 'evt-followup-1',
         eventType: 'lead.follow_up.triggered',
@@ -202,20 +215,26 @@ describe('SequencesService', () => {
       (sequencesRepo.findOne as jest.Mock).mockResolvedValue(mockSequence);
 
       await expect(
-        service.createSequence({ name: 'Inbound Demo Follow-Up Cadence' }),
+        service.createSequence(
+          { name: 'Inbound Demo Follow-Up Cadence' },
+          actor,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
-    it('should create sequence using fallback user when createdBy not passed', async () => {
+    it('should create sequence with the authenticated actor as creator', async () => {
       (sequencesRepo.findOne as jest.Mock).mockResolvedValue(null);
-      (usersRepo.find as jest.Mock).mockResolvedValue([mockUser]);
+      (usersRepo.findOne as jest.Mock).mockResolvedValue(mockUser);
       (sequencesRepo.create as jest.Mock).mockReturnValue(mockSequence);
       (sequencesRepo.save as jest.Mock).mockResolvedValue(mockSequence);
 
-      const result = await service.createSequence({
-        name: 'New Cadence',
-        description: 'Testing cadence',
-      });
+      const result = await service.createSequence(
+        {
+          name: 'New Cadence',
+          description: 'Testing cadence',
+        },
+        actor,
+      );
 
       expect(result.id).toBe('seq-123');
       expect(sequencesRepo.create).toHaveBeenCalledWith(
@@ -307,11 +326,29 @@ describe('SequencesService', () => {
       (leadsRepo.findOne as jest.Mock).mockResolvedValue(null);
 
       await expect(
-        service.enrollLead({
-          leadId: 'invalid-lead',
-          sequenceId: 'seq-123',
-        }),
+        service.enrollLead(
+          {
+            leadId: 'invalid-lead',
+            sequenceId: 'seq-123',
+          },
+          actor,
+        ),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should hide leads owned by another Sales user', async () => {
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockLead,
+        ownerId: 'another-user',
+      });
+
+      await expect(
+        service.enrollLead(
+          { leadId: 'lead-123', sequenceId: 'seq-123' },
+          actor,
+        ),
+      ).rejects.toThrow(NotFoundException);
+      expect(sequencesRepo.findOne).not.toHaveBeenCalled();
     });
 
     it('should throw NotFoundException if sequence does not exist', async () => {
@@ -319,10 +356,13 @@ describe('SequencesService', () => {
       (sequencesRepo.findOne as jest.Mock).mockResolvedValue(null);
 
       await expect(
-        service.enrollLead({
-          leadId: 'lead-123',
-          sequenceId: 'invalid-seq',
-        }),
+        service.enrollLead(
+          {
+            leadId: 'lead-123',
+            sequenceId: 'invalid-seq',
+          },
+          actor,
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -335,10 +375,13 @@ describe('SequencesService', () => {
       });
 
       await expect(
-        service.enrollLead({
-          leadId: 'lead-123',
-          sequenceId: 'seq-123',
-        }),
+        service.enrollLead(
+          {
+            leadId: 'lead-123',
+            sequenceId: 'seq-123',
+          },
+          actor,
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -348,10 +391,13 @@ describe('SequencesService', () => {
       (enrollmentsRepo.findOne as jest.Mock).mockResolvedValue(mockEnrollment);
 
       await expect(
-        service.enrollLead({
-          leadId: 'lead-123',
-          sequenceId: 'seq-123',
-        }),
+        service.enrollLead(
+          {
+            leadId: 'lead-123',
+            sequenceId: 'seq-123',
+          },
+          actor,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -364,10 +410,13 @@ describe('SequencesService', () => {
       (enrollmentsRepo.findOne as jest.Mock).mockResolvedValue(null);
 
       await expect(
-        service.enrollLead({
-          leadId: 'lead-123',
-          sequenceId: 'seq-123',
-        }),
+        service.enrollLead(
+          {
+            leadId: 'lead-123',
+            sequenceId: 'seq-123',
+          },
+          actor,
+        ),
       ).rejects.toThrow(
         new BadRequestException('Cannot enroll into sequence with no steps'),
       );
@@ -389,6 +438,24 @@ describe('SequencesService', () => {
         save: jest.fn().mockResolvedValue({ id: 'inter-1' }),
       };
 
+      const transactionManager = {
+        getRepository: jest.fn().mockImplementation((entity) => {
+          if (
+            entity &&
+            (entity as { name?: string }).name ===
+              'LeadFollowUpEnrollment'
+          ) {
+            return mockEnrollRepo;
+          }
+          if (
+            entity &&
+            (entity as { name?: string }).name === 'FollowUpExecution'
+          ) {
+            return mockExecRepo;
+          }
+          return mockInterRepo;
+        }),
+      };
       const mockDataSource = {
         transaction: jest
           .fn()
@@ -397,26 +464,7 @@ describe('SequencesService', () => {
               cb: (manager: {
                 getRepository: (entity: unknown) => unknown;
               }) => Promise<unknown>,
-            ) => {
-              return cb({
-                getRepository: jest.fn().mockImplementation((entity) => {
-                  if (
-                    entity &&
-                    (entity as { name?: string }).name ===
-                      'LeadFollowUpEnrollment'
-                  ) {
-                    return mockEnrollRepo;
-                  }
-                  if (
-                    entity &&
-                    (entity as { name?: string }).name === 'FollowUpExecution'
-                  ) {
-                    return mockExecRepo;
-                  }
-                  return mockInterRepo;
-                }),
-              });
-            },
+            ) => cb(transactionManager),
           ),
       };
 
@@ -436,13 +484,28 @@ describe('SequencesService', () => {
       (sequencesRepo.findOne as jest.Mock).mockResolvedValue(mockSequence);
       (enrollmentsRepo.findOne as jest.Mock).mockResolvedValue(null);
 
-      const result = await txService.enrollLead({
-        leadId: 'lead-123',
-        sequenceId: 'seq-123',
-      });
+      const result = await txService.enrollLead(
+        {
+          leadId: 'lead-123',
+          sequenceId: 'seq-123',
+        },
+        actor,
+      );
 
       expect(mockDataSource.transaction).toHaveBeenCalled();
       expect(mockInterRepo.save).toHaveBeenCalled();
+      expect(rabbitmqService.enqueueEvent).toHaveBeenCalledWith(
+        transactionManager,
+        CRM_EVENTS.FOLLOW_UP_TRIGGERED,
+        expect.objectContaining({
+          enrollmentId: 'enroll-123',
+          executionId: 'exec-tx-1',
+          leadId: 'lead-123',
+          sequenceId: 'seq-123',
+          stepId: 'step-1',
+        }),
+      );
+      expect(rabbitmqService.publishEvent).not.toHaveBeenCalled();
       expect(result.enrollment.status).toBe(EnrollmentStatus.ACTIVE);
       expect(result.firstStep.id).toBe('step-1');
     });
@@ -466,17 +529,20 @@ describe('SequencesService', () => {
         status: ExecutionStatus.PENDING,
       });
 
-      const result = await service.enrollLead({
-        leadId: 'lead-123',
-        sequenceId: 'seq-123',
-        assignedBy: 'user-123',
-      });
+      const result = await service.enrollLead(
+        {
+          leadId: 'lead-123',
+          sequenceId: 'seq-123',
+        },
+        actor,
+      );
 
       // 1. Enrollment created with ACTIVE status and first step
       expect(result.enrollment.status).toBe(EnrollmentStatus.ACTIVE);
       expect(result.firstStep?.id).toBe('step-1');
       expect(enrollmentsRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
+          assignedBy: actor.id,
           leadId: 'lead-123',
           sequenceId: 'seq-123',
           currentStepId: 'step-1',
@@ -494,11 +560,12 @@ describe('SequencesService', () => {
       );
       expect(executionsRepo.save).toHaveBeenCalled();
 
-      // 3. RabbitMQ event published
+      // 3. RabbitMQ event published with executionId
       expect(rabbitmqService.publishEvent).toHaveBeenCalledWith(
         'lead.follow_up.triggered',
         expect.objectContaining({
           enrollmentId: 'enroll-123',
+          executionId: 'exec-1',
           leadId: 'lead-123',
           sequenceId: 'seq-123',
           stepId: 'step-1',

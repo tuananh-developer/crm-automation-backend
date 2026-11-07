@@ -130,6 +130,30 @@ describe('AuthService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
+    it('maps a concurrent duplicate-email unique violation to ConflictException', async () => {
+      (usersRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (usersRepository.create as jest.Mock).mockImplementation((dto) => ({
+        ...dto,
+        id: 'sales-id',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
+      (usersRepository.save as jest.Mock).mockRejectedValue({
+        driverError: { code: '23505' },
+      });
+      jest
+        .spyOn(bcrypt, 'hash')
+        .mockImplementation(() => Promise.resolve('hashed-secret') as any);
+
+      await expect(
+        service.register({
+          name: 'Concurrent User',
+          email: 'race@crm.local',
+          password: 'Password123!',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
     it('always registers user with SALES role', async () => {
       (usersRepository.findOne as jest.Mock).mockResolvedValue(null);
       (usersRepository.create as jest.Mock).mockImplementation((dto) => ({
@@ -219,6 +243,31 @@ describe('AuthService', () => {
       expect(result.user.id).toBe(mockUser.id);
       expect(result.user.email).toBe(mockUser.email);
       expect((result.user as any).passwordHash).toBeUndefined();
+    });
+
+    it('reports the configured JWT expiry in seconds when environment value is a string', async () => {
+      (usersRepository.findOne as jest.Mock).mockResolvedValue({ ...mockUser });
+      (usersRepository.save as jest.Mock).mockImplementation((u) =>
+        Promise.resolve(u),
+      );
+      (configService.get as jest.Mock).mockImplementation((key: string) => {
+        if (key === 'JWT_EXPIRES_IN_SECONDS') return '3600';
+        if (key === 'JWT_SECRET') return 'test-secret';
+        return undefined;
+      });
+      jest
+        .spyOn(bcrypt, 'compare')
+        .mockImplementation(() => Promise.resolve(true) as any);
+
+      const result = await service.login({
+        email: 'sales@crm.local',
+        password: 'Password123!',
+      });
+
+      expect(result.expiresIn).toBe(3600);
+      expect(jwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({ sub: mockUser.id }),
+      );
     });
 
     it('throws UnauthorizedException when email does not exist', async () => {

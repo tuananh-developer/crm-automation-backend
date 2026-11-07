@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "queue": "lead.enrichment.queue",
+        "queue": "n8n.lead-enrichment.q",
         "options": {
           "arguments": {}
         }
