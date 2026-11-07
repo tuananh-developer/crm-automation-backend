@@ -85,6 +85,7 @@ describe('SegmentsService', () => {
     companySize: 500,
     industry: 'Technology',
     status: 'CONVERTED',
+    isStrategic: false,
     createdBy: 'user-1',
     updatedBy: null,
     notes: null,
