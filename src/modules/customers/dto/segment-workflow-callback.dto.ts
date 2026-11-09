@@ -48,13 +48,12 @@ export class AiInsightDto {
 }
 
 export class SegmentWorkflowCallbackDto {
-  @ApiPropertyOptional({
-    description: 'UUID of the WorkflowRun (auto-created if not provided)',
+  @ApiProperty({
+    description: 'UUID returned when the WF07 WorkflowRun was created',
     format: 'uuid',
   })
-  @IsOptional()
   @IsUUID()
-  workflowRunId?: string;
+  workflowRunId!: string;
 
   @ApiProperty({ description: 'Segment ID', format: 'uuid' })
   @IsUUID()

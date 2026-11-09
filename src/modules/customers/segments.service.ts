@@ -31,6 +31,7 @@ import { SegmentAssignmentType } from './enums/customer.enum.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { SegmentWorkflowCallbackDto } from './dto/segment-workflow-callback.dto.js';
+import { UserRole } from '../users/enums/user.enum.js';
 
 @Injectable()
 export class SegmentsService {
@@ -51,7 +52,10 @@ export class SegmentsService {
     private readonly workflowRunRepository: Repository<WorkflowRun>,
   ) {}
 
-  async create(dto: CreateSegmentDto, actor: AuthenticatedUser): Promise<SegmentResponseDto> {
+  async create(
+    dto: CreateSegmentDto,
+    actor: AuthenticatedUser,
+  ): Promise<SegmentResponseDto> {
     const user = await this.usersRepository.findOne({
       where: { id: actor.id },
     });
@@ -90,7 +94,6 @@ export class SegmentsService {
     query: QuerySegmentDto,
     actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
-    void actor;
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
@@ -122,11 +125,19 @@ export class SegmentsService {
 
     if (data.length > 0) {
       const segmentIds = data.map((s) => s.id);
-      const counts = await this.customerSegmentsRepository
+      const countQuery = this.customerSegmentsRepository
         .createQueryBuilder('cs')
         .select('cs.segmentId', 'segmentId')
         .addSelect('COUNT(*)', 'count')
-        .where('cs.segmentId IN (:...segmentIds)', { segmentIds })
+        .where('cs.segmentId IN (:...segmentIds)', { segmentIds });
+      if (actor.role === UserRole.SALES) {
+        countQuery
+          .leftJoin('cs.customer', 'countedCustomer')
+          .andWhere('countedCustomer.createdBy = :actorId', {
+            actorId: actor.id,
+          });
+      }
+      const counts = await countQuery
         .groupBy('cs.segmentId')
         .getRawMany<{ segmentId: string; count: string }>();
 
@@ -150,8 +161,10 @@ export class SegmentsService {
     };
   }
 
-  async findOne(id: string, actor: AuthenticatedUser): Promise<SegmentResponseDto> {
-    void actor;
+  async findOne(
+    id: string,
+    actor: AuthenticatedUser,
+  ): Promise<SegmentResponseDto> {
     const segment = await this.segmentsRepository.findOne({
       where: { id },
       relations: {
@@ -165,7 +178,10 @@ export class SegmentsService {
     }
 
     const customerCount = await this.customerSegmentsRepository.count({
-      where: { segmentId: id },
+      where:
+        actor.role === UserRole.SALES
+          ? { segmentId: id, customer: { createdBy: actor.id } }
+          : { segmentId: id },
     });
 
     return SegmentMapper.toResponseDto(
@@ -173,7 +189,11 @@ export class SegmentsService {
     );
   }
 
-  async update(id: string, dto: UpdateSegmentDto, actor: AuthenticatedUser): Promise<SegmentResponseDto> {
+  async update(
+    id: string,
+    dto: UpdateSegmentDto,
+    actor: AuthenticatedUser,
+  ): Promise<SegmentResponseDto> {
     const segment = await this.segmentsRepository.findOne({
       where: { id },
       relations: {
@@ -198,19 +218,13 @@ export class SegmentsService {
       }
     }
 
-    {
-      const user = await this.usersRepository.findOne({
-        where: { id: actor.id },
-      });
-
-      if (!user) {
-        throw new NotFoundException(
-          `User with ID '${actor.id}' not found`,
-        );
-      }
-
-      segment.updatedBy = actor.id;
+    const updater = await this.usersRepository.findOne({
+      where: { id: actor.id },
+    });
+    if (!updater) {
+      throw new NotFoundException(`User with ID '${actor.id}' not found`);
     }
+    segment.updatedBy = actor.id;
 
     if (dto.name !== undefined) {
       segment.name = dto.name;
@@ -231,11 +245,14 @@ export class SegmentsService {
     const saved = await this.segmentsRepository.save(segment);
 
     saved.creator = segment.creator;
-    saved.updater = null;
+    saved.updater = updater;
     return SegmentMapper.toResponseDto(saved);
   }
 
-  async remove(id: string) {
+  async remove(id: string, actor: AuthenticatedUser) {
+    if (actor.role !== UserRole.ADMIN) {
+      throw new NotFoundException(`Segment with ID '${id}' not found`);
+    }
     const segment = await this.segmentsRepository.findOne({
       where: { id },
     });
@@ -256,6 +273,7 @@ export class SegmentsService {
   async getCustomers(
     segmentId: string,
     query: QuerySegmentDto,
+    actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     await this.ensureSegmentExists(segmentId);
 
@@ -275,6 +293,9 @@ export class SegmentsService {
         '(LOWER(customer.name) LIKE LOWER(:search) OR LOWER(customer.email) LIKE LOWER(:search) OR LOWER(customer.companyName) LIKE LOWER(:search))',
         { search: `%${query.search}%` },
       );
+    }
+    if (actor.role === UserRole.SALES) {
+      qb.andWhere('customer.createdBy = :actorId', { actorId: actor.id });
     }
 
     qb.orderBy('customer.createdAt', 'DESC')
@@ -300,6 +321,7 @@ export class SegmentsService {
   async evaluateCustomer(
     segmentId: string,
     dto: EvaluateSegmentDto,
+    actor: AuthenticatedUser,
   ): Promise<EvaluateSegmentResponseDto> {
     await this.ensureSegmentExists(segmentId);
     const segment = await this.getSegmentForEvaluation(segmentId);
@@ -317,6 +339,7 @@ export class SegmentsService {
         `Customer with ID '${dto.customerId}' not found`,
       );
     }
+    this.assertCustomerAccess(customer, actor);
 
     if (dto.assignmentType === SegmentAssignmentType.AI) {
       throw new BadRequestException(
@@ -342,7 +365,7 @@ export class SegmentsService {
       assignment.confidence = evaluation.confidence;
       assignment.assignedReason = evaluation.reason;
       assignment.assignedAt = new Date();
-      assignment.assignedBy = segment.createdBy;
+      assignment.assignedBy = actor.id;
 
       const saved = await this.customerSegmentsRepository.save(assignment);
 
@@ -374,7 +397,7 @@ export class SegmentsService {
       confidence: evaluation.confidence,
       assignmentReason: evaluation.reason,
       assignedAt: new Date(),
-      assignedBy: segment.createdBy,
+      assignedBy: actor.id,
       status: 'COMPLETED',
       matched: false,
     };
@@ -382,6 +405,7 @@ export class SegmentsService {
   async evaluateAll(
     segmentId: string,
     dto: EvaluateSegmentBulkDto,
+    actor: AuthenticatedUser,
   ): Promise<EvaluateSegmentBulkResponseDto> {
     const segment = await this.getSegmentForEvaluation(segmentId);
 
@@ -400,13 +424,26 @@ export class SegmentsService {
       dto.customerIds === undefined ? undefined : [...new Set(dto.customerIds)];
     const customers =
       customerIds === undefined
-        ? await this.customersRepository.find({ relations })
+        ? await this.customersRepository.find({
+            ...(actor.role === UserRole.SALES
+              ? { where: { createdBy: actor.id } }
+              : {}),
+            relations,
+          })
         : customerIds.length === 0
           ? []
           : await this.customersRepository.find({
-              where: customerIds.map((id) => ({ id })),
+              where: customerIds.map((id) =>
+                actor.role === UserRole.SALES
+                  ? { id, createdBy: actor.id }
+                  : { id },
+              ),
               relations,
             });
+
+    if (customerIds && customers.length !== customerIds.length) {
+      throw new NotFoundException('One or more customers were not found');
+    }
 
     const BATCH_SIZE = 50;
     let matched = 0;
@@ -447,7 +484,7 @@ export class SegmentsService {
           assignment.confidence = evaluation.confidence;
           assignment.assignedReason = evaluation.reason;
           assignment.assignedAt = new Date();
-          assignment.assignedBy = segment.createdBy;
+          assignment.assignedBy = actor.id;
 
           toSave.push(assignment);
         } else if (existing) {
@@ -481,6 +518,17 @@ export class SegmentsService {
     }
 
     return segment;
+  }
+
+  private assertCustomerAccess(
+    customer: Customer,
+    actor: AuthenticatedUser,
+  ): void {
+    if (actor.role === UserRole.SALES && customer.createdBy !== actor.id) {
+      throw new NotFoundException(
+        `Customer with ID '${customer.id}' not found`,
+      );
+    }
   }
 
   private async getSegmentForEvaluation(id: string) {
@@ -673,7 +721,27 @@ export class SegmentsService {
 
   async createWorkflowRun(
     segmentId: string,
+    idempotencyKey: string,
   ): Promise<{ workflowRunId: string; status: string }> {
+    if (!idempotencyKey.trim()) {
+      throw new BadRequestException('Idempotency-Key header is required');
+    }
+
+    const existingRun = await this.workflowRunRepository.findOne({
+      where: { idempotencyKey },
+    });
+    if (existingRun) {
+      if (existingRun.inputPayload?.segmentId !== segmentId) {
+        throw new ConflictException(
+          'Idempotency key is already associated with another segment',
+        );
+      }
+      return {
+        workflowRunId: existingRun.id,
+        status: existingRun.status,
+      };
+    }
+
     const segment = await this.segmentsRepository.findOne({
       where: { id: segmentId },
     });
@@ -683,7 +751,8 @@ export class SegmentsService {
 
     const workflowRun = this.workflowRunRepository.create({
       workflowName: 'WF07_CUSTOMER_SEGMENTATION',
-      status: WorkflowStatus.PENDING,
+      status: WorkflowStatus.RUNNING,
+      idempotencyKey,
       inputPayload: {
         segmentId,
         segmentName: segment.name,
@@ -693,7 +762,23 @@ export class SegmentsService {
       startedAt: new Date(),
     });
 
-    const savedRun = await this.workflowRunRepository.save(workflowRun);
+    let savedRun: WorkflowRun;
+    try {
+      savedRun = await this.workflowRunRepository.save(workflowRun);
+    } catch (error) {
+      const concurrentRun = await this.workflowRunRepository.findOne({
+        where: { idempotencyKey },
+      });
+      if (!concurrentRun) {
+        throw error;
+      }
+      if (concurrentRun.inputPayload?.segmentId !== segmentId) {
+        throw new ConflictException(
+          'Idempotency key is already associated with another segment',
+        );
+      }
+      savedRun = concurrentRun;
+    }
 
     return {
       workflowRunId: savedRun.id,
@@ -706,41 +791,44 @@ export class SegmentsService {
     workflowRunId: string;
     status: string;
   }> {
-    let workflowRun: WorkflowRun | null = null;
-
-    if (dto.workflowRunId) {
-      workflowRun = await this.workflowRunRepository.findOne({
-        where: { id: dto.workflowRunId },
-      });
-    }
-
+    const workflowRun = await this.workflowRunRepository.findOne({
+      where: { id: dto.workflowRunId },
+    });
     if (!workflowRun) {
-      const segment = await this.segmentsRepository.findOne({
-        where: { id: dto.segmentId },
-      });
-      if (!segment) {
-        throw new NotFoundException(`Segment '${dto.segmentId}' not found`);
-      }
-      workflowRun = this.workflowRunRepository.create({
-        workflowName: 'WF07_CUSTOMER_SEGMENTATION',
-        status: WorkflowStatus.PENDING,
-        inputPayload: {
-          segmentId: dto.segmentId,
-          segmentName: dto.segmentName,
-          requestedAt: new Date().toISOString(),
-        } as Record<string, any>,
-        outputPayload: null,
-        startedAt: new Date(),
-      });
-      workflowRun = await this.workflowRunRepository.save(workflowRun);
+      throw new NotFoundException(
+        `WorkflowRun '${dto.workflowRunId}' not found`,
+      );
     }
 
-    const isSuccess = dto.status !== 'FAILED';
-    workflowRun.status = isSuccess
-      ? dto.status === 'SUCCESS'
+    if (
+      workflowRun.workflowName !== 'WF07_CUSTOMER_SEGMENTATION' ||
+      workflowRun.inputPayload?.segmentId !== dto.segmentId
+    ) {
+      throw new NotFoundException(
+        `WorkflowRun '${dto.workflowRunId}' not found`,
+      );
+    }
+
+    if (
+      [
+        WorkflowStatus.SUCCESS,
+        WorkflowStatus.PARTIAL,
+        WorkflowStatus.FAILED,
+      ].includes(workflowRun.status)
+    ) {
+      return {
+        success: true,
+        workflowRunId: workflowRun.id,
+        status: workflowRun.status,
+      };
+    }
+
+    workflowRun.status =
+      dto.status === 'SUCCESS'
         ? WorkflowStatus.SUCCESS
-        : workflowRun.status
-      : WorkflowStatus.FAILED;
+        : dto.status === 'PARTIAL'
+          ? WorkflowStatus.PARTIAL
+          : WorkflowStatus.FAILED;
 
     const existingOutput =
       (workflowRun.outputPayload as Record<string, any>) || {};
