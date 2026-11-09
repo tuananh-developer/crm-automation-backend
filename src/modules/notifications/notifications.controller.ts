@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -105,6 +106,9 @@ export class NotificationsController {
   async createInternal(
     @Body() dto: CreateNotificationDto,
   ): Promise<NotificationResponseDto> {
+    if (dto.userId === '00000000-0000-0000-0000-000000000000') {
+      throw new BadRequestException('userId is required');
+    }
     const notification = await this.notificationsService.create({
       userId: dto.userId,
       type: dto.type,
