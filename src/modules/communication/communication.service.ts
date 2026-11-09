@@ -1,9 +1,19 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { createHash } from 'node:crypto';
+import { isEmail } from 'class-validator';
+import { Repository } from 'typeorm';
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
-
 import { SendCommunicationDto } from './dto/send-communication.dto.js';
+import { CommunicationDelivery } from './entities/communication-delivery.entity.js';
+import { isPostgresUniqueViolation } from '../../common/utils/idempotency.util.js';
 
 export interface SendCommunicationResult {
   success: boolean;
@@ -14,105 +24,103 @@ export interface SendCommunicationResult {
   idempotencyStatus?: 'new' | 'replayed' | 'conflict';
 }
 
-interface IdempotencyRecord {
-  key: string;
-  payloadHash: string;
-  result: SendCommunicationResult;
-  createdAt: number;
-}
-
 @Injectable()
 export class CommunicationService {
   private readonly logger = new Logger(CommunicationService.name);
   private transporter: Transporter | null = null;
-  private readonly isProd: boolean;
-  private readonly idempotencyStore = new Map<string, IdempotencyRecord>();
-  private readonly inFlight = new Map<
-    string,
-    Promise<SendCommunicationResult>
-  >();
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectRepository(CommunicationDelivery)
+    private readonly deliveriesRepository: Repository<CommunicationDelivery>,
+  ) {
     const host = this.configService.get<string>('SMTP_HOST');
-    this.isProd = this.configService.get<string>('NODE_ENV') === 'production';
-    if (host) {
+    const user = this.configService.get<string>('SMTP_USER');
+    const pass = this.configService.get<string>('SMTP_PASS');
+    if (host && user && pass) {
       this.transporter = nodemailer.createTransport({
         host,
         port: this.configService.get<number>('SMTP_PORT', 587),
         secure: this.configService.get<boolean>('SMTP_SECURE', false),
-        auth: {
-          user: this.configService.get<string>('SMTP_USER'),
-          pass: this.configService.get<string>('SMTP_PASS'),
-        },
+        auth: { user, pass },
+        connectionTimeout: this.configService.get<number>(
+          'SMTP_CONNECTION_TIMEOUT_MS',
+          10000,
+        ),
+        greetingTimeout: this.configService.get<number>(
+          'SMTP_GREETING_TIMEOUT_MS',
+          10000,
+        ),
+        socketTimeout: this.configService.get<number>(
+          'SMTP_SOCKET_TIMEOUT_MS',
+          20000,
+        ),
       });
     }
   }
 
   async send(dto: SendCommunicationDto): Promise<SendCommunicationResult> {
-    const key = dto.idempotencyKey;
-    if (key) {
-      const existing = this.idempotencyStore.get(key);
-      if (existing) {
-        if (existing.payloadHash !== this.hashPayload(dto)) {
-          return {
-            success: false,
-            providerMessageId: null,
-            error: 'Idempotency key reused with different payload',
-            retryable: false,
-            idempotencyStatus: 'conflict',
-          };
-        }
-        return { ...existing.result, idempotencyStatus: 'replayed' };
-      }
-
-      const inFlightPromise = this.inFlight.get(key);
-      if (inFlightPromise) {
-        return inFlightPromise;
-      }
+    this.validateRequest(dto);
+    const idempotencyKey = dto.idempotencyKey.trim();
+    const payloadHash = this.hashPayload(dto);
+    const existing = await this.findDelivery(idempotencyKey);
+    if (existing) {
+      return this.handleExistingDelivery(existing, dto, payloadHash);
     }
 
-    const promise = this.doSend(dto, key);
-    if (key) {
-      this.inFlight.set(key, promise);
-    }
-
+    const delivery = this.deliveriesRepository.create({
+      idempotencyKey,
+      payloadHash,
+      status: 'PENDING',
+      providerMessageId: null,
+      error: null,
+      retryable: false,
+      simulated: false,
+    });
     try {
-      const result = await promise;
-      return result;
-    } finally {
-      if (key) {
-        this.inFlight.delete(key);
+      await this.deliveriesRepository.save(delivery);
+    } catch (error) {
+      if (!isPostgresUniqueViolation(error)) {
+        throw error;
       }
+      const concurrentDelivery = await this.findDelivery(idempotencyKey);
+      if (!concurrentDelivery) {
+        throw error;
+      }
+      return this.handleExistingDelivery(concurrentDelivery, dto, payloadHash);
     }
+
+    return this.performDelivery(delivery, dto);
+  }
+
+  private async performDelivery(
+    delivery: CommunicationDelivery,
+    dto: SendCommunicationDto,
+  ): Promise<SendCommunicationResult> {
+    const result = await this.doSend(dto);
+    delivery.status = result.success ? 'SUCCEEDED' : 'FAILED';
+    delivery.providerMessageId = result.providerMessageId;
+    delivery.error = result.error;
+    delivery.retryable = result.retryable;
+    delivery.simulated = result.simulated ?? false;
+    await this.deliveriesRepository.save(delivery);
+    return { ...result, idempotencyStatus: 'new' };
   }
 
   private async doSend(
     dto: SendCommunicationDto,
-    key: string | undefined,
   ): Promise<SendCommunicationResult> {
     let result: SendCommunicationResult;
 
     if (!this.transporter) {
-      if (this.isProd) {
-        result = {
-          success: false,
-          providerMessageId: null,
-          error: 'SMTP not configured in production',
-          retryable: false,
-          simulated: false,
-        };
-      } else {
-        this.logger.warn(
-          'SMTP not configured, simulating send (NOT a real delivery)',
-        );
-        result = {
-          success: true,
-          providerMessageId: `sim-${Date.now()}`,
-          error: null,
-          retryable: false,
-          simulated: true,
-        };
-      }
+      this.logger.warn('SMTP configuration is incomplete; no email was sent');
+      result = {
+        success: false,
+        providerMessageId: null,
+        error: 'SMTP is not configured; no email was sent',
+        retryable: false,
+        simulated: true,
+      };
     } else {
       try {
         const info = await this.transporter.sendMail({
@@ -133,9 +141,10 @@ export class CommunicationService {
           retryable: false,
         };
       } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        const retryable = this.isRetryable(message);
-        this.logger.error(`Failed to send email: ${message}`);
+        const code = this.getErrorCode(error);
+        const retryable = this.isRetryable(code);
+        const message = this.getSafeErrorMessage(code);
+        this.logger.error(`SMTP delivery failed (${code ?? 'UNKNOWN'})`);
         result = {
           success: false,
           providerMessageId: null,
@@ -145,41 +154,134 @@ export class CommunicationService {
       }
     }
 
-    if (key) {
-      this.idempotencyStore.set(key, {
-        key,
-        payloadHash: this.hashPayload(dto),
-        result,
-        createdAt: Date.now(),
-      });
-    }
-
-    return { ...result, idempotencyStatus: 'new' };
+    return result;
   }
 
   private hashPayload(dto: SendCommunicationDto): string {
-    return JSON.stringify({
-      to: dto.to,
-      subject: dto.subject,
-      text: dto.text,
-      html: dto.html,
-    });
+    return createHash('sha256')
+      .update(
+        JSON.stringify({
+          to: dto.to,
+          subject: dto.subject,
+          text: dto.text,
+          html: dto.html,
+        }),
+      )
+      .digest('hex');
   }
 
-  private isRetryable(message: string): boolean {
-    const retryablePatterns = [
-      'ETIMEDOUT',
-      'ECONNREFUSED',
-      'ECONNRESET',
-      'ENOTFOUND',
-      'timeout',
-      '421',
-      '450',
-      '451',
-      '452',
-    ];
-    return retryablePatterns.some((p) =>
-      message.toLowerCase().includes(p.toLowerCase()),
-    );
+  private async findDelivery(
+    idempotencyKey: string,
+  ): Promise<CommunicationDelivery | null> {
+    return this.deliveriesRepository.findOne({ where: { idempotencyKey } });
+  }
+
+  private async handleExistingDelivery(
+    delivery: CommunicationDelivery,
+    dto: SendCommunicationDto,
+    payloadHash: string,
+  ): Promise<SendCommunicationResult> {
+    if (delivery.payloadHash !== payloadHash) {
+      throw new ConflictException(
+        'Idempotency key was already used with a different communication payload',
+      );
+    }
+
+    if (delivery.status === 'FAILED' && delivery.retryable) {
+      const claim = await this.deliveriesRepository.update(
+        { id: delivery.id, status: 'FAILED', retryable: true },
+        {
+          status: 'PENDING',
+          retryable: false,
+          error: null,
+          providerMessageId: null,
+          simulated: false,
+        },
+      );
+      if (claim.affected === 1) {
+        delivery.status = 'PENDING';
+        delivery.retryable = false;
+        delivery.error = null;
+        delivery.providerMessageId = null;
+        delivery.simulated = false;
+        return this.performDelivery(delivery, dto);
+      }
+      const current = await this.findDelivery(delivery.idempotencyKey);
+      if (current) {
+        return this.resultFromDelivery(current);
+      }
+    }
+
+    return this.resultFromDelivery(delivery);
+  }
+
+  private resultFromDelivery(
+    delivery: CommunicationDelivery,
+  ): SendCommunicationResult {
+    if (delivery.status === 'SUCCEEDED') {
+      return {
+        success: true,
+        providerMessageId: delivery.providerMessageId,
+        error: null,
+        retryable: false,
+        simulated: delivery.simulated,
+        idempotencyStatus: 'replayed',
+      };
+    }
+    return {
+      success: false,
+      providerMessageId: delivery.providerMessageId,
+      error:
+        delivery.error ??
+        'A delivery with this idempotency key is already in progress; refusing to send again',
+      retryable: delivery.status === 'FAILED' && delivery.retryable,
+      simulated: delivery.simulated,
+      idempotencyStatus: 'replayed',
+    };
+  }
+
+  private validateRequest(dto: SendCommunicationDto): void {
+    if (!isEmail(dto.to)) {
+      throw new BadRequestException('A valid recipient email is required');
+    }
+    if (!dto.subject?.trim()) {
+      throw new BadRequestException('Email subject is required');
+    }
+    if (!dto.html?.trim() && !dto.text?.trim()) {
+      throw new BadRequestException('Email content is required');
+    }
+    if (!dto.idempotencyKey?.trim()) {
+      throw new BadRequestException('Idempotency key is required');
+    }
+    if (dto.idempotencyKey.length > 200) {
+      throw new BadRequestException(
+        'Idempotency key must be at most 200 characters',
+      );
+    }
+  }
+
+  private getErrorCode(error: unknown): string | null {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      typeof error.code === 'string'
+    ) {
+      return error.code.toUpperCase();
+    }
+    return null;
+  }
+
+  private getSafeErrorMessage(code: string | null): string {
+    if (code === 'EAUTH') return 'SMTP authentication failed';
+    if (code === 'ETIMEDOUT')
+      return 'SMTP timed out; delivery outcome is unknown';
+    if (code === 'ECONNREFUSED') return 'SMTP connection was refused';
+    if (code === 'ENOTFOUND') return 'SMTP host could not be resolved';
+    return 'SMTP delivery failed';
+  }
+
+  private isRetryable(code: string | null): boolean {
+    return code === 'ECONNREFUSED' || code === 'ENOTFOUND';
   }
 }

@@ -7,6 +7,7 @@ import { AddOutboxEventsTable1729000000000 } from './database/migrations/1729000
 import { AddOutboxProcessingLease1793476900000 } from './database/migrations/1793476900000-AddOutboxProcessingLease.js';
 import { AddOutboxHttpDispatch1793477000000 } from './database/migrations/1793477000000-AddOutboxHttpDispatch.js';
 import { AddT12WorkflowDomains1793476800000 } from './database/migrations/1793476800000-AddT12WorkflowDomains.js';
+import { AddCommunicationDeliveries1794250000000 } from './database/migrations/1794250000000-AddCommunicationDeliveries.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const dbUrl = process.env.DATABASE_URL;
@@ -43,6 +44,7 @@ export const AppDataSource = new DataSource(
           AddT12WorkflowDomains1793476800000,
           AddOutboxProcessingLease1793476900000,
           AddOutboxHttpDispatch1793477000000,
+          AddCommunicationDeliveries1794250000000,
         ],
         migrationsTableName: 'typeorm_migrations',
       }
@@ -67,6 +69,7 @@ export const AppDataSource = new DataSource(
           AddT12WorkflowDomains1793476800000,
           AddOutboxProcessingLease1793476900000,
           AddOutboxHttpDispatch1793477000000,
+          AddCommunicationDeliveries1794250000000,
         ],
         migrationsTableName: 'typeorm_migrations',
       },

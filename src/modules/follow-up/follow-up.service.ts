@@ -215,8 +215,11 @@ export class FollowUpService {
       record.requestPayload = {
         executionId: record.id,
         enrollmentId: lockedEnrollment.id,
+        enrollmentStatus: lockedEnrollment.status,
         stepId: step.id,
+        executionStatus: ExecutionStatus.RUNNING,
         leadId: lead.id,
+        ownerId: lead.ownerId,
         lead: {
           id: lead.id,
           firstName: lead.firstName,
@@ -233,6 +236,7 @@ export class FollowUpService {
         subject: this.renderTemplate(step.subjectTemplate, variables),
         message: this.renderTemplate(step.contentTemplate, variables),
         attempt: record.retryCount + 1,
+        maxRetries,
         correlationId: dto.correlationId || record.id,
       };
       record.status = ExecutionStatus.RUNNING;
@@ -278,7 +282,7 @@ export class FollowUpService {
         step,
         errorMessage,
         response as Record<string, unknown> | null,
-        maxRetries,
+        response?.retryable === false ? 0 : maxRetries,
       );
     }
 

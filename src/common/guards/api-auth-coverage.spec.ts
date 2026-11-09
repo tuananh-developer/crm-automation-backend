@@ -8,6 +8,7 @@ import { LeadIntelligenceController } from '../../modules/lead-intelligence/lead
 import { N8nAuthGuard } from '../../modules/lead-intelligence/guards/n8n-auth.guard.js';
 import { ScoringController } from '../../modules/lead-intelligence/scoring.controller.js';
 import { NotificationsController } from '../../modules/notifications/notifications.controller.js';
+import { InternalCommunicationController } from '../../modules/communication/internal-communication.controller.js';
 import { ReviewController } from '../../modules/review/review.controller.js';
 import { LeadSourcesController } from '../../modules/leads/lead-sources.controller.js';
 import { LeadsController } from '../../modules/leads/leads.controller.js';
@@ -70,6 +71,18 @@ describe('API authentication guard coverage', () => {
 
     expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBe(true);
     expect(Reflect.getMetadata('__guards__', handler)).toContain(N8nAuthGuard);
+  });
+
+  it('keeps internal communication on N8N auth without requiring a browser JWT', () => {
+    const handler = Object.getOwnPropertyDescriptor(
+      InternalCommunicationController.prototype,
+      'send',
+    )?.value as object;
+
+    expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBe(true);
+    expect(
+      Reflect.getMetadata('__guards__', InternalCommunicationController),
+    ).toContain(N8nAuthGuard);
   });
 
   it('restricts lead source creation to Admin while keeping source reads authenticated', () => {

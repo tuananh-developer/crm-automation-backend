@@ -10,6 +10,7 @@ import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CommunicationService } from './communication.service.js';
 import { SendCommunicationDto } from './dto/send-communication.dto.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
+import { Public } from '../../common/decorators/public.decorator.js';
 
 /**
  * Canonical internal route: /api/v1/internal/communication/send.
@@ -22,6 +23,7 @@ export class InternalCommunicationController {
   constructor(private readonly communicationService: CommunicationService) {}
 
   @Post('send')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Send a communication message on behalf of an n8n workflow',

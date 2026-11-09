@@ -48,8 +48,15 @@ export class CreateNotificationDto {
   @IsUUID()
   workflowRunId?: string;
 
-  @ApiPropertyOptional({ description: 'User ID to notify' })
-  @IsOptional()
+  @ApiProperty({ description: 'Existing user ID to notify', format: 'uuid' })
   @IsUUID()
-  userId?: string;
+  userId!: string;
+
+  @ApiPropertyOptional({
+    description: 'Idempotency key for duplicate callbacks',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  idempotencyKey?: string;
 }

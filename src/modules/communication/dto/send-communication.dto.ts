@@ -1,5 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsOptional, IsString } from 'class-validator';
+import {
+  IsEmail,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 export class SendCommunicationDto {
   @ApiProperty({ description: 'Recipient email address' })
@@ -25,8 +31,9 @@ export class SendCommunicationDto {
   @IsString()
   correlationId?: string;
 
-  @ApiPropertyOptional({ description: 'Idempotency key' })
-  @IsOptional()
+  @ApiProperty({ description: 'Stable idempotency key for this delivery' })
   @IsString()
-  idempotencyKey?: string;
+  @IsNotEmpty()
+  @MaxLength(200)
+  idempotencyKey!: string;
 }
