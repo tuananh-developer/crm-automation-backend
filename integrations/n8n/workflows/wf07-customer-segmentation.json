@@ -354,6 +354,44 @@
       "waitBetweenTries": 5000,
       "notes": "Canonical route: /api/v1/notifications/internal/create. Protected by N8nAuthGuard; backend validates userId/type and applies idempotency.",
       "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/notifications/internal/create\" }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { userId: $node[\"5. Validate Evaluation Request\"].json.ownerId || \"00000000-0000-0000-0000-000000000000\", type: \"ANOMALY_ALERT\", title: \"WF07 segment evaluation failed\", content: \"Segment \" + $node[\"2. Get Active Segments\"].json[0].name + \" evaluation failed: \" + ($json.error || \"unknown error\"), idempotencyKey: $node[\"5. Validate Evaluation Request\"].json.executionId + \":\" + $node[\"2. Get Active Segments\"].json[0].id + \":error\" } }}"
+      },
+      "id": "node-14-error-notification",
+      "name": "14. Notify on Evaluation Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2900,
+        450
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Error branch: reports failed segment evaluation to the backend notifications service.",
+      "notesInFlow": true
     }
   ],
   "connections": {
@@ -487,7 +525,13 @@
             "index": 0
           }
         ],
-        []
+        [
+          {
+            "node": "14. Notify on Evaluation Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
