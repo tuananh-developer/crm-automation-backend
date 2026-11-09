@@ -8,7 +8,14 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, LessThanOrEqual, MoreThan, Repository, type EntityManager } from 'typeorm';
+import {
+  DataSource,
+  In,
+  LessThanOrEqual,
+  MoreThan,
+  Repository,
+  type EntityManager,
+} from 'typeorm';
 import { FollowUpSequence } from './entities/follow-up-sequence.entity.js';
 import { FollowUpStep } from './entities/follow-up-step.entity.js';
 import { FollowUpExecution } from './entities/follow-up-execution.entity.js';
@@ -127,7 +134,9 @@ export class FollowUpService {
     // operations use the same lock, so a stale pre-transaction read cannot start
     // work after an enrollment has stopped.
     const execution = await this.dataSource.transaction(async (manager) => {
-      const enrollmentRepository = manager.getRepository(LeadFollowUpEnrollment);
+      const enrollmentRepository = manager.getRepository(
+        LeadFollowUpEnrollment,
+      );
       const executionsRepository = manager.getRepository(FollowUpExecution);
       const lockedEnrollment = await enrollmentRepository.findOne({
         where: { id: dto.enrollmentId },
@@ -224,7 +233,6 @@ export class FollowUpService {
         subject: this.renderTemplate(step.subjectTemplate, variables),
         message: this.renderTemplate(step.contentTemplate, variables),
         attempt: record.retryCount + 1,
-        correlationId: dto.correlationId || record.id,
       };
       record.status = ExecutionStatus.RUNNING;
       record.startedAt = startedAt;
@@ -234,9 +242,8 @@ export class FollowUpService {
       return executionsRepository.save(record);
     });
 
-    const correlationId = dto.correlationId || execution.id;
     this.logger.log(
-      `Executing follow-up step ${step.id} (execution ${execution.id}, attempt ${execution.retryCount + 1}, correlationId ${correlationId})`,
+      `Executing follow-up step ${step.id} (execution ${execution.id}, attempt ${execution.retryCount + 1})`,
     );
 
     // 5. Send the execution request to n8n

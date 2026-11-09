@@ -1,55 +1,49 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { NotificationType } from '../enums/notification.enum.js';
-import {
-  IsEnum,
-  IsOptional,
-  IsString,
-  IsUUID,
-  MaxLength,
-} from 'class-validator';
-
-export enum NotificationSeverity {
-  LOW = 'LOW',
-  MEDIUM = 'MEDIUM',
-  HIGH = 'HIGH',
-  CRITICAL = 'CRITICAL',
-}
+import { IsOptional, IsString, IsUUID, Length } from 'class-validator';
 
 export class CreateNotificationDto {
-  @ApiProperty({ enum: NotificationType })
-  @IsEnum(NotificationType)
-  type!: NotificationType;
+  @IsUUID()
+  userId!: string;
 
-  @ApiProperty({ enum: NotificationSeverity })
-  @IsEnum(NotificationSeverity)
-  severity!: NotificationSeverity;
-
-  @ApiProperty({ description: 'Notification title' })
   @IsString()
-  @MaxLength(255)
+  @Length(1, 50)
+  type!: string;
+
+  @IsString()
+  @Length(1, 255)
   title!: string;
 
-  @ApiProperty({ description: 'Notification message' })
-  @IsString()
-  message!: string;
-
-  @ApiPropertyOptional({ description: 'Reference entity type' })
   @IsOptional()
   @IsString()
-  referenceType?: string;
+  content?: string;
 
-  @ApiPropertyOptional({ description: 'Reference entity ID' })
   @IsOptional()
   @IsUUID()
-  referenceId?: string;
+  leadId?: string;
 
-  @ApiPropertyOptional({ description: 'Workflow run ID' })
   @IsOptional()
   @IsUUID()
-  workflowRunId?: string;
+  customerId?: string;
 
-  @ApiPropertyOptional({ description: 'User ID to notify' })
   @IsOptional()
   @IsUUID()
-  userId?: string;
+  reviewTaskId?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 200)
+  idempotencyKey?: string;
+}
+
+export class NotificationResponseDto {
+  id!: string;
+  userId!: string;
+  type!: string;
+  title!: string;
+  content!: string | null;
+  leadId!: string | null;
+  customerId!: string | null;
+  reviewTaskId!: string | null;
+  isRead!: boolean;
+  readAt!: Date | null;
+  createdAt!: Date;
 }
