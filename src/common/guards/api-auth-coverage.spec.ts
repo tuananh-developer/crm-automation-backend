@@ -1,5 +1,9 @@
 import { DataCleaningController } from '../../modules/data-cleaning/data-cleaning.controller.js';
 import { CustomersController } from '../../modules/customers/customers.controller.js';
+import {
+  InternalChurnController,
+  InternalCustomerTasksController,
+} from '../../modules/customers/internal-churn.controller.js';
 import { SegmentsController } from '../../modules/customers/segments.controller.js';
 import { FollowUpController } from '../../modules/follow-up/follow-up.controller.js';
 import { SequencesController } from '../../modules/follow-up/sequences.controller.js';
@@ -71,6 +75,15 @@ describe('API authentication guard coverage', () => {
     expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBe(true);
     expect(Reflect.getMetadata('__guards__', handler)).toContain(N8nAuthGuard);
   });
+
+  it.each([InternalChurnController, InternalCustomerTasksController])(
+    '%p requires N8N authentication for internal WF06 routes',
+    (controller) => {
+      expect(Reflect.getMetadata('__guards__', controller)).toContain(
+        N8nAuthGuard,
+      );
+    },
+  );
 
   it('restricts lead source creation to Admin while keeping source reads authenticated', () => {
     const createHandler = Object.getOwnPropertyDescriptor(

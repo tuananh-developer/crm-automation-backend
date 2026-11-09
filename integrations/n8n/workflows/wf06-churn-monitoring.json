@@ -21,9 +21,16 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.CRM_API_BASE_URL }}/customers?page=1&limit={{ $env.WF06_BATCH_SIZE || 25 }}",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
+        "url": "={{ $env.CRM_API_BASE_URL }}/internal/n8n/customers?page=1&limit=100",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-api-key",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
         "options": {
           "timeout": 30000,
           "response": {
@@ -34,25 +41,28 @@
         }
       },
       "id": "node-2-get-customers",
-      "name": "2. Get Active Customer Cohort",
+      "name": "2. Get Customer Cohort",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [470, 300]
+      "position": [470, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
-        "fieldToSplitOut": "data",
-        "options": {}
+        "mode": "runOnceForAllItems",
+        "jsCode": "const first = $input.first().json || {};\nif (!Array.isArray(first.data) || !first.meta) throw new Error('Invalid customer cohort response');\nconst totalPages = Number(first.meta.totalPages);\nconst expectedTotal = Number(first.meta.total);\nconst limit = Number(first.meta.limit);\nif (!Number.isInteger(totalPages) || totalPages < 0 || totalPages > 1000 || !Number.isInteger(expectedTotal) || expectedTotal < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Invalid cohort pagination metadata');\nif (expectedTotal === 0) { if (totalPages !== 0 || first.data.length !== 0) throw new Error('Inconsistent empty customer cohort response'); return []; }\nif (totalPages < 1) throw new Error('Non-empty cohort has no pages');\nconst customers = [...first.data];\nconst baseUrl = $env.CRM_API_BASE_URL;\nconst apiKey = $env.N8N_API_KEY;\nif (!baseUrl || !apiKey) throw new Error('CRM_API_BASE_URL and N8N_API_KEY are required');\nfor (let page = 2; page <= totalPages; page++) {\n  const response = await this.helpers.httpRequest({ method: 'GET', url: baseUrl.replace(/\\/$/, '') + '/internal/n8n/customers?page=' + page + '&limit=' + limit, headers: { 'x-n8n-api-key': apiKey }, json: true, timeout: 30000 });\n  if (!response || !Array.isArray(response.data)) throw new Error('Invalid customer cohort page ' + page);\n  customers.push(...response.data);\n}\nif (customers.length !== expectedTotal) throw new Error('Customer cohort pagination incomplete');\nreturn customers.map(customer => ({ json: customer }));"
       },
       "id": "node-3-split-customers",
       "name": "3. Split Customer Batch",
-      "type": "n8n-nodes-base.splitOut",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [690, 300]
     },
     {
       "parameters": {
-        "jsCode": "const customer = $input.first().json || {};\nconst runId = $runIndex || 'wf06-' + Date.now();\nconst minimal = {\n  customerId: customer.id,\n  customerName: customer.name,\n  email: customer.email,\n  status: customer.status,\n  companyName: customer.companyName,\n  runId,\n  timestamp: new Date().toISOString()\n};\nif (!minimal.customerId) {\n  throw new Error('Missing customer id');\n}\nreturn [{ json: minimal }];"
+        "jsCode": "const customer = $input.first().json || {};\nconst customerId = customer.id;\nconst executionId = String($execution.id || '');\nif (!customerId || !executionId) throw new Error('Missing customerId or n8n execution ID');\nreturn [{ json: { customerId, customerName: customer.name || null, correlationId: 'wf06:' + executionId + ':' + customerId } }];"
       },
       "id": "node-4-prepare-customer",
       "name": "4. Prepare Customer Context",
@@ -62,9 +72,16 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.CRM_API_BASE_URL }}/customers/{{ $json.customerId }}",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
+        "url": "={{ $env.CRM_API_BASE_URL }}/internal/n8n/customers/{{ $json.customerId }}/churn-context",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-api-key",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
         "options": {
           "timeout": 30000,
           "response": {
@@ -78,11 +95,14 @@
       "name": "5. Get Customer Profile",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1130, 300]
+      "position": [1130, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
-        "jsCode": "const profile = $input.first().json || {};\nconst asOfDate = new Date().toISOString().slice(0, 10);\nconst engagementHistory = Array.isArray(profile.engagementHistory) ? profile.engagementHistory : [];\nconst followUpHistory = Array.isArray(profile.followUpHistory) ? profile.followUpHistory : [];\nconst feedbackHistory = Array.isArray(profile.feedbackHistory) ? profile.feedbackHistory : [];\nconst normalized = {\n  customerId: profile.id || $('4. Prepare Customer Context').first().json.customerId,\n  asOfDate,\n  profile,\n  engagement: {\n    recentInteractions: engagementHistory.length,\n    lastInteractionDays: engagementHistory[0]?.daysSince ?? null,\n    active: Boolean(profile.status && profile.status !== 'INACTIVE')\n  },\n  followUpHistory,\n  feedbackHistory,\n  coverage: {\n    customerProfile: Boolean(profile.id),\n    engagementHistory: engagementHistory.length > 0,\n    followUpHistory: followUpHistory.length > 0,\n    feedbackHistory: feedbackHistory.length > 0\n  },\n  collectedAt: new Date().toISOString()\n};\nreturn [{ json: normalized }];"
+        "jsCode": "const context = $input.first().json || {};\nconst prepared = $('4. Prepare Customer Context').first().json;\nif (!context.customer || context.customer.id !== prepared.customerId) throw new Error('Customer context mismatch');\nconst evidence = Array.isArray(context.evidence) ? context.evidence : [];\nreturn [{ json: { customerId: context.customer.id, asOfDate: new Date().toISOString().slice(0, 10), evidence, coverage: context.coverage || {}, signals: context.signals || {}, correlationId: prepared.correlationId } }];"
       },
       "id": "node-6-normalize-input",
       "name": "6. Normalize Feature Snapshot",
@@ -93,12 +113,19 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CRM_API_BASE_URL }}/customers/{{ $json.customerId }}/churn-assessments",
+        "url": "={{ $env.CRM_API_BASE_URL }}/internal/n8n/customers/{{ $json.customerId }}/churn-assessments",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ customerId: $json.customerId, asOfDate: $json.asOfDate, profile: $json.profile, engagement: $json.engagement, followUpHistory: $json.followUpHistory, feedbackHistory: $json.feedbackHistory, coverage: $json.coverage, metadata: { normalizedSnapshot: true } }) }}",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
+        "jsonBody": "={{ JSON.stringify({ asOfDate: $json.asOfDate, evidence: $json.evidence, coverage: $json.coverage, metadata: { correlationId: $json.correlationId, source: 'WF06' } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-api-key",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
         "options": {
           "timeout": 60000,
           "response": {
@@ -112,11 +139,14 @@
       "name": "7. Backend Churn Assessment",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1570, 300]
+      "position": [1570, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json || {};\nif (!response || !response.id) {\n  throw new Error('Backend assessment missing id');\n}\nreturn [{ json: { assessmentId: response.id, score: response.score, riskLevel: response.riskLevel, evidence: response.evidence || [], coverage: response.coverage || {} } }];"
+        "jsCode": "const response = $input.first().json || {};\nconst riskLevels = ['LOW', 'MEDIUM', 'HIGH', 'INSUFFICIENT_DATA'];\nif (!response.id || !riskLevels.includes(response.riskLevel)) throw new Error('Backend assessment response is invalid');\nif (response.score !== null && (typeof response.score !== 'number' || response.score < 0 || response.score > 100)) throw new Error('Backend assessment score is invalid');\nreturn [{ json: { customerId: $('6. Normalize Feature Snapshot').first().json.customerId, assessmentId: response.id, score: response.score ?? null, riskLevel: response.riskLevel, evidence: Array.isArray(response.evidence) ? response.evidence : [], coverage: response.coverage || {}, correlationId: $('6. Normalize Feature Snapshot').first().json.correlationId } }];"
       },
       "id": "node-8-assessment-validated",
       "name": "8. Validate Assessment Result",
@@ -150,11 +180,17 @@
       "name": "9. AI Explanation",
       "type": "@n8n/n8n-nodes-langchain.openAi",
       "typeVersion": 1.8,
-      "position": [2010, 300]
+      "position": [2010, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "CONFIGURE_AFTER_IMPORT",
+          "name": "WF06 OpenAI API"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json || {};\nconst parsed = typeof response === 'string' ? JSON.parse(response) : response;\nconst summary = parsed && parsed.summary ? parsed.summary : '';\nconst evidence = Array.isArray(parsed && parsed.evidence) ? parsed.evidence : [];\nconst confidence = typeof parsed?.confidence === 'number' ? parsed.confidence : 0;\nreturn [{ json: { summary, evidence, confidence, valid: Boolean(summary && evidence.length > 0) } }];"
+        "jsCode": "const official = $('8. Validate Assessment Result').first().json;\nconst response = $input.first().json || {};\nlet parsed = response;\ntry { if (typeof response === 'string') parsed = JSON.parse(response); else if (typeof response.text === 'string') parsed = JSON.parse(response.text); } catch { parsed = {}; }\nconst summary = typeof parsed.summary === 'string' ? parsed.summary : '';\nconst claims = Array.isArray(parsed.evidence) ? parsed.evidence : [];\nconst allowedEvidence = new Set(official.evidence.map(item => JSON.stringify(item)));\nconst evidence = claims.filter(item => typeof item === 'string' && allowedEvidence.has(item));\nconst confidence = typeof parsed.confidence === 'number' && parsed.confidence >= 0 && parsed.confidence <= 1 ? parsed.confidence : 0;\nreturn [{ json: { ...official, explanation: summary, explanationEvidence: evidence, explanationConfidence: confidence } }];"
       },
       "id": "node-10-validate-ai",
       "name": "10. Validate AI Explanation",
@@ -179,6 +215,15 @@
                 "type": "string",
                 "operation": "equals"
               }
+            },
+            {
+              "id": "gate-scored-evidence",
+              "leftValue": "={{ $json.score !== null && $json.evidence.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
             }
           ],
           "combinator": "and"
@@ -194,12 +239,19 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CRM_API_BASE_URL }}/customer-tasks",
+        "url": "={{ $env.CRM_API_BASE_URL }}/internal/n8n/customer-tasks",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ customerId: $('4. Prepare Customer Context').first().json.customerId, assessmentId: $('8. Validate Assessment Result').first().json.assessmentId, taskType: 'RETENTION', priority: 'HIGH', idempotencyKey: 'wf06-' + $('4. Prepare Customer Context').first().json.customerId + '-' + $('8. Validate Assessment Result').first().json.assessmentId, metadata: { riskLevel: $('8. Validate Assessment Result').first().json.riskLevel, score: $('8. Validate Assessment Result').first().json.score } }) }}",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
+        "jsonBody": "={{ JSON.stringify({ customerId: $json.customerId, assessmentId: $json.assessmentId, taskType: 'RETENTION', priority: 'HIGH', idempotencyKey: 'wf06:' + $json.customerId + ':' + $json.assessmentId + ':RETENTION', notes: $json.explanation || 'High churn risk retention follow-up', metadata: { correlationId: $json.correlationId, riskLevel: $json.riskLevel, score: $json.score } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-api-key",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
         "options": {
           "timeout": 30000,
           "response": {
@@ -213,7 +265,10 @@
       "name": "12. Create Retention Task",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2670, 300]
+      "position": [2670, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     }
   ],
   "connections": {
@@ -221,14 +276,14 @@
       "main": [
         [
           {
-            "node": "2. Get Active Customer Cohort",
+            "node": "2. Get Customer Cohort",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "2. Get Active Customer Cohort": {
+    "2. Get Customer Cohort": {
       "main": [
         [
           {
@@ -335,7 +390,8 @@
             "type": "main",
             "index": 0
           }
-        ]
+        ],
+        []
       ]
     }
   },

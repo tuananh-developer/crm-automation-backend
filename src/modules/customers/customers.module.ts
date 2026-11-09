@@ -9,12 +9,15 @@ import { User } from '../users/entities/user.entity.js';
 import { SegmentsService } from './segments.service.js';
 import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
+import { CustomersController } from './customers.controller.js';
 import {
-  CustomerTasksController,
-  CustomersController,
-} from './customers.controller.js';
+  InternalChurnController,
+  InternalCustomerTasksController,
+} from './internal-churn.controller.js';
 import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
 import { CustomerTask } from './entities/customer-task.entity.js';
+import { AuthModule } from '../auth/auth.module.js';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 
 @Module({
   imports: [
@@ -28,13 +31,15 @@ import { CustomerTask } from './entities/customer-task.entity.js';
       CustomerChurnAssessment,
       CustomerTask,
     ]),
+    AuthModule,
   ],
   controllers: [
     SegmentsController,
     CustomersController,
-    CustomerTasksController,
+    InternalChurnController,
+    InternalCustomerTasksController,
   ],
-  providers: [SegmentsService, CustomersService],
+  providers: [SegmentsService, CustomersService, N8nAuthGuard],
   exports: [TypeOrmModule, SegmentsService, CustomersService],
 })
 export class CustomersModule {}
