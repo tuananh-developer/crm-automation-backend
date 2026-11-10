@@ -1,7 +1,8 @@
-import { IsUUID } from 'class-validator';
+import { IsOptional, IsUUID } from 'class-validator';
 
 export class MarkNotificationReadDto {
-  /** Owner of the notification; prevents reading another user's inbox. */
+  /** Optional inbox selector for Admin; Sales ownership comes from JWT. */
+  @IsOptional()
   @IsUUID()
-  userId!: string;
+  userId?: string;
 }

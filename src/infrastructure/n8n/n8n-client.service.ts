@@ -39,6 +39,22 @@ export class N8nClientService {
       'N8N_WEBHOOK_TIMEOUT_MS',
       DEFAULT_N8N_WEBHOOK_TIMEOUT_MS,
     );
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (webhookPath.replace(/^\/+/, '') === 'follow-up-execute') {
+      const webhookSecret = this.configService
+        .get<string>('N8N_WEBHOOK_SECRET')
+        ?.trim();
+      if (!webhookSecret) {
+        throw new N8nWebhookError(
+          'N8N_WEBHOOK_SECRET is not configured for follow-up execution',
+          null,
+          null,
+        );
+      }
+      headers['X-Webhook-Secret'] = webhookSecret;
+    }
 
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), timeoutMs);
@@ -46,7 +62,7 @@ export class N8nClientService {
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(payload),
         signal: abortController.signal,
       });

@@ -317,13 +317,17 @@ describe('FollowUpService', () => {
     it('should preserve PAUSED when an in-flight delivery succeeds', async () => {
       const enrollment = buildEnrollment({ lead: buildLead() });
       const nextStep = buildStep({ id: 'step-2', stepOrder: 2 });
-      (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(enrollment);
+      (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(
+        enrollment,
+      );
       // The enclosing describe already queues the initial enrollment step.
       (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(nextStep);
       (executionsRepository.findOne as jest.Mock).mockResolvedValue(null);
       (n8nClientService.triggerWebhook as jest.Mock).mockImplementation(
         async () => {
-          await service.pauseEnrollment('enrollment-1', { reason: 'operator pause' });
+          await service.pauseEnrollment('enrollment-1', {
+            reason: 'operator pause',
+          });
           return {
             success: true,
             providerMessageId: 'provider-msg-1',
@@ -347,12 +351,16 @@ describe('FollowUpService', () => {
 
     it('should not schedule another step when an in-flight delivery succeeds after cancellation', async () => {
       const enrollment = buildEnrollment({ lead: buildLead() });
-      (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(enrollment);
+      (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(
+        enrollment,
+      );
       (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(buildStep());
       (executionsRepository.findOne as jest.Mock).mockResolvedValue(null);
       (n8nClientService.triggerWebhook as jest.Mock).mockImplementation(
         async () => {
-          await service.cancelEnrollment('enrollment-1', { reason: 'customer opted out' });
+          await service.cancelEnrollment('enrollment-1', {
+            reason: 'customer opted out',
+          });
           return {
             success: true,
             providerMessageId: 'provider-msg-1',
@@ -501,6 +509,21 @@ describe('FollowUpService', () => {
           }),
         }),
       );
+    });
+
+    it('does not retry a delivery failure explicitly marked non-retryable', async () => {
+      (n8nClientService.triggerWebhook as jest.Mock).mockResolvedValue({
+        success: false,
+        error: 'SMTP authentication failed',
+        retryable: false,
+      });
+
+      const result = await service.execute(dto);
+
+      expect(result.status).toBe(ExecutionStatus.FAILED);
+      expect(result.retryCount).toBe(0);
+      expect(result.execution.errorMessage).toBe('SMTP authentication failed');
+      expect(n8nClientService.triggerWebhook).toHaveBeenCalledTimes(1);
     });
 
     it('should store the timeout error message when the n8n webhook times out', async () => {
@@ -778,7 +801,9 @@ describe('FollowUpService', () => {
         errorMessage: null,
       } as FollowUpExecution;
       persistedExecution = staleExecution;
-      (executionsRepository.find as jest.Mock).mockResolvedValue([staleExecution]);
+      (executionsRepository.find as jest.Mock).mockResolvedValue([
+        staleExecution,
+      ]);
       (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(
         buildEnrollment(),
       );

@@ -13,11 +13,11 @@ export const MAX_NOTIFICATION_LIMIT = 100;
 
 export class QueryNotificationsDto {
   /**
-   * Owner of the notifications. The API has no authentication yet, so the
-   * caller has to state whose inbox is being read.
+   * Optional inbox selector for Admin. Sales inbox ownership comes from JWT.
    */
+  @IsOptional()
   @IsUUID()
-  userId!: string;
+  userId?: string;
 
   @IsOptional()
   @Type(() => Boolean)

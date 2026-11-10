@@ -478,17 +478,14 @@ export class SequencesService {
       });
       savedEnrollment = result.savedEnrollment;
 
-      await this.rabbitmqService.publishEvent(
-        CRM_EVENTS.FOLLOW_UP_TRIGGERED,
-        {
-          enrollmentId: result.savedEnrollment.id,
-          executionId: result.savedExecution.id,
-          leadId: lead.id,
-          sequenceId: sequence.id,
-          stepId: firstStep.id,
-          scheduledAt: result.scheduledDate.toISOString(),
-        },
-      );
+      await this.rabbitmqService.publishEvent(CRM_EVENTS.FOLLOW_UP_TRIGGERED, {
+        enrollmentId: result.savedEnrollment.id,
+        executionId: result.savedExecution.id,
+        leadId: lead.id,
+        sequenceId: sequence.id,
+        stepId: firstStep.id,
+        scheduledAt: result.scheduledDate.toISOString(),
+      });
     }
 
     this.logger.log(

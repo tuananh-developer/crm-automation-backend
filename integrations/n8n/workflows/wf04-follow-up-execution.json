@@ -1,0 +1,347 @@
+{
+  "name": "WF04 - Follow-up Execution",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "follow-up-execute",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "node-1-webhook",
+      "name": "1. Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        250,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_AFTER_IMPORT",
+          "name": "WF04 Backend Webhook Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst required = ['executionId', 'enrollmentId', 'stepId', 'correlationId', 'recipient', 'subject', 'message', 'executionStatus', 'enrollmentStatus'];\nconst missing = required.filter(field => body[field] === undefined || body[field] === null || body[field] === '');\nif (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));\nreturn [{ json: {\n  executionId: body.executionId,\n  enrollmentId: body.enrollmentId,\n  stepId: body.stepId,\n  workflowRunId: body.workflowRunId || null,\n  correlationId: body.correlationId,\n  recipient: body.recipient,\n  subject: body.subject,\n  message: body.message,\n  leadId: body.leadId || null,\n  customerId: body.customerId || null,\n  ownerId: body.ownerId || null,\n  channel: body.channel,\n  actionType: body.actionType,\n  attempt: body.attempt,\n  maxRetries: body.maxRetries,\n  executionStatus: body.executionStatus,\n  enrollmentStatus: body.enrollmentStatus,\n  validatedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "node-2-validate",
+      "name": "2. Validate Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        470,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: $json };"
+      },
+      "id": "node-3-get-context",
+      "name": "3. Accept Backend Execution Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        690,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const event = $json;\nif (event.executionStatus !== 'RUNNING') throw new Error('Execution is not RUNNING');\nif (event.enrollmentStatus !== 'ACTIVE') throw new Error('Enrollment is not ACTIVE');\nif (!event.attempt || !Number.isInteger(event.attempt) || event.attempt < 1) throw new Error('Invalid attempt number');\nif (!Number.isInteger(event.maxRetries) || event.maxRetries < 0) throw new Error('Invalid retry limit');\nreturn { json: { ...event, contextVerified: true } };"
+      },
+      "id": "node-4-validate-enrollment",
+      "name": "4. Validate Enrollment and Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        910,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nif (typeof data.recipient !== 'string' || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(data.recipient)) throw new Error('Invalid recipient email');\nif (typeof data.subject !== 'string' || !data.subject.trim()) throw new Error('Missing subject');\nif (typeof data.message !== 'string' || !data.message.trim()) throw new Error('Missing message');\nconst html = data.message.replace(/\\n/g, '<br/>');\nreturn [{ json: { ...data, recipientEmail: data.recipient, emailSubject: data.subject, emailHtml: html, templateValid: true, messageBuiltAt: new Date().toISOString() } }];"
+      },
+      "id": "node-5-build-message",
+      "name": "5. Build Approved Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1130,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+  "url": "={{ ($env.CRM_API_BASE_URL || (($env.CRM_BACKEND_URL || '').replace(/\\/$/, '') + '/api/v1')).replace(/\\/$/, '') + '/internal/communication/send' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+  "jsonBody": "={{ JSON.stringify({ to: $json.recipientEmail, subject: $json.emailSubject, html: $json.emailHtml, correlationId: $json.correlationId, idempotencyKey: 'follow-up:' + $json.executionId + ':' + $json.stepId }) }}",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-api-key",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "node-6-send-email",
+      "name": "6. Call Communication API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1350,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nconst prev = $('5. Build Approved Message').first().json;\nconst success = result.success === true;\nconst retryable = result.retryable === true;\nconst finalAttempt = prev.attempt > prev.maxRetries;\nconst finalFailure = !success && (!retryable || finalAttempt);\nconst deliveryStatus = success ? 'SUCCESS' : finalFailure ? (prev.ownerId ? 'FINAL_ERROR' : 'FINAL_ERROR_NO_OWNER') : 'RETRYABLE_ERROR';\nreturn [{ json: {\n  executionId: prev.executionId,\n  enrollmentId: prev.enrollmentId,\n  stepId: prev.stepId,\n  workflowRunId: prev.workflowRunId,\n  correlationId: prev.correlationId,\n  ownerId: prev.ownerId,\n  attempt: prev.attempt,\n  deliveryStatus,\n  retryable: !success && retryable && !finalAttempt,\n  providerMessageId: result.providerMessageId ?? null,\n  simulated: result.simulated === true,\n  normalizedAt: new Date().toISOString(),\n  error: result.error || null\n} }];"
+      },
+      "id": "node-7-normalize",
+      "name": "7. Normalize Delivery Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1570,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: $json.deliveryStatus === 'SUCCESS', executionId: $json.executionId, enrollmentId: $json.enrollmentId, stepId: $json.stepId, workflowRunId: $json.workflowRunId, providerMessageId: $json.providerMessageId, correlationId: $json.correlationId, retryable: $json.retryable, error: $json.error }) }}",
+        "options": {}
+      },
+      "id": "node-8-callback",
+      "name": "8. Execution Callback",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1790,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('7. Normalize Delivery Result').first().json;\nconst idempotencyKey = 'follow-up:' + data.executionId + ':' + data.stepId;\nreturn [{ json: {\n  ...data,\n  idempotencyKey: idempotencyKey,\n  preparedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "node-9-prepare",
+      "name": "9. Prepare Status and Idempotency",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2010,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "final-failure-check",
+              "leftValue": "={{ $json.deliveryStatus }}",
+              "rightValue": "FINAL_ERROR",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "owner-id-check",
+              "leftValue": "={{ $json.ownerId || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-10-branch",
+      "name": "10. Is Terminal Delivery Failure",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2230,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.CRM_API_BASE_URL || (($env.CRM_BACKEND_URL || '').replace(/\\/$/, '') + '/api/v1')).replace(/\\/$/, '') + '/notifications/internal/create' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "x-n8n-api-key",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ userId: $json.ownerId, type: 'FOLLOW_UP_FAILED', severity: 'HIGH', title: 'Follow-up final failure', message: 'Follow-up execution ' + $json.executionId + ' failed after retries: ' + ($json.error || 'Delivery failed'), referenceType: 'enrollment', referenceId: $json.enrollmentId, idempotencyKey: 'follow-up:' + $json.executionId + ':' + $json.stepId + ':' + $json.attempt + ':failure' }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "name": "13. Notify on Final Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        400
+      ],
+      "id": "notify-final-failure"
+    }
+  ],
+  "connections": {
+    "1. Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "2. Validate Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Validate Event": {
+      "main": [
+        [
+          {
+            "node": "3. Accept Backend Execution Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Accept Backend Execution Context": {
+      "main": [
+        [
+          {
+            "node": "4. Validate Enrollment and Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Validate Enrollment and Duplicate": {
+      "main": [
+        [
+          {
+            "node": "5. Build Approved Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Build Approved Message": {
+      "main": [
+        [
+          {
+            "node": "6. Call Communication API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Call Communication API": {
+      "main": [
+        [
+          {
+            "node": "7. Normalize Delivery Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. Normalize Delivery Result": {
+      "main": [
+        [
+          {
+            "node": "8. Execution Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Execution Callback": {
+      "main": [
+        [
+          {
+            "node": "9. Prepare Status and Idempotency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9. Prepare Status and Idempotency": {
+      "main": [
+        [
+          {
+            "node": "10. Is Terminal Delivery Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10. Is Terminal Delivery Failure": {
+      "main": [
+        [
+          {
+            "node": "13. Notify on Final Failure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "WF04",
+    "follow-up",
+    "phase-3"
+  ]
+}

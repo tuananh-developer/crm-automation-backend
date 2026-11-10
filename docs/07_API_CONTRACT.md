@@ -152,7 +152,8 @@ Apply DTO cannot force safety/approval; the backend reloads each target and enfo
 
 - `GET /api/v1/dashboard/overview`, `GET /api/v1/dashboard/workflows`, `GET /api/v1/dashboard/customer-health` — role-filtered read models.
 - `GET /api/v1/workflow-runs`; `GET /api/v1/workflow-runs/:runId` — run status, correlation, result summary and safe error detail.
-- `GET /api/v1/notifications`; `POST /api/v1/notifications/:notificationId/read`.
+- `GET /api/v1/notifications`; `GET /api/v1/notifications/unread-count`; `PATCH /api/v1/notifications/read-all`; `PATCH /api/v1/notifications/:id/read` — JWT actor-scoped for Sales; Admin may select a `userId` inbox.
+- `POST /api/v1/notifications/internal/create` — N8N-key authenticated; requires an existing `userId` and supports an idempotency key. This route bypasses browser JWT only and is not unauthenticated.
 - `POST /api/v1/internal/communication/send` — service-authenticated request to deliver an approved message; supports idempotency and returns delivery identity/state. This endpoint is for trusted backend/workflow calls, not browser-direct access.
 
 ## 11. Development-only integration

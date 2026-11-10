@@ -8,4 +8,8 @@ export class ExecuteFollowUpDto {
   @IsOptional()
   @IsUUID()
   stepId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  correlationId?: string;
 }

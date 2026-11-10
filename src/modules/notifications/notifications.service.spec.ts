@@ -1,12 +1,18 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { NotificationsService } from './notifications.service.js';
 import { NotificationType } from './enums/notification.enum.js';
 import type { Repository } from 'typeorm';
 import type { Notification } from './entities/notification.entity.js';
+import type { User } from '../users/entities/user.entity.js';
 
 describe('NotificationsService', () => {
   let service: NotificationsService;
   let notificationRepository: jest.Mocked<Partial<Repository<Notification>>>;
+  let usersRepository: jest.Mocked<Partial<Repository<User>>>;
 
   const mockNotification: Notification = {
     id: 'notification-1',
@@ -32,9 +38,13 @@ describe('NotificationsService', () => {
       create: jest.fn(),
       save: jest.fn(),
     };
+    usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'user-1' }),
+    };
 
     service = new NotificationsService(
       notificationRepository as Repository<Notification>,
+      usersRepository as Repository<User>,
     );
   });
 
@@ -137,17 +147,47 @@ describe('NotificationsService', () => {
   });
 
   it('reuses an existing notification when the idempotency key and payload match', async () => {
-    const existing = { ...mockNotification, idempotencyKey: 'wf08:run-1:user-1' };
-    (notificationRepository.findOne as jest.Mock).mockResolvedValueOnce(existing);
-    const result = await service.create({ userId: existing.userId, type: existing.type, title: existing.title, content: existing.content, leadId: existing.leadId, customerId: existing.customerId, reviewTaskId: existing.reviewTaskId, idempotencyKey: existing.idempotencyKey });
+    const existing = {
+      ...mockNotification,
+      idempotencyKey: 'wf08:run-1:user-1',
+    };
+    (notificationRepository.findOne as jest.Mock).mockResolvedValueOnce(
+      existing,
+    );
+    const result = await service.create({
+      userId: existing.userId,
+      type: existing.type,
+      title: existing.title,
+      content: existing.content,
+      leadId: existing.leadId,
+      customerId: existing.customerId,
+      reviewTaskId: existing.reviewTaskId,
+      idempotencyKey: existing.idempotencyKey,
+    });
     expect(result).toBe(existing);
     expect(notificationRepository.save).not.toHaveBeenCalled();
   });
 
   it('rejects reuse of an idempotency key with a different payload', async () => {
-    const existing = { ...mockNotification, idempotencyKey: 'wf08:run-1:user-1' };
-    (notificationRepository.findOne as jest.Mock).mockResolvedValueOnce(existing);
-    await expect(service.create({ userId: 'another-user', type: existing.type, title: existing.title, content: existing.content, leadId: existing.leadId, customerId: existing.customerId, reviewTaskId: existing.reviewTaskId, idempotencyKey: existing.idempotencyKey })).rejects.toBeInstanceOf(ConflictException);
+    const existing = {
+      ...mockNotification,
+      idempotencyKey: 'wf08:run-1:user-1',
+    };
+    (notificationRepository.findOne as jest.Mock).mockResolvedValueOnce(
+      existing,
+    );
+    await expect(
+      service.create({
+        userId: 'another-user',
+        type: existing.type,
+        title: existing.title,
+        content: existing.content,
+        leadId: existing.leadId,
+        customerId: existing.customerId,
+        reviewTaskId: existing.reviewTaskId,
+        idempotencyKey: existing.idempotencyKey,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
   it('creates an unread notification', async () => {
     (notificationRepository.create as jest.Mock).mockImplementation(
@@ -167,5 +207,32 @@ describe('NotificationsService', () => {
     expect(result.isRead).toBe(false);
     expect(result.readAt).toBeNull();
     expect(result.type).toBe(NotificationType.FOLLOW_UP_FAILED);
+  });
+
+  it('rejects a missing userId without writing a notification', async () => {
+    await expect(
+      service.create({
+        userId: '',
+        type: NotificationType.FOLLOW_UP_FAILED,
+        title: 'Follow-up failed',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(usersRepository.findOne).not.toHaveBeenCalled();
+    expect(notificationRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown user before writing a notification', async () => {
+    (usersRepository.findOne as jest.Mock).mockResolvedValue(null);
+
+    await expect(
+      service.create({
+        userId: 'missing-user',
+        type: NotificationType.FOLLOW_UP_FAILED,
+        title: 'Follow-up failed',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(notificationRepository.save).not.toHaveBeenCalled();
   });
 });

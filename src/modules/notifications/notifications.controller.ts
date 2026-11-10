@@ -1,33 +1,29 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
   Get,
-  HttpCode,
-  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
   Query,
+  UnauthorizedException,
+  HttpCode,
+  HttpStatus,
   UseGuards,
-  UsePipes,
-  ValidationPipe,
 } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service.js';
-import {
-  CreateNotificationDto,
-  MarkNotificationReadDto,
-  QueryNotificationsDto,
-  NotificationResponseDto,
-} from './dto/index.js';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CreateNotificationDto } from './dto/create-notification.dto.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
+import { MarkNotificationReadDto, QueryNotificationsDto } from './dto/index.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole } from '../users/enums/user.enum.js';
-import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 @ApiTags('Notifications')
 @Controller('notifications')
@@ -38,28 +34,31 @@ export class NotificationsController {
   @Get()
   findAll(
     @Query() query: QueryNotificationsDto,
-    @CurrentUser() user: AuthenticatedUser,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    this.assertInboxAccess(query.userId, user);
-    return this.notificationsService.findForUser(query);
+    const userId = this.resolveInboxUserId(query.userId, actor);
+    return this.notificationsService.findForUser({ ...query, userId });
   }
 
   @Get('unread-count')
   async unreadCount(
-    @Query('userId', ParseUUIDPipe) userId: string,
-    @CurrentUser() user: AuthenticatedUser,
+    @Query('userId', new ParseUUIDPipe({ optional: true }))
+    userId: string | undefined,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    this.assertInboxAccess(userId, user);
-    return { count: await this.notificationsService.countUnread(userId) };
+    const targetUserId = this.resolveInboxUserId(userId, actor);
+    return {
+      count: await this.notificationsService.countUnread(targetUserId),
+    };
   }
 
   @Patch('read-all')
   async markAllRead(
     @Body() dto: MarkNotificationReadDto,
-    @CurrentUser() user: AuthenticatedUser,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    this.assertInboxAccess(dto.userId, user);
-    const updated = await this.notificationsService.markAllRead(dto.userId);
+    const userId = this.resolveInboxUserId(dto.userId, actor);
+    const updated = await this.notificationsService.markAllRead(userId);
 
     return { updated };
   }
@@ -68,77 +67,51 @@ export class NotificationsController {
   markRead(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: MarkNotificationReadDto,
-    @CurrentUser() user: AuthenticatedUser,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    this.assertInboxAccess(dto.userId, user);
-    return this.notificationsService.markRead(id, dto.userId);
+    const userId = this.resolveInboxUserId(dto.userId, actor);
+    return this.notificationsService.markRead(id, userId);
   }
 
-  /**
-   * Internal endpoint used by n8n workflows (WF01/WF08/WF10/WF11/WF12) to
-   * raise an in-app notification after the caller has been authorized and
-   * correlated through the backend. Browsers never call this directly.
-   */
   @Post('internal/create')
   @Public()
-  @HttpCode(HttpStatus.OK)
   @UseGuards(N8nAuthGuard)
-  @UsePipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  )
-  @ApiOperation({
-    summary: 'Create an in-app notification from an authorized n8n workflow',
-    description:
-      'Canonical route: /api/v1/notifications/internal/create. n8n workflows request an idempotent backend notification through this endpoint. The backend validates the target user, type and resource references.',
-  })
-  @ApiBody({ type: CreateNotificationDto })
-  @ApiResponse({
-    status: 200,
-    description: 'Notification created.',
-    type: NotificationResponseDto,
-  })
-  @ApiResponse({ status: 401, description: 'Unauthorized n8n callback.' })
-  async createInternal(
-    @Body() dto: CreateNotificationDto,
-  ): Promise<NotificationResponseDto> {
+  @HttpCode(HttpStatus.CREATED)
+  async createInternal(@Body() dto: CreateNotificationDto) {
     const notification = await this.notificationsService.create({
       userId: dto.userId,
       type: dto.type,
       title: dto.title,
-      content: dto.content ?? null,
-      leadId: dto.leadId ?? null,
-      customerId: dto.customerId ?? null,
-      reviewTaskId: dto.reviewTaskId ?? null,
-      idempotencyKey: dto.idempotencyKey ?? null,
+      content: dto.message,
+      leadId: null,
+      customerId: null,
+      reviewTaskId: null,
+      idempotencyKey: dto.idempotencyKey,
     });
-
-    return {
-      id: notification.id,
-      userId: notification.userId,
-      type: notification.type,
-      title: notification.title,
-      content: notification.content,
-      leadId: notification.leadId,
-      customerId: notification.customerId,
-      reviewTaskId: notification.reviewTaskId,
-      isRead: notification.isRead,
-      readAt: notification.readAt,
-      createdAt: notification.createdAt,
-    };
+    return { notificationId: notification.id, status: 'CREATED' };
   }
 
-  private assertInboxAccess(
-    requestedUserId: string,
-    user: AuthenticatedUser,
-  ): void {
-    if (user.role !== UserRole.ADMIN && requestedUserId !== user.id) {
-      throw new ForbiddenException(
-        'You may only access your own notifications',
-      );
+  private resolveInboxUserId(
+    requestedUserId: string | undefined,
+    actor: AuthenticatedUser | undefined,
+  ): string {
+    if (!actor?.id || !actor.role) {
+      throw new UnauthorizedException('Authenticated actor is required');
     }
+    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.SALES) {
+      throw new ForbiddenException('Role cannot access notifications');
+    }
+    if (actor.role === UserRole.SALES) {
+      if (requestedUserId && requestedUserId !== actor.id) {
+        throw new ForbiddenException(
+          'Sales users may only access their own notifications',
+        );
+      }
+      return actor.id;
+    }
+    if (!requestedUserId) {
+      throw new BadRequestException('userId is required for Admin access');
+    }
+    return requestedUserId;
   }
 }
