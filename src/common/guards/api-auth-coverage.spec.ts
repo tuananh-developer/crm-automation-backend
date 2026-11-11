@@ -20,6 +20,8 @@ import { RolesGuard } from './roles.guard.js';
 import { ROLES_KEY } from '../decorators/roles.decorator.js';
 import { UserRole } from '../../modules/users/enums/user.enum.js';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
+import { CommunicationController } from '../../modules/communication/communication.controller.js';
+import { InternalCommunicationController } from '../../modules/communication/internal-communication.controller.js';
 
 const jwtProtectedControllers = [
   LeadsController,
@@ -34,6 +36,7 @@ const jwtProtectedControllers = [
   NextBestActionsController,
   SalesMeetingsController,
   QuotesController,
+  CommunicationController,
 ] as const;
 
 describe('API authentication guard coverage', () => {
@@ -61,6 +64,14 @@ describe('API authentication guard coverage', () => {
       expect(guards).toContain(JwtAuthGuard);
     },
   );
+
+  it('protects internal Communication delivery with machine authentication', () => {
+    const guards = Reflect.getMetadata(
+      '__guards__',
+      InternalCommunicationController,
+    );
+    expect(guards).toContain(N8nAuthGuard);
+  });
 
   it('keeps the internal notification route on N8N auth without requiring a browser JWT', () => {
     const handler = Object.getOwnPropertyDescriptor(

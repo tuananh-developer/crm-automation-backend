@@ -67,9 +67,9 @@ All routes use the canonical `/api/v1/follow-ups` family.
 | GET/POST         | `/api/v1/follow-ups/executions`                          | List/filter or request a valid execution according to the operation DTO. |
 | GET              | `/api/v1/follow-ups/executions/:executionId`             | Read one execution.                                                      |
 | POST             | `/api/v1/follow-ups/executions/:executionId/retry`       | Authorized audited retry after state/eligibility validation.             |
-| POST             | `/api/v1/internal/n8n/follow-ups/delivery-callback`      | Record delivery result with service auth and idempotency.                |
+| POST             | `/api/v1/internal/communication/follow-ups/:executionId/send` | Send the persisted execution through backend SMTP; service-authenticated, empty request body, idempotency key must match execution ID. |
 
-`lead.follow_up.triggered` must include required `data.executionId` referencing a persisted `FollowUpExecution`. Automated execution uses RabbitMQ as one trigger path. Email/message sending goes through NestJS Communication API.
+UC06 dispatch is initiated by NestJS `FollowUpService` through the protected `follow-up-execute` n8n webhook after a `FollowUpExecution` and its persisted `requestPayload` exist. The request includes only `executionId`, `enrollmentId` and `stepId`; no `lead.follow_up.triggered` RabbitMQ event is used in this implementation. For the UC06 n8n handoff, `POST /api/v1/internal/communication/follow-ups/:executionId/send` requires `X-N8N-API-KEY` and `Idempotency-Key: <executionId>`, accepts no recipient/subject/message body, and loads those values from the persisted `FollowUpExecution.requestPayload`. `CommunicationDelivery` stores the authoritative delivery state. The `DeliveryResult` returns through the original webhook response to the dispatching FollowUpService; there is no separate asynchronous `delivery-callback` endpoint.
 
 Follow-up route handlers take creator/updater/assignment identity from the authenticated JWT. Sales enrollment, enrollment lookup/lifecycle, execution and execution-history access is limited to enrollments for Leads owned by that Sales user; out-of-scope Lead/enrollment identifiers return not found.
 
@@ -153,7 +153,7 @@ Apply DTO cannot force safety/approval; the backend reloads each target and enfo
 - `GET /api/v1/dashboard/overview`, `GET /api/v1/dashboard/workflows`, `GET /api/v1/dashboard/customer-health` — role-filtered read models.
 - `GET /api/v1/workflow-runs`; `GET /api/v1/workflow-runs/:runId` — run status, correlation, result summary and safe error detail.
 - `GET /api/v1/notifications`; `POST /api/v1/notifications/:notificationId/read`.
-- `POST /api/v1/internal/communication/send` — service-authenticated request to deliver an approved message; supports idempotency and returns delivery identity/state. This endpoint is for trusted backend/workflow calls, not browser-direct access.
+- `POST /api/v1/internal/communication/follow-ups/:executionId/send` — service-authenticated UC06 delivery handoff. Request body is empty; the backend loads recipient, subject and message from the persisted execution payload, enforces idempotency and returns `DeliveryResult`. This endpoint is for the trusted n8n service identity, not browser-direct access.
 
 ## 11. Development-only integration
 

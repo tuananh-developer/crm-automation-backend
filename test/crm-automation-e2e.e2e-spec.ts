@@ -4,6 +4,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module.js';
 import { N8nClientService } from '../src/infrastructure/n8n/n8n-client.service.js';
+import { SMTP_TRANSPORT_FACTORY } from '../src/modules/communication/communication.service.js';
 import { DataSource } from 'typeorm';
 
 describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
@@ -31,6 +32,13 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     providerMessageId: 'e2e-provider-message-id',
     message: 'Mock n8n accepted follow-up',
   });
+  const smtpSendMail = jest.fn().mockResolvedValue({
+    messageId: 'e2e-smtp-message-id',
+  });
+  const smtpTransportFactory = jest.fn(() => ({
+    sendMail: smtpSendMail,
+    close: jest.fn(),
+  }));
   const timestamp = Date.now();
   const testEmail = `enterprise.lead.${timestamp}@innovate-tech.io`;
 
@@ -47,12 +55,18 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     process.env.N8N_API_KEY = N8N_KEY;
     process.env.N8N_WEBHOOK_SECRET = N8N_KEY;
     process.env.N8N_FOLLOW_UP_WEBHOOK_PATH = 'follow-up-execute';
+    process.env.SMTP_HOST = 'smtp.e2e.test';
+    process.env.SMTP_FROM_EMAIL = 'noreply@example.test';
+    process.env.SMTP_PORT = '587';
+    process.env.SMTP_SECURE = 'false';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
       .overrideProvider(N8nClientService)
       .useValue({ triggerWebhook: n8nTriggerWebhook })
+      .overrideProvider(SMTP_TRANSPORT_FACTORY)
+      .useValue(smtpTransportFactory)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -375,11 +389,11 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     expect(n8nTriggerWebhook).toHaveBeenCalledTimes(1);
     expect(n8nTriggerWebhook).toHaveBeenCalledWith(
       'follow-up-execute',
-      expect.objectContaining({
+      {
+        executionId: expect.any(String),
         enrollmentId,
         stepId,
-        leadId,
-      }),
+      },
     );
 
     const [execution] = await dataSource.query(
@@ -399,6 +413,126 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
         providerMessageId: 'e2e-provider-message-id',
       }),
     );
+  });
+
+  it('UC06: should authenticate backend email delivery and prevent concurrent duplicate SMTP sends', async () => {
+    const [execution] = await dataSource.query(
+      `SELECT id, request_payload
+       FROM follow_up_executions
+       WHERE enrollment_id = $1 AND step_id = $2
+       ORDER BY created_at DESC
+       LIMIT 1;`,
+      [enrollmentId, stepId],
+    );
+    expect(execution).toBeDefined();
+    expect(execution.request_payload.channel).toBe('EMAIL');
+
+    await dataSource.query(
+      `UPDATE follow_up_executions SET status = 'RUNNING' WHERE id = $1;`,
+      [execution.id],
+    );
+
+    const endpoint = `/api/v1/internal/communication/follow-ups/${execution.id}/send`;
+    const unauthorized = await request(app.getHttpServer())
+      .post(endpoint)
+      .set('Idempotency-Key', execution.id)
+      .send({});
+    expect(unauthorized.status).toBe(401);
+
+    let releaseSmtp!: (receipt: { messageId: string }) => void;
+    let signalSmtpStarted!: () => void;
+    const smtpStarted = new Promise<void>((resolve) => {
+      signalSmtpStarted = resolve;
+    });
+    smtpSendMail.mockClear();
+    smtpSendMail.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseSmtp = resolve;
+          signalSmtpStarted();
+        }),
+    );
+
+    const firstRequest = request(app.getHttpServer())
+      .post(endpoint)
+      .set('X-N8N-API-KEY', N8N_KEY)
+      .set('Idempotency-Key', execution.id)
+      .send({
+        recipient: 'attacker@example.test',
+        subject: 'Caller-controlled subject',
+        message: 'Caller-controlled body',
+      })
+      .then((response) => response);
+
+    await smtpStarted;
+
+    const concurrentReplay = await request(app.getHttpServer())
+      .post(endpoint)
+      .set('X-N8N-API-KEY', N8N_KEY)
+      .set('Idempotency-Key', execution.id)
+      .send({});
+    expect(concurrentReplay.status).toBe(200);
+    expect(concurrentReplay.body).toEqual(
+      expect.objectContaining({
+        success: false,
+        retryable: true,
+        deliveryStatus: 'PROCESSING',
+        error: 'DELIVERY_ALREADY_PROCESSING',
+      }),
+    );
+    expect(smtpSendMail).toHaveBeenCalledTimes(1);
+
+    releaseSmtp({ messageId: 'e2e-smtp-message-id' });
+    const first = await firstRequest;
+    expect(first.status).toBe(200);
+    expect(first.body).toEqual(
+      expect.objectContaining({
+        success: true,
+        retryable: false,
+        deliveryStatus: 'SENT',
+        idempotencyStatus: 'new',
+        providerMessageId: 'e2e-smtp-message-id',
+      }),
+    );
+    expect(smtpSendMail).toHaveBeenCalledTimes(1);
+    expect(smtpSendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: testEmail,
+        subject: expect.any(String),
+        text: expect.any(String),
+      }),
+    );
+
+    const [delivery] = await dataSource.query(
+      `SELECT status, attempts, provider_message_id, idempotency_key
+       FROM communication_deliveries
+       WHERE execution_id = $1;`,
+      [execution.id],
+    );
+    expect(delivery).toEqual(
+      expect.objectContaining({
+        status: 'SENT',
+        attempts: 1,
+        provider_message_id: 'e2e-smtp-message-id',
+        idempotency_key: `follow-up:${execution.id}`,
+      }),
+    );
+
+    // Replaying after the follow-up execution itself has completed must still
+    // return the delivery receipt rather than trying to send SMTP again.
+    await dataSource.query(
+      `UPDATE follow_up_executions SET status = 'SUCCESS' WHERE id = $1;`,
+      [execution.id],
+    );
+    const completedReplay = await request(app.getHttpServer())
+      .post(endpoint)
+      .set('X-N8N-API-KEY', N8N_KEY)
+      .set('Idempotency-Key', execution.id)
+      .send({});
+    expect(completedReplay.status).toBe(200);
+    expect(completedReplay.body.deliveryStatus).toBe('SENT');
+    expect(completedReplay.body.idempotencyStatus).toBe('replayed');
+    expect(smtpSendMail).toHaveBeenCalledTimes(1);
   });
 
   it('UC06: should preserve pause/cancel state when in-flight delivery returns', async () => {
