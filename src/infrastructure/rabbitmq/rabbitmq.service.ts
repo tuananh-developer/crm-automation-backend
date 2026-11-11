@@ -5,6 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { assertUrlUsesScheme } from '../../config/environment.validation.js';
 import amqp, {
   type ChannelWrapper,
   type AmqpConnectionManager,
@@ -164,6 +165,9 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       throw new Error(
         'FATAL: RABBITMQ_URL is required in production; local guest credentials are not allowed',
       );
+    }
+    if (isProd && fullUrl) {
+      assertUrlUsesScheme(fullUrl, 'amqps:', 'RABBITMQ_URL');
     }
     if (useCloudAmqp && !fullUrl) {
       throw new Error(

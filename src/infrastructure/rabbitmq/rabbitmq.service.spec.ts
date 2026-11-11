@@ -35,6 +35,28 @@ describe('RabbitMQService', () => {
     );
   });
 
+  it('rejects plaintext AMQP URLs in production', () => {
+    configService.get.mockImplementation((key: string) => {
+      if (key === 'NODE_ENV') return 'production';
+      if (key === 'RABBITMQ_URL') return 'amqp://broker.example.test/vhost';
+      return undefined;
+    });
+
+    expect(() => service.getRabbitmqUrl()).toThrow(
+      'RABBITMQ_URL must use amqps in production',
+    );
+  });
+
+  it('accepts an AMQPS URL in production', () => {
+    configService.get.mockImplementation((key: string) => {
+      if (key === 'NODE_ENV') return 'production';
+      if (key === 'RABBITMQ_URL') return 'amqps://broker.example.test/vhost';
+      return undefined;
+    });
+
+    expect(service.getRabbitmqUrl()).toBe('amqps://broker.example.test/vhost');
+  });
+
   it('fails fast when CloudAMQP is explicitly enabled without a URL', () => {
     configService.get.mockImplementation((key: string) =>
       key === 'USE_CLOUD_AMQP' ? 'true' : undefined,
