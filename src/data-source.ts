@@ -6,6 +6,7 @@ import { AddEnrollmentActiveUniqueIndex1728400000000 } from './database/migratio
 import { AddOutboxEventsTable1729000000000 } from './database/migrations/1729000000000-AddOutboxEventsTable.js';
 import { AddOutboxProcessingLease1793476900000 } from './database/migrations/1793476900000-AddOutboxProcessingLease.js';
 import { AddOutboxHttpDispatch1793477000000 } from './database/migrations/1793477000000-AddOutboxHttpDispatch.js';
+import { CreateCommunicationDeliveries1793477200000 } from './database/migrations/1793477200000-CreateCommunicationDeliveries.js';
 import { AddT12WorkflowDomains1793476800000 } from './database/migrations/1793476800000-AddT12WorkflowDomains.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -43,6 +44,7 @@ export const AppDataSource = new DataSource(
           AddT12WorkflowDomains1793476800000,
           AddOutboxProcessingLease1793476900000,
           AddOutboxHttpDispatch1793477000000,
+          CreateCommunicationDeliveries1793477200000,
         ],
         migrationsTableName: 'typeorm_migrations',
       }
@@ -67,6 +69,7 @@ export const AppDataSource = new DataSource(
           AddT12WorkflowDomains1793476800000,
           AddOutboxProcessingLease1793476900000,
           AddOutboxHttpDispatch1793477000000,
+          CreateCommunicationDeliveries1793477200000,
         ],
         migrationsTableName: 'typeorm_migrations',
       },
