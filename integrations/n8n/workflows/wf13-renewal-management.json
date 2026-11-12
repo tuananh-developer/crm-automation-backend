@@ -1,423 +1,526 @@
 {
-  "name": "WF13 - Renewal Management",
+  "name": "T12-WF13 - AI Renewal Management Agent",
   "nodes": [
     {
-      "name": "1. Node 1",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        200,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "content": "## 1. Scheduled Scan\nDaily renewal scan checks eligible active contracts due within the renewal window.",
+        "height": 260,
+        "width": 520,
+        "color": 4
       },
-      "id": "w1"
+      "id": "11111111-1111-4111-8111-000000000001",
+      "name": "Sticky 1 - Scheduled Scan",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        60,
+        100
+      ]
     },
     {
-      "name": "2. Node 2",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        400,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "content": "## 2. Contract & Customer Context\nRetrieve authoritative contract details and calculate canonical urgency from stored dates.",
+        "height": 260,
+        "width": 720,
+        "color": 6
       },
-      "id": "w2"
+      "id": "11111111-1111-4111-8111-000000000002",
+      "name": "Sticky 2 - Context & Urgency",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        620,
+        100
+      ]
     },
     {
-      "name": "3. Node 3",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        600,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "content": "## 3. AI Drafting & Grounding\nAI generates renewal recommendation and proposal language. Grounding validation ensures source consistency.",
+        "height": 260,
+        "width": 700,
+        "color": 2
       },
-      "id": "w3"
+      "id": "11111111-1111-4111-8111-000000000003",
+      "name": "Sticky 3 - AI Draft & Validation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1380,
+        100
+      ]
     },
     {
-      "name": "4. Node 4",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        800,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "content": "## 4. Policy Gate & Delivery\nBackend authoritative eligibility gate enforces consent and approval before sending; records attempts idempotently.",
+        "height": 260,
+        "width": 640,
+        "color": 5
       },
-      "id": "w4"
+      "id": "11111111-1111-4111-8111-000000000004",
+      "name": "Sticky 4 - Gate & Attempt Audit",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2100,
+        100
+      ]
     },
     {
-      "name": "5. Node 5",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1000,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
       },
-      "id": "w5"
+      "id": "e6047c3e-324f-4d92-9111-c11100000001",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        100,
+        400
+      ]
     },
     {
-      "name": "6. Node 6",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1200,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "GET",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/contracts?days=30' }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        }
       },
-      "id": "w6"
+      "id": "e6047c3e-324f-4d92-9111-c11100000002",
+      "name": "HTTP Request: Get Contracts Due",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        340,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
-      "name": "7. Node 7",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const raw = $input.first().json;\nconst list = Array.isArray(raw) ? raw : (raw.data || [raw]);\nif (!list || list.length === 0) return [];\nreturn list.filter(item => item && item.id).map(c => ({ json: c }));"
+      },
+      "id": "e6047c3e-324f-4d92-9111-c11100000003",
+      "name": "Split Out: Contract Items",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1400,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w7"
+        580,
+        400
+      ]
     },
     {
-      "name": "8. Node 8",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1600,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "GET",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/contracts/' + $json.id }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        }
       },
-      "id": "w8"
+      "id": "e6047c3e-324f-4d92-9111-c11100000004",
+      "name": "HTTP Request: Get Contract/Customer Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        820,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
-      "name": "9. Node 9",
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const contract = $json;\nconst renewalDate = contract.renewalDate ? new Date(contract.renewalDate) : null;\nif (!renewalDate || isNaN(renewalDate.getTime())) {\n  return { ...contract, urgency: 'UNKNOWN', daysRemaining: -1 };\n}\nconst now = new Date();\nconst diff = renewalDate.getTime() - now.getTime();\nconst days = Math.ceil(diff / (24 * 60 * 60 * 1000));\nlet level = 'LOW';\nif (days < 0) level = 'EXPIRED';\nelse if (days <= 7) level = 'CRITICAL';\nelse if (days <= 30) level = 'HIGH';\nelse if (days <= 60) level = 'MEDIUM';\nreturn { ...contract, urgency: level, daysRemaining: days };"
+      },
+      "id": "e6047c3e-324f-4d92-9111-c11100000005",
+      "name": "Code: Calculate Renewal Urgency",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1800,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w9"
+        1060,
+        400
+      ]
     },
     {
-      "name": "10. Node 10",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2000,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/validate-draft' }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { contractId: $json.id, customerId: $json.customerId, renewalDate: $json.renewalDate, urgency: $json.urgency, sourceContractId: $json.id, sourceCustomerId: $json.customerId, recommendation: 'Standard renewal terms review for ' + $json.contractNumber, draftContent: 'Dear customer, your contract ' + $json.contractNumber + ' is scheduled for renewal on ' + $json.renewalDate + '. Please review our proposed renewal options.' } }}"
       },
-      "id": "w10"
+      "id": "e6047c3e-324f-4d92-9111-c11100000006",
+      "name": "HTTP Request: AI Renewal Recommendation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1300,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
-      "name": "11. Node 11",
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const contract = $node['Code: Calculate Renewal Urgency'].json;\nconst validation = $json;\nconst contractId = contract.id;\nconst customerId = contract.customerId;\nconst isGrounded = Boolean(contractId && customerId && validation.valid !== false);\nreturn {\n  contractId,\n  customerId,\n  renewalDate: contract.renewalDate,\n  urgency: contract.urgency,\n  recommendation: 'Standard renewal terms review for ' + contract.contractNumber,\n  draftContent: 'Dear customer, your contract ' + contract.contractNumber + ' is scheduled for renewal on ' + contract.renewalDate + '. Please review our proposed renewal options.',\n  validationResult: {\n    grounded: isGrounded,\n    consentGranted: false,\n    templateApproved: false,\n    policyApproved: false\n  },\n  canAutoSend: false,\n  idempotencyKey: 'renewal-draft-' + contractId + '-' + (contract.renewalDate ? String(contract.renewalDate).substring(0, 10) : 'cycle')\n};"
+      },
+      "id": "e6047c3e-324f-4d92-9111-c11100000007",
+      "name": "Code: Validate Draft",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2200,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w11"
+        1540,
+        400
+      ]
     },
     {
-      "name": "12. Node 12",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2400,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/drafts' }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { contractId: $json.contractId, customerId: $json.customerId, renewalDate: $json.renewalDate, urgency: $json.urgency, recommendation: $json.recommendation, draftContent: $json.draftContent, validationResult: $json.validationResult, idempotencyKey: $json.idempotencyKey } }}"
       },
-      "id": "w12"
+      "id": "e6047c3e-324f-4d92-9111-c11100000008",
+      "name": "HTTP Request: Save Renewal Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1780,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
-      "name": "13. Node 13",
-      "type": "n8n-nodes-base.code",
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json.canAutoSend === true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        }
+      },
+      "id": "e6047c3e-324f-4d92-9111-c11100000009",
+      "name": "IF: Auto-send Explicitly Allowed?",
+      "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        2600,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w13"
+        2020,
+        400
+      ]
     },
     {
-      "name": "14. Node 14",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2800,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/record-attempt' }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { contractId: $node['HTTP Request: Save Renewal Draft'].json.contractId, customerId: $node['HTTP Request: Save Renewal Draft'].json.customerId, status: 'SENT', idempotencyKey: 'attempt-' + $node['HTTP Request: Save Renewal Draft'].json.idempotencyKey } }}"
       },
-      "id": "w14"
+      "id": "e6047c3e-324f-4d92-9111-c11100000010",
+      "name": "HTTP Request: Backend Send Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2280,
+        280
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
-      "name": "15. Node 15",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3000,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/record-attempt' }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { contractId: $node['HTTP Request: Save Renewal Draft'].json.contractId, customerId: $node['HTTP Request: Save Renewal Draft'].json.customerId, status: 'PENDING_APPROVAL', idempotencyKey: 'approval-' + $node['HTTP Request: Save Renewal Draft'].json.idempotencyKey } }}"
       },
-      "id": "w15"
+      "id": "e6047c3e-324f-4d92-9111-c11100000011",
+      "name": "HTTP Request: Create/Ensure Renewal Approval Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2280,
+        520
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
-      "name": "16. Node 16",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3200,
-        0
-      ],
       "parameters": {
-        "jsCode": "return $input.all();"
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/record-attempt' }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { contractId: $json.contractId, customerId: $json.customerId, status: $json.status, idempotencyKey: 'audit-' + $json.idempotencyKey } }}"
       },
-      "id": "w16"
-    },
-    {
-      "name": "17. Node 17",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "e6047c3e-324f-4d92-9111-c11100000012",
+      "name": "HTTP Request: Record Renewal Attempt",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
       "position": [
-        3400,
-        0
+        2560,
+        400
       ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w17"
-    },
-    {
-      "name": "18. Node 18",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3600,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w18"
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     }
   ],
   "connections": {
-    "1. Node 1": {
+    "Schedule Trigger": {
       "main": [
         [
           {
-            "node": "2. Node 2",
+            "node": "HTTP Request: Get Contracts Due",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "2. Node 2": {
+    "HTTP Request: Get Contracts Due": {
       "main": [
         [
           {
-            "node": "3. Node 3",
+            "node": "Split Out: Contract Items",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "3. Node 3": {
+    "Split Out: Contract Items": {
       "main": [
         [
           {
-            "node": "4. Node 4",
+            "node": "HTTP Request: Get Contract/Customer Details",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "4. Node 4": {
+    "HTTP Request: Get Contract/Customer Details": {
       "main": [
         [
           {
-            "node": "5. Node 5",
+            "node": "Code: Calculate Renewal Urgency",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "5. Node 5": {
+    "Code: Calculate Renewal Urgency": {
       "main": [
         [
           {
-            "node": "6. Node 6",
+            "node": "HTTP Request: AI Renewal Recommendation",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "6. Node 6": {
+    "HTTP Request: AI Renewal Recommendation": {
       "main": [
         [
           {
-            "node": "7. Node 7",
+            "node": "Code: Validate Draft",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "7. Node 7": {
+    "Code: Validate Draft": {
       "main": [
         [
           {
-            "node": "8. Node 8",
+            "node": "HTTP Request: Save Renewal Draft",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "8. Node 8": {
+    "HTTP Request: Save Renewal Draft": {
       "main": [
         [
           {
-            "node": "9. Node 9",
+            "node": "IF: Auto-send Explicitly Allowed?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "9. Node 9": {
+    "IF: Auto-send Explicitly Allowed?": {
       "main": [
         [
           {
-            "node": "10. Node 10",
+            "node": "HTTP Request: Backend Send Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request: Create/Ensure Renewal Approval Task",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "10. Node 10": {
+    "HTTP Request: Backend Send Message": {
       "main": [
         [
           {
-            "node": "11. Node 11",
+            "node": "HTTP Request: Record Renewal Attempt",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "11. Node 11": {
+    "HTTP Request: Create/Ensure Renewal Approval Task": {
       "main": [
         [
           {
-            "node": "12. Node 12",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "12. Node 12": {
-      "main": [
-        [
-          {
-            "node": "13. Node 13",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "13. Node 13": {
-      "main": [
-        [
-          {
-            "node": "14. Node 14",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "14. Node 14": {
-      "main": [
-        [
-          {
-            "node": "15. Node 15",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "15. Node 15": {
-      "main": [
-        [
-          {
-            "node": "16. Node 16",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "16. Node 16": {
-      "main": [
-        [
-          {
-            "node": "17. Node 17",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "17. Node 17": {
-      "main": [
-        [
-          {
-            "node": "18. Node 18",
+            "node": "HTTP Request: Record Renewal Attempt",
             "type": "main",
             "index": 0
           }
@@ -425,6 +528,16 @@
       ]
     }
   },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true
+  },
+  "staticData": null,
+  "pinData": {},
   "active": false,
-  "settings": {}
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [],
+  "description": "Owner: Trọng. T12-WF13 - AI Renewal Management Agent. Scans eligible contracts due for renewal, computes canonical urgency, validates groundedness, saves draft idempotently, checks authoritative eligibility gates fail-closed, routes to backend delivery or human approval task, and records final attempt outcome."
 }

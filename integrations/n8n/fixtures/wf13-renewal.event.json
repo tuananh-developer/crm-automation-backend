@@ -1,0 +1,11 @@
+{
+  "eventType": "renewal.scan.scheduled",
+  "version": 1,
+  "data": {
+    "asOfDate": "2026-11-12",
+    "renewalWindowDays": 30,
+    "workflowRunId": "550e8400-e29b-41d4-a716-446655440033",
+    "contractId": "550e8400-e29b-41d4-a716-446655440030",
+    "customerId": "550e8400-e29b-41d4-a716-446655440031"
+  }
+}
