@@ -2,137 +2,380 @@
   "name": "WF13 - Renewal Management",
   "nodes": [
     {
-      "name": "1. Node 1",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "wf13-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
       "position": [
-        200,
+        0,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w1"
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyDay",
+              "hour": 8,
+              "minute": 0
+            }
+          ]
+        }
+      }
     },
     {
-      "name": "2. Node 2",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "wf13-fetch-contracts",
+      "name": "HTTP: Get Contracts Due",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
-        400,
+        220,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w2"
+        "method": "GET",
+        "url": "={{ $env.NESTJS_API_URL || 'http://localhost:3000' }}/api/v1/internal/n8n/renewal/contracts?days=30",
+        "options": {
+          "responseFormat": "json",
+          "ignoreResponseCode": false
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "nodeCredentialType": "httpHeaderAuth",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "continueOnFail": true
+      }
     },
     {
-      "name": "3. Node 3",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "wf13-split",
+      "name": "Split Out: Contract Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3.1,
       "position": [
-        600,
+        440,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w3"
+        "batchSize": 1,
+        "options": {}
+      }
     },
     {
-      "name": "4. Node 4",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "wf13-get-contract-detail",
+      "name": "HTTP: Get Contract/Customer Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
-        800,
+        660,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w4"
+        "method": "GET",
+        "url": "={{ $env.NESTJS_API_URL || 'http://localhost:3000' }}/api/v1/internal/n8n/renewal/contracts/{{$json.id}}",
+        "options": {
+          "responseFormat": "json",
+          "ignoreResponseCode": false
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "nodeCredentialType": "httpHeaderAuth",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "continueOnFail": true
+      }
     },
     {
-      "name": "5. Node 5",
+      "id": "wf13-calc-urgency",
+      "name": "Code: Calculate Renewal Urgency",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1000,
+        880,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w5"
+        "jsCode": "const renewalDate = $json.renewalDate || $json.renewal_date;\nconst date = renewalDate ? new Date(renewalDate) : null;\nconst now = new Date();\nconst ms = date ? date.getTime() - now.getTime() : null;\nconst daysRemaining = date ? Math.ceil(ms / (1000 * 60 * 60 * 24)) : -1;\nconst urgency = !date ? 'UNKNOWN' : daysRemaining < 0 ? 'EXPIRED' : daysRemaining <= 7 ? 'CRITICAL' : daysRemaining <= 30 ? 'HIGH' : daysRemaining <= 60 ? 'MEDIUM' : 'LOW';\nreturn [{ json: { ...$json, renewalDate: date ? date.toISOString() : null, daysRemaining, urgency } }];"
+      }
     },
     {
-      "name": "6. Node 6",
+      "id": "wf13-ai-recommendation",
+      "name": "HTTP: AI Renewal Recommendation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_PROVIDER_URL || 'https://example.invalid/renewal-recommendation' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "contractId",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "customerId",
+              "value": "={{ $json.customerId }}"
+            },
+            {
+              "name": "urgency",
+              "value": "={{ $json.urgency }}"
+            },
+            {
+              "name": "renewalDate",
+              "value": "={{ $json.renewalDate }}"
+            }
+          ]
+        },
+        "options": {
+          "responseFormat": "json",
+          "ignoreResponseCode": false
+        },
+        "continueOnFail": true
+      }
+    },
+    {
+      "id": "wf13-validate-draft",
+      "name": "Code: Validate Draft",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1200,
+        1320,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w6"
+        "jsCode": "const contractId = $json.id || $json.contractId;\nconst customerId = $json.customerId;\nconst renewalDate = $json.renewalDate || $json.renewal_date;\nconst valid = Boolean(contractId && customerId && renewalDate);\nreturn [{ json: { ...$json, validDraft: valid, contractId, customerId, renewalDate } }];"
+      }
     },
     {
-      "name": "7. Node 7",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "wf13-save-draft",
+      "name": "HTTP: Save Renewal Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
-        1400,
+        1540,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w7"
+        "method": "POST",
+        "url": "={{ $env.NESTJS_API_URL || 'http://localhost:3000' }}/api/v1/internal/n8n/renewal/drafts",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "contractId",
+              "value": "={{ $json.contractId }}"
+            },
+            {
+              "name": "customerId",
+              "value": "={{ $json.customerId }}"
+            },
+            {
+              "name": "renewalDate",
+              "value": "={{ $json.renewalDate }}"
+            },
+            {
+              "name": "urgency",
+              "value": "={{ $json.urgency }}"
+            },
+            {
+              "name": "idempotencyKey",
+              "value": "={{ $json.id }}-{{ $json.renewalDate }}"
+            },
+            {
+              "name": "draftContent",
+              "value": "={{ $json.recommendation || 'Renewal follow-up recommended.' }}"
+            }
+          ]
+        },
+        "options": {
+          "responseFormat": "json",
+          "ignoreResponseCode": false
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "nodeCredentialType": "httpHeaderAuth",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "continueOnFail": true
+      }
     },
     {
-      "name": "8. Node 8",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "wf13-auto-send-check",
+      "name": "IF: Auto-send Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
       "position": [
-        1600,
+        1760,
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w8"
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "can-auto-send",
+              "leftValue": "={{ $json.canAutoSend }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
     },
     {
-      "name": "9. Node 9",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "wf13-request-approval",
+      "name": "HTTP: Request Approval",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
-        1800,
-        0
+        1980,
+        -180
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w9"
+        "method": "POST",
+        "url": "={{ $env.NESTJS_API_URL || 'http://localhost:3000' }}/api/v1/internal/n8n/renewal/check-eligibility",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "contractId",
+              "value": "={{ $json.contractId }}"
+            },
+            {
+              "name": "customerId",
+              "value": "={{ $json.customerId }}"
+            },
+            {
+              "name": "draftId",
+              "value": "={{ $json.id || $json.draftId }}"
+            },
+            {
+              "name": "hasConsent",
+              "value": false
+            },
+            {
+              "name": "hasTemplate",
+              "value": false
+            },
+            {
+              "name": "policyAllows",
+              "value": false
+            },
+            {
+              "name": "needsApproval",
+              "value": true
+            }
+          ]
+        },
+        "options": {
+          "responseFormat": "json",
+          "ignoreResponseCode": false
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "nodeCredentialType": "httpHeaderAuth",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "continueOnFail": true
+      }
     },
     {
-      "name": "10. Node 10",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "wf13-send-message",
+      "name": "HTTP: Backend Send Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
-        2000,
-        0
+        1980,
+        160
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w10"
+        "method": "POST",
+        "url": "={{ $env.NESTJS_API_URL || 'http://localhost:3000' }}/api/v1/internal/communication/send",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "customerId",
+              "value": "={{ $json.customerId }}"
+            },
+            {
+              "name": "contractId",
+              "value": "={{ $json.contractId }}"
+            },
+            {
+              "name": "draftId",
+              "value": "={{ $json.id || $json.draftId }}"
+            },
+            {
+              "name": "messageType",
+              "value": "RENEWAL_REMINDER"
+            },
+            {
+              "name": "status",
+              "value": "READY"
+            }
+          ]
+        },
+        "options": {
+          "responseFormat": "json",
+          "ignoreResponseCode": false
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "nodeCredentialType": "httpHeaderAuth",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "continueOnFail": true
+      }
     },
     {
-      "name": "11. Node 11",
+      "id": "wf13-finalize",
+      "name": "Code: Finalize Workflow Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -140,291 +383,152 @@
         0
       ],
       "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w11"
-    },
-    {
-      "name": "12. Node 12",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2400,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w12"
-    },
-    {
-      "name": "13. Node 13",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2600,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w13"
-    },
-    {
-      "name": "14. Node 14",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2800,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w14"
-    },
-    {
-      "name": "15. Node 15",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3000,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w15"
-    },
-    {
-      "name": "16. Node 16",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3200,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w16"
-    },
-    {
-      "name": "17. Node 17",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3400,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w17"
-    },
-    {
-      "name": "18. Node 18",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3600,
-        0
-      ],
-      "parameters": {
-        "jsCode": "return $input.all();"
-      },
-      "id": "w18"
+        "jsCode": "const response = $json || {};\nconst result = {\n  workflowName: 'WF13 - Renewal Management',\n  contractId: response.contractId || response.id || null,\n  customerId: response.customerId || null,\n  urgency: response.urgency || 'UNKNOWN',\n  canAutoSend: Boolean(response.canAutoSend),\n  status: response.status || 'COMPLETED',\n  processedAt: new Date().toISOString()\n};\nreturn [{ json: result }];"
+      }
     }
   ],
   "connections": {
-    "1. Node 1": {
+    "Schedule Trigger": {
       "main": [
         [
           {
-            "node": "2. Node 2",
+            "node": "HTTP: Get Contracts Due",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "2. Node 2": {
+    "HTTP: Get Contracts Due": {
       "main": [
         [
           {
-            "node": "3. Node 3",
+            "node": "Split Out: Contract Items",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "3. Node 3": {
+    "Split Out: Contract Items": {
       "main": [
         [
           {
-            "node": "4. Node 4",
+            "node": "HTTP: Get Contract/Customer Details",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "4. Node 4": {
+    "HTTP: Get Contract/Customer Details": {
       "main": [
         [
           {
-            "node": "5. Node 5",
+            "node": "Code: Calculate Renewal Urgency",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "5. Node 5": {
+    "Code: Calculate Renewal Urgency": {
       "main": [
         [
           {
-            "node": "6. Node 6",
+            "node": "HTTP: AI Renewal Recommendation",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "6. Node 6": {
+    "HTTP: AI Renewal Recommendation": {
       "main": [
         [
           {
-            "node": "7. Node 7",
+            "node": "Code: Validate Draft",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "7. Node 7": {
+    "Code: Validate Draft": {
       "main": [
         [
           {
-            "node": "8. Node 8",
+            "node": "HTTP: Save Renewal Draft",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "8. Node 8": {
+    "HTTP: Save Renewal Draft": {
       "main": [
         [
           {
-            "node": "9. Node 9",
+            "node": "IF: Auto-send Allowed?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "9. Node 9": {
+    "IF: Auto-send Allowed?": {
       "main": [
         [
           {
-            "node": "10. Node 10",
+            "node": "HTTP: Backend Send Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP: Request Approval",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "10. Node 10": {
+    "HTTP: Request Approval": {
       "main": [
         [
           {
-            "node": "11. Node 11",
+            "node": "Code: Finalize Workflow Result",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "11. Node 11": {
+    "HTTP: Backend Send Message": {
       "main": [
         [
           {
-            "node": "12. Node 12",
+            "node": "Code: Finalize Workflow Result",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "12. Node 12": {
-      "main": [
-        [
-          {
-            "node": "13. Node 13",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "13. Node 13": {
-      "main": [
-        [
-          {
-            "node": "14. Node 14",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "14. Node 14": {
-      "main": [
-        [
-          {
-            "node": "15. Node 15",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "15. Node 15": {
-      "main": [
-        [
-          {
-            "node": "16. Node 16",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "16. Node 16": {
-      "main": [
-        [
-          {
-            "node": "17. Node 17",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "17. Node 17": {
-      "main": [
-        [
-          {
-            "node": "18. Node 18",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Code: Finalize Workflow Result": {
+      "main": []
     }
   },
-  "active": false,
-  "settings": {}
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "wf13-renewal-20261112",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "nodeGroups": [],
+  "tags": []
 }

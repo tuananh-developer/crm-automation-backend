@@ -8,38 +8,70 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import {
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { RenewalService } from './renewal.service.js';
 import type { RenewalDraft } from './entities/renewal-draft.entity.js';
 
-@Controller('renewal')
+/**
+ * Canonical internal routes: /api/v1/internal/n8n/renewal/...
+ * Protected by N8nAuthGuard; browsers never call this directly.
+ */
+@ApiTags('Internal n8n - WF13 Renewal Management')
+@Controller('internal/n8n/renewal')
 @UseGuards(N8nAuthGuard)
 export class RenewalController {
   constructor(private readonly renewalService: RenewalService) {}
 
   @Get('contracts')
+  @ApiOperation({ summary: 'List contracts due for renewal within a window' })
+  @ApiQuery({ name: 'days', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Contracts found.' })
   async getRenewalContracts(@Query('days') days?: string) {
     const d = days ? parseInt(days, 10) : 30;
     return this.renewalService.findRenewalContracts(d);
   }
 
   @Get('contracts/:id')
+  @ApiOperation({ summary: 'Get a contract by ID' })
+  @ApiParam({ name: 'id', description: 'Contract UUID' })
+  @ApiResponse({ status: 200, description: 'Contract found.' })
+  @ApiResponse({ status: 404, description: 'Contract not found.' })
   async getContract(@Param('id', ParseUUIDPipe) id: string) {
     return this.renewalService.getContract(id);
   }
 
   @Post('urgency')
-  calculateUrgency(@Body() body: { renewalDate: string }) {
+  @ApiOperation({ summary: 'Compute renewal urgency from a date' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { renewalDate: { type: 'string', format: 'date-time' } },
+    },
+  })
+  calculateUrgency(@Body() body: { renewalDate?: string }) {
     return this.renewalService.calculateUrgency(
       body.renewalDate ? new Date(body.renewalDate) : null,
     );
   }
 
   @Post('drafts')
+  @ApiOperation({ summary: 'Create or update a renewal draft' })
+  @ApiBody({ type: Object, description: 'Partial renewal draft fields' })
   async saveDraft(@Body() body: Partial<RenewalDraft>) {
     return this.renewalService.saveDraft(body);
   }
+
   @Post('validate-draft')
+  @ApiOperation({ summary: 'Validate a renewal draft payload' })
+  @ApiBody({ schema: { type: 'object' } })
   validateDraft(@Body() body: Record<string, unknown>) {
     const required = ['contractId', 'customerId', 'renewalDate'];
     const missing = required.filter((k) => !(k in body));
@@ -56,24 +88,27 @@ export class RenewalController {
   }
 
   @Post('check-eligibility')
-  checkEligibility(@Body() body: Record<string, unknown>) {
+  @ApiOperation({ summary: 'Check whether a renewal can be auto-sent' })
+  @ApiBody({ schema: { type: 'object' } })
+  async checkEligibility(@Body() body: Record<string, unknown>) {
     const b2 = body as {
+      contractId?: string;
+      customerId?: string;
+      draftId?: string;
       hasConsent?: boolean;
       hasTemplate?: boolean;
       policyAllows?: boolean;
       needsApproval?: boolean;
     };
-    const hasConsent = b2.hasConsent === true;
-    const hasTemplate = b2.hasTemplate === true;
-    const policyAllows = b2.policyAllows === true;
-    const needsApproval = b2.needsApproval === true;
-    const canAutoSend =
-      hasConsent && hasTemplate && policyAllows && !needsApproval;
-    let reason = 'OK';
-    if (!hasConsent) reason = 'MISSING_CONSENT';
-    else if (!hasTemplate) reason = 'INVALID_TEMPLATE';
-    else if (!policyAllows) reason = 'POLICY_DENIED';
-    else if (needsApproval) reason = 'APPROVAL_REQUIRED';
-    return { canAutoSend, reason };
+
+    return this.renewalService.checkEligibility({
+      contractId: String(b2.contractId ?? ''),
+      customerId: String(b2.customerId ?? ''),
+      draftId: b2.draftId,
+      hasConsent: b2.hasConsent,
+      hasTemplate: b2.hasTemplate,
+      policyAllows: b2.policyAllows,
+      needsApproval: b2.needsApproval,
+    });
   }
 }
