@@ -147,7 +147,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { meetingId: $json.meetingId, workflowRunId: $json.workflowRunId, sourceType: $json.sourceType, transcript: $json.redactedTranscript, redactionMode: $json.redactionMode, idempotencyKey: $json.idempotencyKey } }}"
+        "jsonBody": "={{ { meetingId: $json.meetingId, workflowRunId: $json.workflowRunId, sourceType: $json.sourceType, transcript: $json.redactedTranscript, redactionMode: $json.redactionMode, idempotencyKey: $json.idempotencyKey, n8nExecutionId: String($exec.id) } }}"
       },
       "id": "c65f2180-d355-49d7-b349-c4875a9bd440",
       "name": "HTTP Request: Save Redacted Meeting Transcript",
@@ -166,7 +166,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/sales-meetings/' + $node['Code: Validate Meeting Input'].json.meetingId + '/context' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/sales-meetings/' + $node['Code: Validate Meeting Input'].json.meetingId + '/context?n8nExecutionId=' + String($exec.id) }}",
         "options": {
           "timeout": 20000
         },
@@ -201,7 +201,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const input=$input.first().json;\nconst transcript=$node['HTTP Request: Save Redacted Meeting Transcript'].json;\nconst meeting=$node['HTTP Request: Get CRM Attendee Context'].json;\nconst context={meeting:meeting.data||meeting,transcriptId:transcript.id||transcript.data?.id||null,redactedTranscript:input.redactedTranscript,meetingPurpose:input.meetingPurpose,attendeeIds:input.attendeeIds};\nconst prompt=`Analyze this authorized sales meeting transcript. Use only statements supported by the transcript and CRM context. Do not invent commitments, owners, deadlines, prices or customer facts. Return JSON only: {\"summary\":\"...\",\"decisions\":[{\"text\":\"...\",\"evidence\":\"...\"}],\"risks\":[{\"text\":\"...\",\"evidence\":\"...\",\"confidence\":0.0}],\"actionItems\":[{\"title\":\"...\",\"description\":\"...\",\"ownerAttendeeId\":null,\"dueDate\":null,\"evidence\":\"...\",\"confidence\":0.0,\"requiresConfirmation\":true}]}. If owner or due date was not explicit, use null and requiresConfirmation=true.\\nCONTEXT=${JSON.stringify(context)}`;\nreturn [{json:{...input,context,prompt}}];"
+        "jsCode": "const input=$input.first().json;\nconst transcript=$node['HTTP Request: Save Redacted Meeting Transcript'].json;\nconst meetingResponse=$node['HTTP Request: Get CRM Attendee Context'].json;\nconst meeting=meetingResponse.data||meetingResponse;\nconst redactedTranscript=transcript.redactedTranscript;\nif(typeof redactedTranscript!=='string'||redactedTranscript.trim().length<20)throw new Error('Backend-redacted transcript is missing');\nconst safeMeetingPurpose=String(meeting.meeting?.meetingPurpose||input.meetingPurpose||'')\n  .normalize('NFKC')\n  .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi,'[REDACTED_EMAIL]')\n  .replace(/(?:\\+?\\d[\\d .()\\-]{7,}\\d)/g,'[REDACTED_PHONE]')\n  .replace(/((?:full\\s+name|customer\\s+name|contact(?:\\s+person)?|attendee|name|họ\\s+tên|người\\s+liên\\s+hệ)\\s*[:=]\\s*)[^\\n,;.!?]{2,100}/giu,'$1[REDACTED_PERSON]')\n  .replace(/((?:residential\\s+address|office\\s+address|shipping\\s+address|address|địa\\s+chỉ|nơi\\s+ở)\\s*[:=]?\\s*)[^\\n;.!?]{4,150}/giu,'$1[REDACTED_ADDRESS]')\n  .replace(/\\b\\d{1,6}\\s+[\\p{L}\\d.'-]+(?:\\s+[\\p{L}\\d.'-]+){0,4}\\s+(?:street|st\\.?|road|rd\\.?|avenue|ave\\.?|lane|ln\\.?|boulevard|blvd\\.?)\\b[^,\\n;]*/giu,'[REDACTED_ADDRESS]')\n  .replace(/(?:số\\s+\\d{1,6}\\s*,?\\s*)?(?:đường|phố|ngõ|hẻm)\\s+[\\p{L}\\d .'-]{2,60}/giu,'[REDACTED_ADDRESS]')\n  .replace(/\\b(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret|mật khẩu)\\s*[:=]\\s*[\"']?[^\\s,\"';]+/giu,'$1=[REDACTED_SECRET]');\nconst meetingId=meeting.meeting?.id;\nconst workflowRunId=meeting.meeting?.workflowRunId||transcript.workflowRunId;\nconst transcriptId=transcript.id||transcript.data?.id||null;\nconst attendeeIds=(meeting.attendees||[]).map(a=>a.id).filter(Boolean);\nif(!meetingId||!workflowRunId||!transcriptId)throw new Error('Backend meeting, WorkflowRun and transcript references are required');\nconst meetingMetadata={\n  meetingPurpose:safeMeetingPurpose.slice(0,500),\n  scheduledAt:meeting.meeting?.scheduledAt||null\n};\nconst context={\n  meeting:meetingMetadata,\n  lead:meeting.lead?{\n    companyName:meeting.lead.companyName||null,\n    companyWebsite:meeting.lead.companyWebsite||null,\n    jobTitle:meeting.lead.jobTitle||null\n  }:null,\n  customer:meeting.customer?{\n    companyName:meeting.customer.companyName||null,\n    companyWebsite:meeting.customer.companyWebsite||null,\n    jobTitle:meeting.customer.jobTitle||null\n  }:null,\n  attendees:(meeting.attendees||[]).map(a=>({id:a.id,role:a.role})),\n  transcriptId,\n  redactedTranscript\n};\nconst prompt=`Analyze this sales meeting transcript after backend PII minimization. Use only statements supported by the transcript and non-identifying CRM context. Do not invent commitments, owners, deadlines, prices or customer facts. Return JSON only: {\"summary\":\"...\",\"decisions\":[{\"text\":\"...\",\"evidence\":\"...\"}],\"risks\":[{\"text\":\"...\",\"evidence\":\"...\",\"confidence\":0.0}],\"actionItems\":[{\"title\":\"...\",\"description\":\"...\",\"ownerAttendeeId\":null,\"dueDate\":null,\"evidence\":\"...\",\"confidence\":0.0,\"requiresConfirmation\":true}]}. If owner or due date was not explicit, use null and requiresConfirmation=true.\nCONTEXT=${JSON.stringify(context)}`;\nreturn [{json:{...input,meetingId,workflowRunId,transcriptId,attendeeIds,meetingPurpose:safeMeetingPurpose,context,prompt}}];"
       },
       "id": "f0695d58-b156-492c-bcd6-319c41eb4218",
       "name": "Code: Build Meeting Prompt",
@@ -290,7 +290,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $json.workflowRunId, transcriptId: $json.transcriptId, summary: $json.meetingAnalysis.summary, decisions: $json.meetingAnalysis.decisions, risks: $json.meetingAnalysis.risks, idempotencyKey: $json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $json.workflowRunId , n8nExecutionId: String($exec.id), transcriptId: $json.transcriptId, summary: $json.meetingAnalysis.summary, decisions: $json.meetingAnalysis.decisions, risks: $json.meetingAnalysis.risks, idempotencyKey: $json.workflowRunId } }}"
       },
       "id": "f4533007-7404-4b7c-bd4d-3c1be4e40def",
       "name": "HTTP Request: Save Meeting Summary",
@@ -332,7 +332,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId, actionItems: $node['Code: Parse and Validate Meeting Output'].json.meetingAnalysis.actionItems, idempotencyKey: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId , n8nExecutionId: String($exec.id), actionItems: $node['Code: Parse and Validate Meeting Output'].json.meetingAnalysis.actionItems, idempotencyKey: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId } }}"
       },
       "id": "a1c6b578-2514-4673-a98a-eb6de7d0dfdb",
       "name": "HTTP Request: Save Meeting Action Items",
@@ -372,7 +372,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId, meetingId: $node['Code: Parse and Validate Meeting Output'].json.meetingId, summaryId: $node['HTTP Request: Save Meeting Summary'].json.id || $node['HTTP Request: Save Meeting Summary'].json.data?.id, attendeeIds: $node['Code: Parse and Validate Meeting Output'].json.attendeeIds, idempotencyKey: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId , n8nExecutionId: String($exec.id), meetingId: $node['Code: Parse and Validate Meeting Output'].json.meetingId, summaryId: $node['HTTP Request: Save Meeting Summary'].json.id || $node['HTTP Request: Save Meeting Summary'].json.data?.id, attendeeIds: $node['Code: Parse and Validate Meeting Output'].json.attendeeIds, idempotencyKey: $node['Code: Parse and Validate Meeting Output'].json.workflowRunId } }}"
       },
       "id": "4aed7fd9-438b-4b57-ae89-a756ce9bde9c",
       "name": "HTTP Request: Notify Owner and Attendees",
@@ -401,60 +401,6 @@
         2720,
         340
       ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/workflow-executions/claim' }}",
-        "options": {
-          "timeout": 20000
-        },
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Accept",
-              "value": "application/json"
-            },
-            {
-              "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY }}"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: ($json.body || $json).workflowRunId, workflowName: 'T12-WF11_SALES_MEETING', n8nExecutionId: String($exec.id) } }}"
-      },
-      "id": "a1100000-0000-4000-8000-000000000110",
-      "name": "HTTP Request: Claim Workflow Execution",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [
-        320,
-        160
-      ],
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 1000,
-      "notes": "Atomically claims this WorkflowRun before transcript/AI processing. A duplicate n8n execution receives claimed=false and is stopped by the next node.",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const claim = $input.first()?.json ?? {};\nif (claim.claimed !== true) {\n  return [];\n}\nreturn [{ json: $('Webhook Trigger').first().json }];"
-      },
-      "id": "a1100000-0000-4000-8000-000000000111",
-      "name": "Code: Stop Duplicate Execution",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        560,
-        160
-      ],
-      "notes": "Only the execution that atomically claimed the WorkflowRun may continue.",
-      "notesInFlow": true
     }
   ],
   "connections": {
@@ -462,7 +408,7 @@
       "main": [
         [
           {
-            "node": "HTTP Request: Claim Workflow Execution",
+            "node": "Code: Validate Meeting Input",
             "type": "main",
             "index": 0
           }
@@ -578,28 +524,6 @@
           }
         ]
       ]
-    },
-    "HTTP Request: Claim Workflow Execution": {
-      "main": [
-        [
-          {
-            "node": "Code: Stop Duplicate Execution",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code: Stop Duplicate Execution": {
-      "main": [
-        [
-          {
-            "node": "Code: Validate Meeting Input",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
     }
   },
   "settings": {
@@ -613,5 +537,5 @@
     "templateCredsSetupCompleted": false
   },
   "tags": [],
-  "description": "Owner: Tuấn Anh. Protected internal webhook. Transcript is minimized before AI. Summary/action-item/notification APIs require backend contract completion where marked provisional."
+  "description": "Owner: Tuấn Anh. Protected internal webhook. Transcript is minimized before AI. Summary/action-item/notification APIs require backend contract completion where marked provisional. The transcript persistence transaction atomically claims the WorkflowRun using the current n8n execution ID. A competing execution is rejected before AI processing. The graph has exactly 12 functional nodes."
 }

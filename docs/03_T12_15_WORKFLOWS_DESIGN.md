@@ -41,7 +41,7 @@ Each owner is accountable for five workflow deliverables. Each workflow is speci
 ## 3. Shared architecture rules
 
 1. **Do not make every workflow start with RabbitMQ.** Use the trigger appropriate to the event: RabbitMQ Trigger for genuinely asynchronous domain events, Webhook Trigger for explicit API/UI requests, and Schedule Trigger for periodic scans. RabbitMQ Trigger is technically a trigger; the goal is to avoid using RabbitMQ as the default for unrelated flows.
-2. **Email delivery belongs in NestJS.** n8n may prepare/validate a message and call the project's backend Communication API. It must not send email directly through an SMTP node. Use the canonical Communication API in `07_API_CONTRACT.md`; its contract and tests are part of the completed system.
+2. **Email delivery belongs in NestJS.** n8n must not send email directly through SMTP or hold SMTP credentials. For UC06, NestJS owns recipient resolution, template rendering, persistence of the execution message payload, delivery idempotency, SMTP transport and authoritative delivery state. n8n forwards the persisted execution identity to the internal Communication endpoint and returns its result. This UC06 route is not a generic messaging API: other workflow owners must agree on a separate endpoint and contract before integrating message delivery; they must not assume this UC06 route accepts arbitrary recipients or message content.
 3. NestJS remains the source of truth for business validation, authorization, transactional mutations, persistence, and Audit Logs. n8n orchestrates APIs, AI providers, scheduling and decisions.
 4. Use `WorkflowRun`, `AuditLog`, `Lead`, `Customer`, `Interaction`, `ReviewTask`, `FollowUpExecution`, `Segment` and `CustomerSegment` only where their semantics fit. `ReviewTask` is for explicit review/approval, not a generic operational follow-up task. `CustomerTask` is an operational-task capability for WF06/WF14/WF15; implement the agreed `CustomerTask` domain/API contract as part of the completed product.
 5. External systems that are not configured for the completed deployment (email inboxes, chats, orders, tickets, call recordings, product catalogs, contracts) use a clearly marked adapter/mock until a real integration is configured and tested. Never label mock data as live external data.
@@ -104,18 +104,22 @@ Each owner is accountable for five workflow deliverables. Each workflow is speci
 ### T12-WF04 — AI CRM Follow-up Agent
 **Owner:** Trọng. **Related UCs:** UC05 and UC06.
 
-1. **RabbitMQ Trigger** — consume the single primary `lead.follow_up.triggered` event for one due execution. NestJS publishes after validating/scheduling the job; do not also start the same execution through a parallel webhook path.
+The numbered flow below documents the end-to-end responsibility stages; backend-owned stages are not n8n nodes. The final exported WF04 graph must still meet the repository's 12-functional-node acceptance criterion without duplicating backend-owned business rules. Trọng remains responsible for the final graph and runtime evidence.
+
+1. **Webhook Trigger** — receive the protected internal request from NestJS for a persisted `FollowUpExecution`. NestJS creates or claims the execution before invoking this webhook and waits for its synchronous response. Do not also trigger the same execution through RabbitMQ; this UC06 flow has no asynchronous delivery-result callback.
 2. **Code: Validate Execution Request** — validate execution, enrollment, step, channel and correlation IDs.
-3. **HTTP Request: Get Follow-up Context** — fetch the authoritative enrollment, Lead and step from NestJS.
-4. **Code: Check Eligibility** — verify active enrollment, due time, current step and duplicate-execution safeguards.
-5. **Code: Render Message Payload** — prepare recipient, subject and content from approved templates.
-6. **HTTP Request: Backend Send Message** — call the NestJS Communication API; actual email/SMTP delivery stays in backend.
-7. **Code: Normalize Delivery Result** — map success, retryable failure and permanent failure.
-8. **HTTP Request: Execution Callback** — send the result to the follow-up callback API.
-9. **Code: Prepare Execution Outcome** — retain canonical delivery status, correlation ID and idempotency key for the next decision.
-10. **IF: Delivery Succeeded?** — branch only on the authoritative delivery outcome returned by the Communication API/backend.
-11. **HTTP Request: Backend Advance/Complete (success branch)** — advance the step or complete the enrollment transactionally only after confirmed delivery.
-12. **HTTP Request: Backend Handle Delivery Failure (failure branch)** — backend applies bounded retry to retryable failures or records terminal failure; never advance a failed/unknown delivery.
+3. **Backend-owned: Load Follow-up Context** — `FollowUpService` loads the authoritative enrollment, Lead and step before dispatch.
+4. **Backend-owned: Check Eligibility** — NestJS verifies enrollment status, active step, due time and duplicate-execution safeguards before dispatch.
+5. **Backend-owned: Render Message Payload (not an n8n node)** — `FollowUpService` resolves the step templates, renders the recipient/subject/message and persists them in `FollowUpExecution.requestPayload` before workflow dispatch.
+6. **HTTP Request: Backend Send Message** — call `POST /api/v1/internal/communication/follow-ups/:executionId/send` with an empty body, `X-N8N-API-KEY` service authentication and `Idempotency-Key` equal to `executionId`.
+7. **Backend-owned: Claim and Deliver** — `CommunicationService` loads the persisted payload, claims the idempotent delivery and sends through the backend-configured SMTP transport; it persists the authoritative delivery state.
+8. **Webhook Response: Return Delivery Result** — return the backend `DeliveryResult` through the original workflow response; do not call a separate delivery-callback endpoint.
+9. **Backend-owned: Persist Execution Outcome** — `FollowUpService` consumes the returned delivery result and owns the execution status, bounded retry and advancement decision.
+10. **Backend-owned: Evaluate Delivery Outcome** — `FollowUpService` treats only a confirmed `SENT` result as success; an `UNKNOWN` result is not a safe retry signal.
+11. **Backend-owned: Advance/Complete** — `FollowUpService` advances the step or completes the enrollment transactionally only after confirmed delivery.
+12. **Backend-owned: Handle Delivery Failure** — `FollowUpService` applies bounded retries to definite retryable failures or records terminal failure; it does not blindly resend `UNKNOWN` deliveries.
+
+**PR #72 implementation boundary for UC06:** `FollowUpService` resolves the `FollowUpStep` templates, renders the recipient/subject/message and persists them in `FollowUpExecution.requestPayload` before dispatch. The n8n send handoff supplies only `executionId`; it calls `POST /api/v1/internal/communication/follow-ups/:executionId/send` with no message body and an `Idempotency-Key` equal to that ID. `CommunicationService` loads the persisted payload, owns SMTP delivery and persists `CommunicationDelivery`; the result returns through the original n8n webhook response and is consumed by `FollowUpService`. There is no separate delivery-callback route in this implementation. The previous n8n-side message-rendering step is therefore superseded. This backend change does not transfer WF04 ownership: **Trọng remains accountable for the final WF04 export, exactly 12 real functional n8n nodes, import/runtime evidence and workflow acceptance**. Backend stages described here do not count toward the n8n node total.
 
 ### T12-WF05 — AI Customer 360 Agent
 **Owner:** Trường Linh. **Workflow export:** `t12-wf05-customer-360.json`.

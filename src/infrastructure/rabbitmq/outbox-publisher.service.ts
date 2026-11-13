@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { assertUrlUsesScheme } from '../../config/environment.validation.js';
 import { Interval } from '@nestjs/schedule';
 import { DataSource } from 'typeorm';
 import { WorkflowRun } from '../../modules/workflow/entities/workflow-run.entity.js';
@@ -123,12 +124,11 @@ export class OutboxPublisher {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const retryDelaysMs = [60_000, 5 * 60_000, 15 * 60_000] as const;
       const terminal =
-        error instanceof PermanentOutboxError || event.attempts >= 10;
-      const delay = Math.min(
-        60_000 * 2 ** Math.min(event.attempts - 1, 6),
-        3_600_000,
-      );
+        error instanceof PermanentOutboxError || event.attempts >= 4;
+      const retryDelayMs =
+        retryDelaysMs[Math.min(Math.max(event.attempts - 1, 0), retryDelaysMs.length - 1)];
       await this.dataSource.transaction(async (manager) => {
         const updated = await manager.getRepository(OutboxEvent).update(
           { id: event.id, lockToken: event.lockToken },
@@ -137,7 +137,7 @@ export class OutboxPublisher {
               ? OutboxEventStatus.FAILED
               : OutboxEventStatus.PENDING,
             lastError: message.slice(0, 4000),
-            nextAttemptAt: terminal ? null : new Date(Date.now() + delay),
+            nextAttemptAt: terminal ? null : new Date(Date.now() + retryDelayMs),
             lockedUntil: null,
             lockToken: null,
           },
@@ -214,6 +214,32 @@ export class OutboxPublisher {
       throw new PermanentOutboxError(
         `Neither ${event.destination} nor N8N_BASE_URL is configured`,
       );
+    }
+
+    const nodeEnv = (
+      this.config.get<string>('NODE_ENV') || process.env.NODE_ENV || ''
+    )
+      .trim()
+      .toLowerCase();
+    if (nodeEnv === 'production') {
+      try {
+        assertUrlUsesScheme(url, 'https:', event.destination);
+      } catch (error) {
+        throw new PermanentOutboxError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+
+      if (
+        typeof event.payload.transcript === 'string' &&
+        (this.config.get<string>('TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED') || '')
+          .trim()
+          .toLowerCase() !== 'true'
+      ) {
+        throw new PermanentOutboxError(
+          'External transcript processing is disabled by production policy',
+        );
+      }
     }
 
     let response: Response;
