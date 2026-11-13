@@ -215,15 +215,11 @@ export class ConversationsService {
       .update(safeTranscript)
       .digest('hex');
 
-    // Deterministic client key: prefer explicitly passed key; fallback to event-scoped content hash so repeated submissions without key are replay-safe without colliding across distinct meetings/entities
-    const fallbackScope = [
-      dto.meetingId || 'no-meeting',
-      dto.customerId || 'no-customer',
-      dto.leadId || 'no-lead',
-      dto.sourceType || 'CALL',
-      contentHash,
-    ].join(':');
-    const clientKey = dto.idempotencyKey?.trim() || `content:${fallbackScope}`;
+    // Deterministic client key: prefer explicitly passed key; fallback to meeting-scoped content hash (<= 159 chars, within varchar(180)) so repeated submissions without key are replay-safe without colliding across distinct meetings
+    const scopeKey = dto.meetingId
+      ? `meeting:${dto.meetingId}:content:${contentHash}`
+      : `content:${contentHash}`;
+    const clientKey = dto.idempotencyKey?.trim() || scopeKey;
     const idempotencyKey = `wf09:${user.id}:${clientKey}`;
 
     const inputPayload = {

@@ -1282,7 +1282,7 @@ describe('ConversationsService', () => {
       const existingRun = {
         id: 'run-hash-1',
         workflowName: 't12-wf09-conversation-summarizer',
-        idempotencyKey: `wf09:${mockSalesUser1.id}:content:no-meeting:customer-1:no-lead:CALL:${contentHash}`,
+        idempotencyKey: `wf09:${mockSalesUser1.id}:content:${contentHash}`,
         status: WorkflowStatus.PENDING,
         inputPayload: expectedPayload,
         startedAt: new Date('2026-11-01T10:00:00.000Z'),
