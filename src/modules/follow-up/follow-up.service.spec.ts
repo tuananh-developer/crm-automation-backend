@@ -33,6 +33,7 @@ describe('FollowUpService', () => {
   let auditLogRepository: jest.Mocked<Partial<Repository<AuditLog>>>;
   let n8nClientService: jest.Mocked<Partial<N8nClientService>>;
   let configService: jest.Mocked<Partial<ConfigService>>;
+  let persistedExecution: FollowUpExecution | null;
 
   const env: Record<string, number | string> = {
     FOLLOW_UP_MAX_RETRIES: 2,
@@ -104,6 +105,7 @@ describe('FollowUpService', () => {
   const dto = { enrollmentId: 'enrollment-1' };
 
   beforeEach(() => {
+    persistedExecution = null;
     enrollmentsRepository = {
       findOne: jest.fn(),
       save: jest.fn(),
@@ -125,6 +127,7 @@ describe('FollowUpService', () => {
       save: jest.fn(),
       find: jest.fn(),
       findAndCount: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
     };
 
     leadsRepository = {
@@ -156,10 +159,29 @@ describe('FollowUpService', () => {
       (enrollment: LeadFollowUpEnrollment) => Promise.resolve(enrollment),
     );
 
+    (executionsRepository.save as jest.Mock).mockImplementation(
+      (execution: FollowUpExecution) => Promise.resolve(execution),
+    );
+
+    const executionTransactionRepository = {
+      ...executionsRepository,
+      findOne: jest.fn((options: { lock?: unknown }) =>
+        options?.lock
+          ? Promise.resolve(persistedExecution)
+          : (executionsRepository.findOne as jest.Mock)(),
+      ),
+      save: jest.fn(async (execution: FollowUpExecution) => {
+        const saved = await (executionsRepository.save as jest.Mock)(execution);
+        persistedExecution = saved as FollowUpExecution;
+        return saved;
+      }),
+      update: executionsRepository.update,
+    };
+
     const transactionManager = {
       getRepository: jest.fn((entity: unknown) => {
         if (entity === FollowUpExecution) {
-          return executionsRepository;
+          return executionTransactionRepository;
         }
         if (entity === LeadFollowUpEnrollment) {
           return enrollmentsRepository;
@@ -223,6 +245,55 @@ describe('FollowUpService', () => {
       );
     });
 
+    it('should persist unsupported legacy steps as SKIPPED without calling n8n', async () => {
+      const unsupportedStep = buildStep({
+        channel: 'PHONE',
+        actionType: 'SCHEDULE_CALL',
+      });
+      (stepsRepository.findOne as jest.Mock)
+        .mockReset()
+        .mockResolvedValueOnce(unsupportedStep)
+        .mockResolvedValueOnce(
+          buildStep({ id: 'step-2', stepOrder: 2 }),
+        );
+
+      const result = await service.execute(dto);
+
+      expect(result.status).toBe(ExecutionStatus.SKIPPED);
+      expect(result.message).toContain('Only EMAIL/SEND_EMAIL is currently available');
+      expect(n8nClientService.triggerWebhook).not.toHaveBeenCalled();
+      expect(executionsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: ExecutionStatus.SKIPPED,
+          errorMessage: expect.stringContaining('PHONE/SCHEDULE_CALL'),
+          responsePayload: expect.objectContaining({
+            code: 'FOLLOW_UP_ACTION_UNSUPPORTED',
+          }),
+        }),
+      );
+      expect(executionsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enrollmentId: 'enrollment-1',
+          stepId: 'step-2',
+          status: ExecutionStatus.PENDING,
+        }),
+      );
+      expect(enrollmentsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentStepId: 'step-2',
+          status: EnrollmentStatus.ACTIVE,
+        }),
+      );
+      expect(auditLogRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'FOLLOW_UP_SKIPPED',
+          metadata: expect.objectContaining({
+            reason: 'FOLLOW_UP_ACTION_UNSUPPORTED',
+          }),
+        }),
+      );
+    });
+
     it('should execute the follow-up successfully and return execution, status, retryCount and message', async () => {
       // No further step in the sequence
       (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(null);
@@ -236,11 +307,11 @@ describe('FollowUpService', () => {
       expect(result.message).toContain('executed successfully');
       expect(n8nClientService.triggerWebhook).toHaveBeenCalledWith(
         'follow-up-execute',
-        expect.objectContaining({
+        {
+          executionId: 'execution-1',
           enrollmentId: 'enrollment-1',
           stepId: 'step-1',
-          channel: 'EMAIL',
-        }),
+        },
       );
     });
 
@@ -251,14 +322,11 @@ describe('FollowUpService', () => {
 
       expect(n8nClientService.triggerWebhook).toHaveBeenCalledWith(
         'follow-up-execute',
-        expect.objectContaining({
+        {
           executionId: 'execution-1',
-          recipient: 'john.doe@example.com',
-          subject: 'Trao đổi về Acme Corp',
-          message:
-            'Xin chào John,\nchúng tôi muốn trao đổi thêm với bạn về nhu cầu của Acme Corp.',
-          attempt: 1,
-        }),
+          enrollmentId: 'enrollment-1',
+          stepId: 'step-1',
+        },
       );
     });
 
@@ -289,6 +357,66 @@ describe('FollowUpService', () => {
           providerMessageId: 'provider-msg-1',
           responsePayload: expect.objectContaining({ success: true }),
         }),
+      );
+    });
+
+    it('should preserve PAUSED when an in-flight delivery succeeds', async () => {
+      const enrollment = buildEnrollment({ lead: buildLead() });
+      const nextStep = buildStep({ id: 'step-2', stepOrder: 2 });
+      (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(enrollment);
+      // The enclosing describe already queues the initial enrollment step.
+      (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(nextStep);
+      (executionsRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (n8nClientService.triggerWebhook as jest.Mock).mockImplementation(
+        async () => {
+          await service.pauseEnrollment('enrollment-1', { reason: 'operator pause' });
+          return {
+            success: true,
+            providerMessageId: 'provider-msg-1',
+          };
+        },
+      );
+
+      const result = await service.execute(dto);
+
+      expect(result.status).toBe(ExecutionStatus.SUCCESS);
+      expect(enrollment.status).toBe(EnrollmentStatus.PAUSED);
+      expect(enrollment.currentStepId).toBe('step-2');
+      expect(executionsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enrollmentId: 'enrollment-1',
+          stepId: 'step-2',
+          status: ExecutionStatus.PENDING,
+        }),
+      );
+    });
+
+    it('should not schedule another step when an in-flight delivery succeeds after cancellation', async () => {
+      const enrollment = buildEnrollment({ lead: buildLead() });
+      (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(enrollment);
+      (stepsRepository.findOne as jest.Mock).mockResolvedValueOnce(buildStep());
+      (executionsRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (n8nClientService.triggerWebhook as jest.Mock).mockImplementation(
+        async () => {
+          await service.cancelEnrollment('enrollment-1', { reason: 'customer opted out' });
+          return {
+            success: true,
+            providerMessageId: 'provider-msg-1',
+          };
+        },
+      );
+
+      const result = await service.execute(dto);
+
+      expect(result.status).toBe(ExecutionStatus.SUCCESS);
+      expect(enrollment.status).toBe(EnrollmentStatus.CANCELLED);
+      expect(executionsRepository.create).toHaveBeenCalledTimes(1);
+      expect(executionsRepository.update).toHaveBeenCalledWith(
+        {
+          enrollmentId: 'enrollment-1',
+          status: expect.anything(),
+        },
+        expect.objectContaining({ status: ExecutionStatus.SKIPPED }),
       );
     });
 
@@ -404,8 +532,10 @@ describe('FollowUpService', () => {
       expect(result.message).toContain('Retry 1/2');
 
       expect(persistedStatuses).toContain(ExecutionStatus.RUNNING);
-      expect(persistedStatuses).toContain(ExecutionStatus.FAILED);
+      // FAILED is an intermediate state within the transaction. When retry is
+      // scheduled, only the final RETRYING state is committed to PostgreSQL.
       expect(persistedStatuses).toContain(ExecutionStatus.RETRYING);
+      expect(persistedStatuses).not.toContain(ExecutionStatus.FAILED);
       expect(result.execution.scheduledAt).toBeInstanceOf(Date);
 
       expect(auditLogRepository.save).toHaveBeenCalledWith(
@@ -462,7 +592,11 @@ describe('FollowUpService', () => {
       expect(executionsRepository.create).not.toHaveBeenCalled();
       expect(n8nClientService.triggerWebhook).toHaveBeenCalledWith(
         'follow-up-execute',
-        expect.objectContaining({ attempt: 2 }),
+        {
+          executionId: 'execution-1',
+          enrollmentId: 'enrollment-1',
+          stepId: 'step-1',
+        },
       );
     });
 
@@ -546,12 +680,12 @@ describe('FollowUpService', () => {
       expect(n8nClientService.triggerWebhook).not.toHaveBeenCalled();
     });
 
-    it('should throw BadRequestException when the channel needs a phone number that the lead does not have', async () => {
+    it('should throw BadRequestException when the email channel needs an address that the lead does not have', async () => {
       (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(
-        buildEnrollment({ lead: buildLead({ phone: null }) }),
+        buildEnrollment({ lead: buildLead({ email: undefined }) }),
       );
       (stepsRepository.findOne as jest.Mock).mockResolvedValue(
-        buildStep({ channel: 'SMS' }),
+        buildStep({ channel: 'EMAIL', actionType: 'SEND_EMAIL' }),
       );
 
       await expect(service.execute(dto)).rejects.toThrow(BadRequestException);
@@ -682,6 +816,40 @@ describe('FollowUpService', () => {
   });
 
   describe('handleStaleRunningExecutions', () => {
+    it('should recheck locked state and schedule only one retry for a stale RUNNING execution', async () => {
+      const staleExecution = {
+        id: 'execution-stale',
+        enrollmentId: 'enrollment-1',
+        stepId: 'step-1',
+        status: ExecutionStatus.RUNNING,
+        retryCount: 0,
+        startedAt: new Date(Date.now() - 10 * 60_000),
+        completedAt: null,
+        errorMessage: null,
+      } as FollowUpExecution;
+      persistedExecution = staleExecution;
+      (executionsRepository.find as jest.Mock).mockResolvedValue([staleExecution]);
+      (enrollmentsRepository.findOne as jest.Mock).mockResolvedValue(
+        buildEnrollment(),
+      );
+      (stepsRepository.findOne as jest.Mock).mockResolvedValue(buildStep());
+
+      await service.handleStaleRunningExecutions();
+
+      expect(persistedExecution?.status).toBe(ExecutionStatus.RETRYING);
+      expect(persistedExecution?.retryCount).toBe(1);
+      expect(persistedExecution?.startedAt).toBeNull();
+      expect(auditLogRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'FOLLOW_UP_FAILED',
+          metadata: expect.objectContaining({
+            staleTimeout: true,
+            retryScheduled: true,
+          }),
+        }),
+      );
+    });
+
     it('should query stale RUNNING executions older than timeout threshold', async () => {
       (executionsRepository.find as jest.Mock).mockResolvedValue([]);
 
@@ -692,7 +860,9 @@ describe('FollowUpService', () => {
           where: expect.objectContaining({
             status: ExecutionStatus.RUNNING,
           }),
-          relations: { enrollment: { lead: true } },
+          select: { id: true, enrollmentId: true },
+          order: { startedAt: 'ASC' },
+          take: 50,
         }),
       );
     });

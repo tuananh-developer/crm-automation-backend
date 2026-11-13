@@ -2,13 +2,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 export const DEFAULT_N8N_WEBHOOK_BASE_URL = 'http://localhost:5678/webhook';
-export const DEFAULT_N8N_WEBHOOK_TIMEOUT_MS = 15000;
+export const DEFAULT_N8N_WEBHOOK_TIMEOUT_MS = 45000;
 
 export class N8nWebhookError extends Error {
   constructor(
     message: string,
     readonly statusCode: number | null,
     readonly responseBody: Record<string, any> | null,
+    readonly retryable = true,
   ) {
     super(message);
     this.name = 'N8nWebhookError';
@@ -40,13 +41,29 @@ export class N8nClientService {
       DEFAULT_N8N_WEBHOOK_TIMEOUT_MS,
     );
 
+    const secret =
+      this.configService.get<string>('N8N_API_KEY') ||
+      this.configService.get<string>('N8N_WEBHOOK_SECRET');
+    if (!secret) {
+      throw new N8nWebhookError(
+        'n8n webhook authentication secret is not configured',
+        null,
+        null,
+        false,
+      );
+    }
+
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), timeoutMs);
 
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        redirect: 'error',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-N8N-API-KEY': secret,
+        },
         body: JSON.stringify(payload),
         signal: abortController.signal,
       });
@@ -56,9 +73,11 @@ export class N8nClientService {
 
       if (!response.ok) {
         throw new N8nWebhookError(
-          `n8n webhook '${webhookPath}' responded with HTTP ${response.status}: ${this.extractErrorMessage(parsedBody) ?? bodyText}`,
+          `n8n webhook '${webhookPath}' failed with HTTP ${response.status}`,
           response.status,
           parsedBody,
+          response.status >= 500 ||
+            [408, 423, 425, 429].includes(response.status),
         );
       }
 
@@ -77,9 +96,8 @@ export class N8nClientService {
         );
       }
 
-      const message = error instanceof Error ? error.message : String(error);
       throw new N8nWebhookError(
-        `Failed to call n8n webhook '${webhookPath}': ${message}`,
+        `n8n webhook '${webhookPath}' request failed`,
         null,
         null,
       );
@@ -103,8 +121,4 @@ export class N8nClientService {
     }
   }
 
-  private extractErrorMessage(body: Record<string, any>): string | null {
-    const candidate: unknown = body?.error ?? body?.message;
-    return typeof candidate === 'string' && candidate.trim() ? candidate : null;
-  }
 }
