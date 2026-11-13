@@ -594,32 +594,39 @@ export class CustomersService {
 
     // 1. Transactional Outbox: persist WorkflowRun and durable OutboxEvent atomically
     const dispatcher = this.dispatcher ?? new N8nWorkflowDispatchService();
-    const keyPart = clientProvidedKey?.trim() || `customer:${customer.id}`;
-    const idempotencyKey = `wf05:${user.id}:${customer.id}:${keyPart}`;
+    const trimmedKey = clientProvidedKey?.trim();
+    if (clientProvidedKey !== undefined && !trimmedKey) {
+      throw new BadRequestException('Idempotency-Key header cannot be empty');
+    }
+    const idempotencyKey = trimmedKey
+      ? `wf05:${user.id}:${customer.id}:${trimmedKey}`
+      : null;
 
     let savedRun: WorkflowRun;
     if (this.dataSource) {
-      savedRun = await this.dataSource.transaction(async (manager) => {
-        const workflowRunsRepo = manager.getRepository(WorkflowRun);
+      try {
+        savedRun = await this.dataSource.transaction(async (manager) => {
+          const workflowRunsRepo = manager.getRepository(WorkflowRun);
 
-        // Lookup-and-return pattern: if key exists, return existing run
-        const existingRun = await workflowRunsRepo.findOne({
-          where: { idempotencyKey },
-        });
+          // Lookup-and-return pattern: if key exists, return existing run
+          if (idempotencyKey) {
+            const existingRun = await workflowRunsRepo.findOne({
+              where: { idempotencyKey },
+            });
 
-        if (existingRun) {
-          if (existingRun.workflowName !== 't12-wf05-customer-360') {
-            throw new ConflictException(
-              `Idempotency key is already used by another workflow: ${existingRun.workflowName}`,
-            );
+            if (existingRun) {
+              if (existingRun.workflowName !== 't12-wf05-customer-360') {
+                throw new ConflictException(
+                  `Idempotency key is already used by another workflow: ${existingRun.workflowName}`,
+                );
+              }
+              this.logger.log(
+                `Replaying existing WorkflowRun ${existingRun.id} for idempotencyKey=${idempotencyKey}`,
+              );
+              return existingRun;
+            }
           }
-          this.logger.log(
-            `Replaying existing WorkflowRun ${existingRun.id} for idempotencyKey=${idempotencyKey}`,
-          );
-          return existingRun;
-        }
 
-        try {
           const workflowRun = workflowRunsRepo.create({
             workflowName: 't12-wf05-customer-360',
             customerId: customer.id,
@@ -653,24 +660,37 @@ export class CustomersService {
           );
 
           return run;
-        } catch (error) {
-          if (!isPostgresUniqueViolation(error)) {
-            throw error;
-          }
-          const concurrentRun = await workflowRunsRepo.findOne({
-            where: { idempotencyKey },
-          });
-          if (!concurrentRun) {
-            throw error;
-          }
-          return concurrentRun;
+        });
+      } catch (error) {
+        if (!idempotencyKey || !isPostgresUniqueViolation(error)) {
+          throw error;
         }
-      });
+        // Lookup outside the rolled-back transaction to avoid PostgreSQL 25P02
+        const concurrentRun = await this.workflowRunsRepository.findOne({
+          where: { idempotencyKey },
+        });
+        if (!concurrentRun) {
+          throw error;
+        }
+        if (concurrentRun.workflowName !== 't12-wf05-customer-360') {
+          throw new ConflictException(
+            `Idempotency key is already used by another workflow: ${concurrentRun.workflowName}`,
+          );
+        }
+        savedRun = concurrentRun;
+      }
     } else {
-      const existingRun = await this.workflowRunsRepository.findOne({
-        where: { idempotencyKey },
-      });
+      const existingRun = idempotencyKey
+        ? await this.workflowRunsRepository.findOne({
+            where: { idempotencyKey },
+          })
+        : null;
       if (existingRun) {
+        if (existingRun.workflowName !== 't12-wf05-customer-360') {
+          throw new ConflictException(
+            `Idempotency key is already used by another workflow: ${existingRun.workflowName}`,
+          );
+        }
         savedRun = existingRun;
       } else {
         const workflowRun = this.workflowRunsRepository.create({
@@ -761,6 +781,16 @@ export class CustomersService {
         workflowRun.status === WorkflowStatus.RUNNING;
 
       if (!isActive) {
+        if (
+          workflowRun.n8nExecutionId &&
+          dto.n8nExecutionId &&
+          workflowRun.n8nExecutionId !== dto.n8nExecutionId
+        ) {
+          throw new ConflictException(
+            `Conflict: WorkflowRun '${workflowRun.id}' belongs to execution '${workflowRun.n8nExecutionId}', not '${dto.n8nExecutionId}'`,
+          );
+        }
+
         // Run has already concluded in a terminal state
         if (workflowRun.status !== targetStatus) {
           throw new ConflictException(
@@ -804,9 +834,29 @@ export class CustomersService {
         };
       }
 
+      if (workflowRun.n8nExecutionId) {
+        if (
+          !dto.n8nExecutionId ||
+          workflowRun.n8nExecutionId !== dto.n8nExecutionId
+        ) {
+          throw new ConflictException(
+            `Conflict: WorkflowRun '${workflowRun.id}' is claimed by execution '${workflowRun.n8nExecutionId}'`,
+          );
+        }
+        if (
+          workflowRun.claimExpiresAt &&
+          workflowRun.claimExpiresAt.getTime() <= Date.now()
+        ) {
+          throw new ConflictException(
+            `Conflict: WorkflowRun '${workflowRun.id}' lease has expired for execution '${workflowRun.n8nExecutionId}'`,
+          );
+        }
+      }
+
       // Transition from active state to terminal state
       workflowRun.status = targetStatus;
       workflowRun.finishedAt = new Date();
+      workflowRun.claimExpiresAt = null;
       workflowRun.errorMessage = dto.errorMessage ?? null;
       workflowRun.outputPayload = {
         summary: dto.summary ?? null,

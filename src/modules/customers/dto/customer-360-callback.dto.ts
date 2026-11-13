@@ -78,6 +78,13 @@ export class Customer360CallbackDto {
   @IsOptional()
   @IsString()
   errorMessage?: string;
+
+  @ApiPropertyOptional({
+    description: 'n8n execution ID used for claim fencing',
+  })
+  @IsOptional()
+  @IsString()
+  n8nExecutionId?: string;
 }
 
 export class Customer360CallbackResponseDto {

@@ -626,6 +626,62 @@ describe('CustomersService', () => {
 
       expect(dispatcherMock.enqueue).not.toHaveBeenCalled();
     });
+
+    it('creates distinct WorkflowRuns with null idempotencyKey when Idempotency-Key header is omitted', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      (workflowRunsRepository.create as jest.Mock)
+        .mockReturnValueOnce({
+          id: 'run-unkeyed-1',
+          customerId: 'customer-1',
+          idempotencyKey: null,
+        })
+        .mockReturnValueOnce({
+          id: 'run-unkeyed-2',
+          customerId: 'customer-1',
+          idempotencyKey: null,
+        });
+      (workflowRunsRepository.save as jest.Mock)
+        .mockResolvedValueOnce({
+          id: 'run-unkeyed-1',
+          customerId: 'customer-1',
+          idempotencyKey: null,
+        })
+        .mockResolvedValueOnce({
+          id: 'run-unkeyed-2',
+          customerId: 'customer-1',
+          idempotencyKey: null,
+        });
+
+      const first = await service.triggerCustomer360(
+        'customer-1',
+        mockSalesUser,
+      );
+      const second = await service.triggerCustomer360(
+        'customer-1',
+        mockSalesUser,
+      );
+
+      expect(first.workflowRunId).toBe('run-unkeyed-1');
+      expect(second.workflowRunId).toBe('run-unkeyed-2');
+      expect(workflowRunsRepository.findOne).not.toHaveBeenCalled();
+      expect(workflowRunsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ idempotencyKey: null }),
+      );
+      expect(dispatcherMock.enqueue).toHaveBeenCalledTimes(2);
+    });
+
+    it('throws BadRequestException when Idempotency-Key header is blank', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+
+      await expect(
+        service.triggerCustomer360('customer-1', mockSalesUser, '   '),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(dataSourceMock.transaction).not.toHaveBeenCalled();
+    });
   });
 
   describe('handleCustomer360Callback', () => {
@@ -655,6 +711,68 @@ describe('CustomersService', () => {
       expect(mockRun.outputPayload.summary).toBe(
         'Excellent enterprise profile',
       );
+    });
+
+    it('enforces n8nExecutionId fencing and clears claimExpiresAt on valid active lease callback', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockRun: any = {
+        id: 'run-claimed-1',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.RUNNING,
+        n8nExecutionId: 'exec-123',
+        claimExpiresAt: new Date(Date.now() + 60_000),
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(mockRun);
+      (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
+
+      await expect(
+        service.handleCustomer360Callback({
+          customerId: 'customer-1',
+          workflowRunId: 'run-claimed-1',
+          status: Customer360Status.SUCCESS,
+          summary: 'Stale execution',
+          n8nExecutionId: 'exec-other',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      const result = await service.handleCustomer360Callback({
+        customerId: 'customer-1',
+        workflowRunId: 'run-claimed-1',
+        status: Customer360Status.SUCCESS,
+        summary: 'Valid owner synthesis',
+        n8nExecutionId: 'exec-123',
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockRun.status).toBe(WorkflowStatus.SUCCESS);
+      expect(mockRun.claimExpiresAt).toBeNull();
+    });
+
+    it('rejects callback when WorkflowRun claim lease has expired', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue({
+        id: 'run-expired-1',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.RUNNING,
+        n8nExecutionId: 'exec-123',
+        claimExpiresAt: new Date(Date.now() - 10_000),
+      });
+
+      await expect(
+        service.handleCustomer360Callback({
+          customerId: 'customer-1',
+          workflowRunId: 'run-expired-1',
+          status: Customer360Status.SUCCESS,
+          summary: 'Expired lease synthesis',
+          n8nExecutionId: 'exec-123',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('rejects unknown workflowRunId without creating arbitrary runs', async () => {

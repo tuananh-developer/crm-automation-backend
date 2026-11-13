@@ -261,6 +261,37 @@
     },
     {
       "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/internal/n8n/workflow-executions/heartbeat' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { workflowRunId: $('Code: Validate Customer Request').first().json.workflowRunId, workflowName: 't12-wf05-customer-360', n8nExecutionId: String($exec.id) } }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "node-heartbeat-execution",
+      "name": "HTTP Request: Renew Execution Lease",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1970, 300],
+      "notes": "Renews the workflow execution lease before invoking Gemini AI synthesis."
+    },
+    {
+      "parameters": {
         "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-3.5-flash-lite') + ':generateContent' }}",
         "method": "POST",
         "sendHeaders": true,
@@ -319,7 +350,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json) }}",
+        "jsonBody": "={{ JSON.stringify({ ...$json, n8nExecutionId: String($exec.id) }) }}",
         "options": {
           "timeout": 15000
         }
@@ -436,6 +467,17 @@
       "main": [
         [
           {
+            "node": "HTTP Request: Renew Execution Lease",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Renew Execution Lease": {
+      "main": [
+        [
+          {
             "node": "Code: Merge Customer Timeline",
             "type": "main",
             "index": 0
@@ -478,6 +520,8 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "errorWorkflow": "T12 Shared Error Handler"
   }
 }

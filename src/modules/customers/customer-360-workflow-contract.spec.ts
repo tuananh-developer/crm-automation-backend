@@ -11,6 +11,7 @@ describe('T12-WF05 Customer 360 Workflow Contract', () => {
     name: string;
     nodes: Array<Record<string, any>>;
     connections: Record<string, any>;
+    settings?: Record<string, any>;
   };
 
   beforeAll(() => {
@@ -123,6 +124,31 @@ describe('T12-WF05 Customer 360 Workflow Contract', () => {
       const jsCode = mergeNode?.parameters?.jsCode || '';
       expect(jsCode).toContain('if (profileError || !profileRes?.id)');
       expect(jsCode).toContain('throw new Error');
+    });
+  });
+
+  describe('Lease Heartbeat, Fencing & Error Handler Recovery', () => {
+    it('renews execution lease before Gemini AI synthesis and passes n8nExecutionId in callback', () => {
+      const heartbeatNode = workflow.nodes.find(
+        (n) => n.name === 'HTTP Request: Renew Execution Lease',
+      );
+      expect(heartbeatNode).toBeDefined();
+      expect(heartbeatNode?.parameters?.url).toContain(
+        '/api/v1/internal/n8n/workflow-executions/heartbeat',
+      );
+      expect(heartbeatNode?.parameters?.jsonBody).toContain('n8nExecutionId:');
+
+      const saveSnapshotNode = workflow.nodes.find(
+        (n) => n.name === 'HTTP Request: Save Snapshot',
+      );
+      expect(saveSnapshotNode).toBeDefined();
+      expect(saveSnapshotNode?.parameters?.jsonBody).toContain(
+        'n8nExecutionId:',
+      );
+    });
+
+    it('configures T12 Shared Error Handler for workflow failure recovery', () => {
+      expect(workflow.settings?.errorWorkflow).toBe('T12 Shared Error Handler');
     });
   });
 });
