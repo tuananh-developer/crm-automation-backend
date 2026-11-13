@@ -159,6 +159,30 @@ export class EnrichmentController {
     return EnrichmentMapper.toResponseDtoList(records);
   }
 
+  @Get(['lead/:leadId/latest/internal', ':leadId/enrichments/latest/internal'])
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal endpoint to get latest enrichment for n8n workflows',
+  })
+  @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
+  @ApiResponse({
+    status: 200,
+    description: 'Latest enrichment result details.',
+    type: EnrichmentResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized n8n request.' })
+  @ApiResponse({
+    status: 404,
+    description: 'No enrichment found for this lead.',
+  })
+  async getLatestEnrichmentInternal(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<EnrichmentResponseDto | null> {
+    const record =
+      await this.leadIntelligenceService.getLatestEnrichment(leadId);
+    return record ? EnrichmentMapper.toResponseDto(record) : null;
+  }
+
   @Get('lead/:leadId/latest')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get latest enrichment result for a lead' })
