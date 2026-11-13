@@ -70,19 +70,16 @@ describe('CreateFeedbackAndCustomerTasksTables1728600000000 Migration Safety', (
       ).toBe(false);
     });
 
-    it('Ownership guard protects shared customer_tasks when churn columns or rows exist', async () => {
+    it('Never drops shared customer_tasks table on rollback even when pre-existing table is empty and has no churn metadata', async () => {
       const runner = createMockQueryRunner();
       await migration.down(runner);
 
-      // Verifies conditional DO block checks churn columns and churn migrations
-      const doBlock = executedQueries.find(
-        (q) => q.includes('churn_assessment_id') && q.includes('assessment_id'),
+      const dropsCustomerTasks = executedQueries.some(
+        (q) =>
+          q.includes('DROP TABLE') &&
+          q.toLowerCase().includes('customer_tasks'),
       );
-      expect(doBlock).toBeDefined();
-      expect(doBlock).toContain("LIKE '%CustomerChurn%'");
-      expect(doBlock).toContain('NOT has_churn_cols');
-      expect(doBlock).toContain('NOT churn_migrated');
-      expect(doBlock).toContain('row_count = 0');
+      expect(dropsCustomerTasks).toBe(false);
     });
 
     it('Never drops notifications.severity on rollback to avoid breaking notifications and lead intelligence', async () => {

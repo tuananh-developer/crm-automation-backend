@@ -10,6 +10,7 @@ import { QuoteApproval } from '../src/modules/t12-workflows/entities/quote-appro
 import { WF12_NAME } from '../src/modules/t12-workflows/quotes.service.js';
 import { WorkflowStatus } from '../src/modules/workflow/enums/workflow.enum.js';
 import { WorkflowRun } from '../src/modules/workflow/entities/workflow-run.entity.js';
+import { CreateFeedbackAndCustomerTasksTables1728600000000 } from '../src/database/migrations/1728600000000-CreateFeedbackAndCustomerTasksTables.js';
 
 describe('Critical transaction integrity (PostgreSQL E2E)', () => {
   let app: INestApplication<App>;
@@ -104,10 +105,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       });
     expect(adminRegistration.status).toBe(201);
     adminUserId = adminRegistration.body.user.id;
-    await dataSource.query(
-      "UPDATE users SET role = 'ADMIN' WHERE id = $1;",
-      [adminUserId],
-    );
+    await dataSource.query("UPDATE users SET role = 'ADMIN' WHERE id = $1;", [
+      adminUserId,
+    ]);
 
     const adminLogin = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
@@ -444,10 +444,11 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
 
       expect(apply.status).toBe(500);
 
-      const leads = await dataSource.query(
-        'SELECT id, phone FROM leads WHERE id = ANY($1::uuid[]) ORDER BY id;',
-        [[firstLeadId, secondLeadId]],
-      );
+      const leads: Array<{ id: string; phone: string }> =
+        await dataSource.query(
+          'SELECT id, phone FROM leads WHERE id = ANY($1::uuid[]) ORDER BY id;',
+          [[firstLeadId, secondLeadId]],
+        );
       const phonesById = new Map(leads.map((lead) => [lead.id, lead.phone]));
       expect(phonesById.get(firstLeadId)).toBe('+1 (415) 555-0101');
       expect(phonesById.get(secondLeadId)).toBe('+1 (415) 555-0102');
@@ -474,17 +475,19 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
   it('returns one success and one 409 for concurrent registrations with the same email', async () => {
     const email = `register.race.${suffix}@example.test`;
     const register = () =>
-      request(app.getHttpServer())
-        .post('/api/v1/auth/register')
-        .send({
-          name: 'Concurrent Registration',
-          email,
-          password: 'E2eStrongPassword123!',
-        });
+      request(app.getHttpServer()).post('/api/v1/auth/register').send({
+        name: 'Concurrent Registration',
+        email,
+        password: 'E2eStrongPassword123!',
+      });
 
     const responses = await Promise.all([register(), register()]);
-    expect(responses.filter((response) => response.status === 201)).toHaveLength(1);
-    expect(responses.filter((response) => response.status === 409)).toHaveLength(1);
+    expect(
+      responses.filter((response) => response.status === 201),
+    ).toHaveLength(1);
+    expect(
+      responses.filter((response) => response.status === 409),
+    ).toHaveLength(1);
 
     const [users] = await dataSource.query(
       'SELECT COUNT(*)::int AS count FROM users WHERE email = $1;',
@@ -506,7 +509,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     }
 
     expect(statuses).toContain(429);
-    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(0);
+    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('preserves Lead contact edits when review resolution runs concurrently', async () => {
@@ -627,9 +632,7 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       await dataSource.query(
         `DROP TRIGGER IF EXISTS ${triggerName} ON audit_logs;`,
       );
-      await dataSource.query(
-        `DROP FUNCTION IF EXISTS ${functionName}();`,
-      );
+      await dataSource.query(`DROP FUNCTION IF EXISTS ${functionName}();`);
     }
   });
 
@@ -741,5 +744,58 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     expect(rejectedRequest.decision_comment).toBe(
       'Discount exceeds the permitted policy',
     );
+  });
+
+  it('preserves a pre-existing shared empty customer_tasks table when rolling back WF14 migration', async () => {
+    const queryRunner = dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const migration = new CreateFeedbackAndCustomerTasksTables1728600000000();
+
+      // Simulate a pre-existing shared customer_tasks table with 0 rows and no churn columns/migration
+      await queryRunner.query('DELETE FROM "customer_tasks";');
+      await queryRunner.query(
+        'ALTER TABLE "customer_tasks" DROP COLUMN IF EXISTS "churn_assessment_id", DROP COLUMN IF EXISTS "assessment_id";',
+      );
+
+      await migration.down(queryRunner);
+
+      const [tasksTableAfterDown] = (await queryRunner.query(
+        `SELECT EXISTS (
+          SELECT 1 FROM information_schema.tables WHERE table_name = 'customer_tasks'
+        ) AS "exists";`,
+      )) as Array<{ exists: boolean }>;
+      expect(tasksTableAfterDown.exists).toBe(true);
+
+      const [feedbackColAfterDown] = (await queryRunner.query(
+        `SELECT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'customer_tasks' AND column_name = 'customer_feedback_id'
+        ) AS "exists";`,
+      )) as Array<{ exists: boolean }>;
+      expect(feedbackColAfterDown.exists).toBe(false);
+
+      const [feedbackTableAfterDown] = (await queryRunner.query(
+        `SELECT EXISTS (
+          SELECT 1 FROM information_schema.tables WHERE table_name = 'customer_feedback'
+        ) AS "exists";`,
+      )) as Array<{ exists: boolean }>;
+      expect(feedbackTableAfterDown.exists).toBe(false);
+
+      await migration.up(queryRunner);
+
+      const [feedbackColAfterUp] = (await queryRunner.query(
+        `SELECT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'customer_tasks' AND column_name = 'customer_feedback_id'
+        ) AS "exists";`,
+      )) as Array<{ exists: boolean }>;
+      expect(feedbackColAfterUp.exists).toBe(true);
+    } finally {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+    }
   });
 });
