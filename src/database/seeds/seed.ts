@@ -1043,13 +1043,9 @@ export async function runSeed(options?: { fresh?: boolean }): Promise<void> {
         sequenceId: seq.id,
         stepOrder,
         delayMinutes: i * 720,
-        channel: i % 3 === 0 ? 'EMAIL' : i % 3 === 1 ? 'CALL' : 'MESSAGE',
-        actionType:
-          i % 3 === 0
-            ? 'SEND_EMAIL'
-            : i % 3 === 1
-              ? 'SCHEDULE_CALL'
-              : 'SEND_SMS',
+        // Only EMAIL/SEND_EMAIL has a configured provider in this release.
+        channel: 'EMAIL',
+        actionType: 'SEND_EMAIL',
         subjectTemplate: `Step ${stepOrder}: Introduction & Solutions for {{companyName}}`,
         contentTemplate: `Hi {{firstName}},\n\nWe wanted to share how our CRM helps {{companyName}} accelerate revenue.\n\nBest,\nCRM Team`,
         conditions: { active: true },
@@ -1110,15 +1106,17 @@ export async function runSeed(options?: { fresh?: boolean }): Promise<void> {
     const exec = executionRepository.create({
       enrollmentId: seededEnrollments[i].id,
       stepId: seededSteps[i].id,
+      // Seed rows must be terminal: workers must never send messages to
+      // placeholder/demo lead addresses during startup or after a fresh seed.
       status:
         i % 3 === 0
           ? ExecutionStatus.SUCCESS
           : i % 3 === 1
-            ? ExecutionStatus.PENDING
-            : ExecutionStatus.RUNNING,
+            ? ExecutionStatus.FAILED
+            : ExecutionStatus.SKIPPED,
       scheduledAt: new Date(Date.now() + i * 3600000),
       startedAt: new Date(),
-      completedAt: i % 3 === 0 ? new Date() : null,
+      completedAt: new Date(),
       providerMessageId: `msg_provider_id_${Date.now()}_${i + 1}`,
       requestPayload: {
         recipient: seededLeads[i].email,

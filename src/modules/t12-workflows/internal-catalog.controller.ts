@@ -12,7 +12,10 @@ export class InternalCatalogController {
   @ApiOperation({
     summary: 'List active catalog items for an existing quote WorkflowRun',
   })
-  list(@Query('workflowRunId') workflowRunId: string) {
-    return this.service.listCatalogForRun(workflowRunId);
+  list(
+    @Query('workflowRunId') workflowRunId: string,
+    @Query('n8nExecutionId') n8nExecutionId: string,
+  ) {
+    return this.service.listCatalogForRun(workflowRunId, n8nExecutionId);
   }
 }
