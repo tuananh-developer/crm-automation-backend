@@ -358,7 +358,7 @@ export class SequencesController {
   @ApiOperation({
     summary: 'Add a new step to a sequence',
     description:
-      'Creates a new step (e.g. EMAIL, CALL, TASK) with delayMinutes and template content.',
+      'Creates a new step. Currently only active EMAIL / SEND_EMAIL steps can execute; other channel adapters are not configured yet.',
   })
   @ApiParam({ name: 'id', description: 'UUID of the parent sequence' })
   @ApiBody({ type: CreateStepDto })

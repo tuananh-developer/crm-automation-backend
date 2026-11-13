@@ -1,0 +1,18 @@
+{
+  "_mock": true,
+  "_workflow": "WF07",
+  "_scenario": "success",
+  "segmentId": "550e8400-e29b-41d4-a716-446655440020",
+  "asOfDate": "2026-10-29",
+  "correlationId": "550e8400-e29b-41d4-a716-446655440021",
+  "workflowRunId": "550e8400-e29b-41d4-a716-446655440022",
+  "assignmentStats": {
+    "totalCustomers": 150,
+    "matched": 42,
+    "unmatched": 108
+  },
+  "insights": {
+    "summary": "Segment grew by 5% this week",
+    "trend": "stable"
+  }
+}

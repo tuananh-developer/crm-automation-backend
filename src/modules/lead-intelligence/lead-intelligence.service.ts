@@ -356,37 +356,29 @@ export class LeadIntelligenceService {
   ): Promise<{
     data: {
       id: string;
-      firstName: string;
-      lastName: string | null;
-      email: string;
-      phone: string | null;
       companyName: string | null;
       companyWebsite: string | null;
       jobTitle: string | null;
       companySize: number | null;
       industry: string | null;
       status: LeadStatus;
-      notes: string | null;
       createdAt: Date;
     };
   }> {
     await this.assertActiveQualificationRun(leadId, workflowRunId);
 
+    // WF01 only needs company/profile attributes. Do not transfer direct
+    // contact identifiers or free-form notes into n8n execution data.
     const lead = await this.leadsRepository.findOne({
       where: { id: leadId },
       select: {
         id: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        phone: true,
         companyName: true,
         companyWebsite: true,
         jobTitle: true,
         companySize: true,
         industry: true,
         status: true,
-        notes: true,
         createdAt: true,
       },
     });
@@ -398,17 +390,12 @@ export class LeadIntelligenceService {
     return {
       data: {
         id: lead.id,
-        firstName: lead.firstName,
-        lastName: lead.lastName,
-        email: lead.email,
-        phone: lead.phone,
         companyName: lead.companyName,
         companyWebsite: lead.companyWebsite,
         jobTitle: lead.jobTitle,
         companySize: lead.companySize,
         industry: lead.industry,
         status: lead.status,
-        notes: lead.notes,
         createdAt: lead.createdAt,
       },
     };
@@ -427,8 +414,6 @@ export class LeadIntelligenceService {
       id: string;
       type: string;
       channel: string | null;
-      subject: string | null;
-      content: string | null;
       occurredAt: Date;
     }>;
   }> {
@@ -450,12 +435,12 @@ export class LeadIntelligenceService {
 
     const interactions = await this.interactionsRepository.find({
       where: { leadId },
+      // WF01 uses engagement metadata only; do not copy message text
+      // or subject lines into the n8n execution payload.
       select: {
         id: true,
         type: true,
         channel: true,
-        subject: true,
-        content: true,
         occurredAt: true,
       },
       order: { occurredAt: 'DESC' },
@@ -467,11 +452,6 @@ export class LeadIntelligenceService {
         id: interaction.id,
         type: interaction.type,
         channel: interaction.channel,
-        subject: interaction.subject,
-        content:
-          typeof interaction.content === 'string'
-            ? interaction.content.slice(0, 3000)
-            : null,
         occurredAt: interaction.occurredAt,
       })),
     };

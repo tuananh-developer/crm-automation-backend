@@ -278,20 +278,35 @@ describe('LeadIntelligenceService', () => {
           workflowName: 'lead-qualification',
         },
       });
-      expect(leadsRepo.findOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 'lead-123' },
-          select: expect.objectContaining({ email: true, notes: true }),
-        }),
-      );
+      expect(leadsRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 'lead-123' },
+        select: {
+          id: true,
+          companyName: true,
+          companyWebsite: true,
+          jobTitle: true,
+          companySize: true,
+          industry: true,
+          status: true,
+          createdAt: true,
+        },
+      });
       expect(result.data).toEqual(
         expect.objectContaining({
           id: 'lead-123',
-          email: 'alice@example.com',
           companyName: 'Tech Innovations',
         }),
       );
-      expect(result.data).not.toHaveProperty('ownerId');
+      for (const field of [
+        'firstName',
+        'lastName',
+        'email',
+        'phone',
+        'notes',
+        'ownerId',
+      ]) {
+        expect(result.data).not.toHaveProperty(field);
+      }
     });
 
     it('rejects a context read for a terminal workflow run', async () => {
@@ -319,15 +334,26 @@ describe('LeadIntelligenceService', () => {
         20,
       );
 
-      expect(interactionsRepo.find).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { leadId: 'lead-123' },
-          order: { occurredAt: 'DESC' },
-          take: 20,
-        }),
-      );
+      expect(interactionsRepo.find).toHaveBeenCalledWith({
+        where: { leadId: 'lead-123' },
+        select: {
+          id: true,
+          type: true,
+          channel: true,
+          occurredAt: true,
+        },
+        order: { occurredAt: 'DESC' },
+        take: 20,
+      });
       expect(result.items).toHaveLength(1);
-      expect(result.items[0].content).toBe('Discussed requirements');
+      expect(result.items[0]).toEqual({
+        id: mockInteraction.id,
+        type: mockInteraction.type,
+        channel: mockInteraction.channel,
+        occurredAt: mockInteraction.occurredAt,
+      });
+      expect(result.items[0]).not.toHaveProperty('subject');
+      expect(result.items[0]).not.toHaveProperty('content');
     });
 
     it('rejects interaction limits outside 1..100', async () => {
