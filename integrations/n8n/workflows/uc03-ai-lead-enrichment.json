@@ -1,5 +1,5 @@
 {
-  "name": "UC03 - AI Lead Enrichment Workflow",
+  "name": "T12-WF02 — AI Lead Enrichment Agent",
   "nodes": [
     {
       "parameters": {
@@ -8,26 +8,83 @@
           "arguments": {}
         }
       },
-      "id": "node-rabbitmq-trigger",
+      "id": "node-1-rabbitmq-trigger",
       "name": "RabbitMQ Trigger",
       "type": "n8n-nodes-base.rabbitmqTrigger",
       "typeVersion": 1,
-      "position": [180, 300]
+      "position": [100, 300],
+      "credentials": {
+        "rabbitmq": {
+          "id": "EJyxO5a1fpGmbLj0",
+          "name": "RabbitMQ account"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "// 1. Trích xuất payload an toàn từ RabbitMQ message\nconst item = $input.first().json;\nlet payload = {};\n\nif (item.content) {\n  try {\n    payload = typeof item.content === 'string' ? JSON.parse(item.content) : item.content;\n  } catch (err) {\n    payload = {};\n  }\n} else {\n  payload = item;\n}\n\n// Support both wrapped event ({ data: { ... } }) and flat event\nconst eventData = payload.data || payload;\nconst leadId = eventData.leadId || payload.leadId || null;\nconst workflowRunId = eventData.workflowRunId || payload.workflowRunId || null;\nconst rawEmail = (eventData.email || payload.email || '').trim().toLowerCase();\nconst rawWebsite = (eventData.website || eventData.companyWebsite || payload.website || payload.companyWebsite || '').trim();\nconst provider = eventData.provider || payload.provider || 'mock';\nconst companyName = eventData.companyName || payload.companyName || '';\n\n// 2. Trích xuất domain từ email (nếu website rỗng)\nlet emailDomain = '';\nif (rawEmail.includes('@')) {\n  emailDomain = rawEmail.split('@')[1].trim().toLowerCase();\n}\n\nconst freeEmailProviders = new Set([\n  'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'live.com', 'icloud.com', 'mail.com', 'aol.com'\n]);\nconst isFreeEmail = freeEmailProviders.has(emailDomain);\n\n// 3. Chuẩn hóa URL website: bỏ https://, http://, www, trailing slash, path\nlet normalizedDomain = '';\nlet cleanWebsiteUrl = '';\n\nif (rawWebsite) {\n  normalizedDomain = rawWebsite\n    .replace(/^(?:https?:\\/\\/)?(?:www\\.)?/i, '')\n    .split('/')[0]\n    .split('?')[0]\n    .split('#')[0]\n    .split(':')[0]\n    .trim()\n    .toLowerCase();\n  cleanWebsiteUrl = `https://${normalizedDomain}`;\n} else if (!isFreeEmail && emailDomain) {\n  normalizedDomain = emailDomain;\n  cleanWebsiteUrl = `https://${emailDomain}`;\n}\n\n// Fallback domain nếu không có thông tin hợp lệ (ưu tiên slug tên công ty nếu có)\nif (!normalizedDomain) {\n  if (companyName) {\n    const slug = companyName.toLowerCase().replace(/[^a-z0-9]/g, '');\n    normalizedDomain = slug ? `${slug}.com` : 'enterprise.com';\n  } else {\n    normalizedDomain = 'enterprise.com';\n  }\n}\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    provider,\n    email: rawEmail,\n    emailDomain,\n    isFreeEmail,\n    domain: normalizedDomain,\n    website: cleanWebsiteUrl,\n    companyName,\n    rawEvent: payload\n  }\n}];"
+        "jsCode": "// 2. Code: Normalize Event — parse payload and validate leadId and workflowRunId UUIDs\nconst item = $input.first().json;\nlet payload = {};\n\nif (item.content) {\n  try {\n    payload = typeof item.content === 'string' ? JSON.parse(item.content) : item.content;\n  } catch (err) {\n    payload = {};\n  }\n} else {\n  payload = item;\n}\n\n// Support wrapped event ({ data: { ... } }) and flat event\nconst eventData = payload.data || payload;\nconst rawLeadId = eventData.leadId || payload.leadId || null;\nconst rawWorkflowRunId = eventData.workflowRunId || payload.workflowRunId || null;\nconst leadId = typeof rawLeadId === 'string' ? rawLeadId.trim() : null;\nconst workflowRunId = typeof rawWorkflowRunId === 'string' ? rawWorkflowRunId.trim() : null;\nconst provider = String(eventData.provider || payload.provider || 'MOCK').toUpperCase();\n\nconst uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\n\nif (!leadId || !uuidRegex.test(leadId)) {\n  throw new Error('Validation error: Missing or invalid leadId UUID in RabbitMQ payload');\n}\n\nif (!workflowRunId || !uuidRegex.test(workflowRunId)) {\n  throw new Error('Validation error: Missing or invalid workflowRunId UUID in RabbitMQ payload');\n}\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    provider,\n    rawEvent: payload\n  }\n}];"
       },
-      "id": "node-normalize-domain",
-      "name": "Normalize Email & Domain",
+      "id": "node-2-normalize-event",
+      "name": "Code: Normalize Event",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 300]
+      "position": [320, 300]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/enrichment/mock-enrichment?domain=' + encodeURIComponent($json.domain) + '&email=' + encodeURIComponent($json.email) + '&provider=' + encodeURIComponent($json.provider) }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/leads/' + $json.leadId + '/internal' }}",
         "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "node-3-get-lead",
+      "name": "HTTP Request: Get Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 4. Code: Extract Domain — normalize email and website; explicitly validate and audit event-snapshot fallback\nconst leadResponse = $input.first().json || {};\nconst eventMeta = $('Code: Normalize Event').first().json;\n\nconst leadId = eventMeta.leadId;\nconst workflowRunId = eventMeta.workflowRunId;\nconst provider = eventMeta.provider || 'MOCK';\n\nconst httpStatus = Number(leadResponse.statusCode || leadResponse.status || 0);\nconst isLeadReadError = Boolean(\n  leadResponse.error ||\n  httpStatus >= 400 ||\n  leadResponse.code === 'ECONNREFUSED' ||\n  leadResponse.code === 'ETIMEDOUT'\n);\nconst hasAuthoritativeLead = Boolean(!isLeadReadError && leadResponse.id && leadResponse.id === leadId);\n\nlet lead = {};\nlet leadSource = 'BACKEND_INTERNAL_API';\nlet degradedLeadRead = false;\nlet leadReadError = null;\n\nif (hasAuthoritativeLead) {\n  lead = leadResponse;\n} else {\n  const rawErr =\n    leadResponse.message ||\n    (leadResponse.error && (leadResponse.error.message || leadResponse.error)) ||\n    (httpStatus ? `HTTP ${httpStatus}` : 'Authoritative lead endpoint did not return matching lead record');\n  leadReadError = String(rawErr);\n\n  // Fail immediately on auth/not-found errors instead of bypassing via snapshot\n  if (httpStatus === 401 || httpStatus === 403 || httpStatus === 404) {\n    throw new Error(`Authoritative lead read rejected with HTTP ${httpStatus}: ${leadReadError}`);\n  }\n\n  const snapshot = (eventMeta.rawEvent && (eventMeta.rawEvent.data || eventMeta.rawEvent)) || {};\n  const snapshotLeadId = snapshot.leadId || snapshot.id || null;\n  const hasSnapshotAttributes = Boolean(\n    (typeof snapshot.email === 'string' && snapshot.email.trim()) ||\n    (typeof snapshot.website === 'string' && snapshot.website.trim()) ||\n    (typeof snapshot.companyWebsite === 'string' && snapshot.companyWebsite.trim()) ||\n    (typeof snapshot.companyName === 'string' && snapshot.companyName.trim())\n  );\n\n  if (snapshotLeadId !== leadId || !hasSnapshotAttributes) {\n    throw new Error(\n      `Authoritative lead read failed (${leadReadError}) and event snapshot fallback is missing valid lead attributes`\n    );\n  }\n\n  lead = snapshot;\n  leadSource = 'EVENT_SNAPSHOT_FALLBACK';\n  degradedLeadRead = true;\n}\n\nconst rawEmail = (lead.email || '').trim().toLowerCase();\nconst rawWebsite = (lead.companyWebsite || lead.website || '').trim();\nconst companyName = lead.companyName || '';\n\nlet emailDomain = '';\nif (rawEmail.includes('@')) {\n  emailDomain = rawEmail.split('@')[1].trim().toLowerCase();\n}\n\nconst freeEmailProviders = new Set([\n  'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'live.com', 'icloud.com', 'mail.com', 'aol.com'\n]);\nconst isFreeEmail = freeEmailProviders.has(emailDomain);\n\nlet normalizedDomain = '';\nlet cleanWebsiteUrl = '';\n\nif (rawWebsite) {\n  normalizedDomain = rawWebsite\n    .replace(/^(?:https?:\\/\\/)?(?:www\\.)?/i, '')\n    .split('/')[0]\n    .split('?')[0]\n    .split('#')[0]\n    .split(':')[0]\n    .trim()\n    .toLowerCase();\n  cleanWebsiteUrl = `https://${normalizedDomain}`;\n} else if (!isFreeEmail && emailDomain) {\n  normalizedDomain = emailDomain;\n  cleanWebsiteUrl = `https://${emailDomain}`;\n}\n\nif (!normalizedDomain) {\n  if (companyName) {\n    const slug = companyName.toLowerCase().replace(/[^a-z0-9]/g, '');\n    normalizedDomain = slug ? `${slug}.com` : 'enterprise.com';\n  } else {\n    normalizedDomain = 'enterprise.com';\n  }\n}\n\nreturn [{\n  json: {\n    leadId,\n    workflowRunId,\n    provider,\n    email: rawEmail,\n    emailDomain,\n    isFreeEmail,\n    domain: normalizedDomain,\n    website: cleanWebsiteUrl,\n    companyName,\n    leadSource,\n    degradedLeadRead,\n    leadReadError,\n    lead\n  }\n}];"
+      },
+      "id": "node-4-extract-domain",
+      "name": "Code: Extract Domain",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/enrichment/mock-enrichment?domain=' + encodeURIComponent($json.domain) + '&email=' + encodeURIComponent($json.email) + '&provider=' + encodeURIComponent($json.provider) }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
         "options": {
           "timeout": 15000,
           "retry": {
@@ -36,27 +93,38 @@
           }
         }
       },
-      "id": "node-http-enrichment",
-      "name": "Call External / AI Enrichment API",
+      "onError": "continueRegularOutput",
+      "id": "node-5-mock-enrichment-adapter",
+      "name": "HTTP Request: Mock Enrichment Adapter",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "continueOnFail": true,
-      "position": [660, 300]
+      "position": [980, 300]
     },
     {
       "parameters": {
-        "jsCode": "// Chuẩn hóa và validate kết quả enrichment trả về từ Provider/AI\nconst response = $input.first().json;\nconst prep = $('Normalize Email & Domain').first().json;\n\n// 1. Kiểm tra nếu HTTP Request thất bại\nif (response.error || (response.statusCode && response.statusCode >= 400)) {\n  const errMsg = response.error?.message || response.message || 'External enrichment service call failed after retries';\n  return [{\n    json: {\n      leadId: prep.leadId,\n      workflowRunId: prep.workflowRunId,\n      status: 'FAILED',\n      provider: prep.provider || 'n8n',\n      errorMessage: errMsg,\n      rawResponse: response\n    }\n  }];\n}\n\n// 2. Xử lý và mapping linh hoạt từ cấu trúc API ngoài (Clearbit / Apollo / Mock)\nconst company = response.company || {};\nconst contact = response.contact || {};\n\nconst companyName = company.name || response.companyName || prep.companyName || null;\nconst companyWebsite = company.website || response.companyWebsite || prep.website || (prep.domain ? `https://${prep.domain}` : null);\nconst industry = company.industry || response.industry || response.companyIndustry || null;\n\nlet companySize = null;\nif (typeof company.size === 'number') {\n  companySize = company.size;\n} else if (typeof response.companySize === 'number') {\n  companySize = response.companySize;\n} else if (typeof company.size === 'string') {\n  const match = company.size.match(/\\d+/);\n  companySize = match ? parseInt(match[0], 10) : null;\n}\n\nconst jobTitle = contact.jobTitle || response.jobTitle || response.contactJobTitle || null;\nconst linkedInUrl = contact.linkedinUrl || response.linkedInUrl || response.contactLinkedinUrl || null;\n\n// 3. Đánh giá tính hợp lệ của dữ liệu\nconst isSuccess = Boolean(companyName || industry || companySize || jobTitle);\nconst status = isSuccess ? 'SUCCESS' : 'FAILED';\nconst errorMessage = isSuccess ? null : 'Enrichment provider returned empty data for the given domain/email';\n\nreturn [{\n  json: {\n    leadId: prep.leadId,\n    workflowRunId: prep.workflowRunId,\n    status,\n    provider: response.provider || prep.provider || 'n8n',\n    companyName,\n    companyWebsite,\n    industry,\n    companySize,\n    jobTitle,\n    linkedInUrl,\n    rawResponse: response.rawResponse || response,\n    errorMessage\n  }\n}];"
+        "jsCode": "// 6. Code: Normalize Provider Result — map provider fields into the agreed schema\nconst response = $input.first().json;\nconst prep = $('Code: Extract Domain').first().json;\n\nconst leadSource = prep.leadSource || 'BACKEND_INTERNAL_API';\nconst degradedLeadRead = Boolean(prep.degradedLeadRead);\nconst leadReadError = prep.leadReadError || null;\n\n// Detect HTTP/adapter errors (e.g. 500, timeout, connection error)\nconst isHttpError = Boolean(\n  response.error ||\n  (response.statusCode && response.statusCode >= 400) ||\n  (response.status && response.status >= 400) ||\n  response.code === 'ECONNREFUSED' ||\n  response.code === 'ETIMEDOUT'\n);\n\nif (isHttpError) {\n  const errorMsg =\n    response.message ||\n    (response.error && (response.error.message || response.error)) ||\n    `Adapter returned HTTP ${response.statusCode || response.status || 500}`;\n\n  return [{\n    json: {\n      leadId: prep.leadId,\n      workflowRunId: prep.workflowRunId,\n      provider: 'MOCK',\n      companyName: null,\n      companyWebsite: null,\n      industry: null,\n      companySize: null,\n      jobTitle: null,\n      linkedInUrl: null,\n      rawResponse: response.rawResponse || response,\n      httpStatus: response.statusCode || response.status || 500,\n      isHttpError: true,\n      errorMessage: String(errorMsg),\n      leadSource,\n      degradedLeadRead,\n      leadReadError\n    }\n  }];\n}\n\nconst company = response.company || {};\nconst contact = response.contact || {};\n\n// Never manufacture fallback firmographics from event data on error or missing fields\nconst companyName = company.name || response.companyName || null;\nconst companyWebsite = company.website || response.companyWebsite || null;\nconst industry = company.industry || response.industry || response.companyIndustry || null;\n\nlet companySize = null;\nif (typeof company.size === 'number') {\n  companySize = company.size;\n} else if (typeof response.companySize === 'number') {\n  companySize = response.companySize;\n} else if (typeof company.size === 'string') {\n  const match = company.size.match(/\\d+/);\n  companySize = match ? parseInt(match[0], 10) : null;\n}\n\nconst jobTitle = contact.jobTitle || response.jobTitle || response.contactJobTitle || null;\nconst linkedInUrl = contact.linkedinUrl || response.linkedInUrl || response.contactLinkedinUrl || null;\n\nreturn [{\n  json: {\n    leadId: prep.leadId,\n    workflowRunId: prep.workflowRunId,\n    provider: 'MOCK',\n    companyName,\n    companyWebsite,\n    industry,\n    companySize,\n    jobTitle,\n    linkedInUrl,\n    rawResponse: response.rawResponse || response,\n    httpStatus: response.statusCode || 200,\n    isHttpError: false,\n    errorMessage: null,\n    leadSource,\n    degradedLeadRead,\n    leadReadError\n  }\n}];"
       },
-      "id": "node-normalize-response",
-      "name": "Normalize Response & Validate",
+      "id": "node-6-normalize-provider-result",
+      "name": "Code: Normalize Provider Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [900, 300]
+      "position": [1200, 300]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/enrichment/callback' }}",
+        "jsCode": "// 7. Code: Validate Completeness — distinguish SUCCESS, PARTIAL, and FAILED; record leadSource audit metadata\nconst item = $input.first().json;\n\nlet status = 'FAILED';\nlet errorMessage = null;\n\nif (item.isHttpError) {\n  status = 'FAILED';\n  errorMessage = item.errorMessage || 'Enrichment provider returned HTTP error';\n} else {\n  const hasCritical = Boolean(item.companyName && (item.industry || item.companySize));\n  const hasAny = Boolean(item.companyName || item.industry || item.companySize || item.jobTitle);\n\n  if (hasCritical && item.jobTitle) {\n    status = 'SUCCESS';\n  } else if (hasAny) {\n    status = 'PARTIAL';\n    errorMessage = 'Partial firmographics enrichment: missing some company or contact attributes';\n  } else {\n    status = 'FAILED';\n    errorMessage = 'Enrichment provider returned no usable firmographics data';\n  }\n}\n\nconst leadSource = item.leadSource || 'BACKEND_INTERNAL_API';\nconst degradedLeadRead = Boolean(item.degradedLeadRead);\nconst leadReadError = item.leadReadError || null;\n\nconst baseRaw =\n  typeof item.rawResponse === 'object' && item.rawResponse !== null\n    ? item.rawResponse\n    : { providerPayload: item.rawResponse ?? null };\n\nconst rawResponse = {\n  ...baseRaw,\n  leadSource,\n  degradedLeadRead,\n  leadReadError,\n};\n\nreturn [{\n  json: {\n    leadId: item.leadId,\n    workflowRunId: item.workflowRunId,\n    status,\n    provider: 'MOCK',\n    companyName: item.companyName,\n    companyWebsite: item.companyWebsite,\n    industry: item.industry,\n    companySize: item.companySize,\n    jobTitle: item.jobTitle,\n    linkedInUrl: item.linkedInUrl,\n    rawResponse,\n    leadSource,\n    degradedLeadRead,\n    leadReadError,\n    errorMessage\n  }\n}];"
+      },
+      "id": "node-7-validate-completeness",
+      "name": "Code: Validate Completeness",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1420, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/internal/n8n/lead-enrichment/callback' }}",
         "method": "POST",
+        "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
@@ -73,27 +141,52 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json) }}",
         "options": {
-          "timeout": 10000
+          "timeout": 15000,
+          "retry": {
+            "maxTries": 3,
+            "waitBetweenTries": 2000
+          }
         }
       },
-      "id": "node-http-callback",
-      "name": "Callback NestJS API",
+      "id": "node-8-enrichment-callback",
+      "name": "HTTP Request: Enrichment Callback",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1140, 300]
-    },
-    {
-      "parameters": {},
-      "id": "node-error-trigger",
-      "name": "Error Trigger",
-      "type": "n8n-nodes-base.errorTrigger",
-      "typeVersion": 1,
-      "position": [420, 520]
+      "position": [1640, 300]
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'https://crm-automation-backend-bkds.onrender.com') + '/api/v1/enrichment/callback' }}",
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $('Code: Validate Completeness').item.json.status }}",
+              "rightValue": "SUCCESS",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-9-if-partial-failed",
+      "name": "IF: Partial/Failed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1860, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/notifications/internal/create' }}",
         "method": "POST",
+        "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
@@ -108,16 +201,37 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ (() => {\n  let leadId = null;\n  let workflowRunId = null;\n  try {\n    leadId = $json?.leadId || $json?.execution?.error?.context?.leadId || null;\n    workflowRunId = $json?.workflowRunId || $json?.execution?.error?.context?.workflowRunId || null;\n  } catch (e) {}\n  if (!leadId || !workflowRunId) {\n    try {\n      const trig = $('RabbitMQ Trigger')?.first()?.json;\n      if (trig) {\n        let payload = trig.content;\n        if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch (e) {} }\n        const eventData = payload?.data || payload || {};\n        leadId = leadId || eventData.leadId || null;\n        workflowRunId = workflowRunId || eventData.workflowRunId || null;\n      }\n    } catch (e) {}\n  }\n  if (!leadId || !workflowRunId) {\n    try {\n      const norm = $('Normalize Email & Domain')?.first()?.json;\n      if (norm) {\n        leadId = leadId || norm.leadId || null;\n        workflowRunId = workflowRunId || norm.workflowRunId || null;\n      }\n    } catch (e) {}\n  }\n  const errorMessage = $json?.execution?.error?.message || $json?.message || 'Workflow execution failed with unexpected error';\n  return JSON.stringify({\n    leadId,\n    workflowRunId,\n    status: 'FAILED',\n    provider: 'n8n',\n    errorMessage: String(errorMessage),\n    rawResponse: $json || {}\n  });\n})() }}",
+        "jsonBody": "={\n  \"type\": \"WORKFLOW_COMPLETED\",\n  \"title\": \"Lead Enrichment Incomplete\",\n  \"message\": \"Lead enrichment ended with status: {{ $('Code: Validate Completeness').item.json.status }}. {{ $('Code: Validate Completeness').item.json.errorMessage || '' }}\",\n  \"severity\": \"{{ $('Code: Validate Completeness').item.json.status === 'FAILED' ? 'HIGH' : 'MEDIUM' }}\",\n  \"leadId\": \"{{ $('Code: Validate Completeness').item.json.leadId }}\"{{ ($('HTTP Request: Get Lead').item.json.ownerId || $('HTTP Request: Get Lead').item.json.createdBy) ? ',\n  \"userId\": \"' + ($('HTTP Request: Get Lead').item.json.ownerId || $('HTTP Request: Get Lead').item.json.createdBy) + '\"' : '' }}\n}",
         "options": {
           "timeout": 10000
         }
       },
-      "id": "node-http-error-callback",
-      "name": "Callback NestJS (Error)",
+      "onError": "continueRegularOutput",
+      "id": "node-10-backend-notification",
+      "name": "HTTP Request: Backend Notification",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [680, 520]
+      "position": [2080, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 11. Code: Build Run Summary — include provider mode (real/mock), status, leadSource audit, and correlation IDs\nconst val = $('Code: Validate Completeness').first().json;\n\nreturn [{\n  json: {\n    leadId: val.leadId,\n    workflowRunId: val.workflowRunId,\n    status: val.status,\n    providerMode: 'MOCK',\n    provider: val.provider,\n    companyName: val.companyName,\n    industry: val.industry,\n    companySize: val.companySize,\n    hasCriticalFields: Boolean(val.companyName && val.industry),\n    leadSource: val.leadSource || 'BACKEND_INTERNAL_API',\n    degradedLeadRead: Boolean(val.degradedLeadRead),\n    leadReadError: val.leadReadError || null,\n    errorMessage: val.errorMessage || null,\n    completedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-11-build-run-summary",
+      "name": "Code: Build Run Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2300, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 12. Code: Finalize Execution Output — return a final structured output for n8n execution/logging\nconst summary = $input.first().json;\n\nreturn [{\n  json: {\n    success: summary.status === 'SUCCESS' || summary.status === 'PARTIAL',\n    leadId: summary.leadId,\n    workflowRunId: summary.workflowRunId,\n    status: summary.status,\n    providerMode: summary.providerMode,\n    summary: `[Enrichment ${summary.status}] Company: ${summary.companyName || 'N/A'}, Size: ${summary.companySize || 'N/A'}`,\n    audit: {\n      executedAt: summary.completedAt,\n      workflow: 'T12-WF02',\n      agent: 'AI Lead Enrichment Agent',\n      leadSource: summary.leadSource || 'BACKEND_INTERNAL_API',\n      degradedLeadRead: Boolean(summary.degradedLeadRead),\n      leadReadError: summary.leadReadError || null\n    }\n  }\n}];"
+      },
+      "id": "node-12-finalize-execution-output",
+      "name": "Code: Finalize Execution Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2520, 300]
     }
   ],
   "connections": {
@@ -125,51 +239,124 @@
       "main": [
         [
           {
-            "node": "Normalize Email & Domain",
+            "node": "Code: Normalize Event",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Normalize Email & Domain": {
+    "Code: Normalize Event": {
       "main": [
         [
           {
-            "node": "Call External / AI Enrichment API",
+            "node": "HTTP Request: Get Lead",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Call External / AI Enrichment API": {
+    "HTTP Request: Get Lead": {
       "main": [
         [
           {
-            "node": "Normalize Response & Validate",
+            "node": "Code: Extract Domain",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Normalize Response & Validate": {
+    "Code: Extract Domain": {
       "main": [
         [
           {
-            "node": "Callback NestJS API",
+            "node": "HTTP Request: Mock Enrichment Adapter",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Error Trigger": {
+    "HTTP Request: Mock Enrichment Adapter": {
       "main": [
         [
           {
-            "node": "Callback NestJS (Error)",
+            "node": "Code: Normalize Provider Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize Provider Result": {
+      "main": [
+        [
+          {
+            "node": "Code: Validate Completeness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Validate Completeness": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Enrichment Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Enrichment Callback": {
+      "main": [
+        [
+          {
+            "node": "IF: Partial/Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Partial/Failed": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Backend Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Build Run Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Backend Notification": {
+      "main": [
+        [
+          {
+            "node": "Code: Build Run Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Build Run Summary": {
+      "main": [
+        [
+          {
+            "node": "Code: Finalize Execution Output",
             "type": "main",
             "index": 0
           }

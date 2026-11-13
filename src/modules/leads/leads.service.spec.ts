@@ -171,7 +171,11 @@ describe('LeadsService', () => {
         return leadsRepository;
       }),
       query: jest.fn().mockResolvedValue([]),
-      save: jest.fn().mockImplementation((_target: unknown, value?: unknown) => leadsRepository.save!(value as Lead)),
+      save: jest
+        .fn()
+        .mockImplementation((_target: unknown, value?: unknown) =>
+          leadsRepository.save!(value as Lead),
+        ),
     };
 
     const transactionMock: jest.Mock = jest.fn(
@@ -226,7 +230,9 @@ describe('LeadsService', () => {
         where: { id: 'source-123' },
       });
       expect(rabbitmqService.enqueueEvent).toHaveBeenCalledWith(
-        expect.anything(), CRM_EVENTS.LEAD_CREATED, { leadId: 'lead-123' },
+        expect.anything(),
+        CRM_EVENTS.LEAD_CREATED,
+        { leadId: 'lead-123' },
       );
     });
 
@@ -417,6 +423,15 @@ describe('LeadsService', () => {
       await expect(service.findOne('lead-123', salesActor)).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('findOneInternal should return lead without actor authorization check', async () => {
+      (leadsRepository.findOne as jest.Mock).mockResolvedValue(
+        buildLead({ id: 'lead-123', ownerId: 'another-user' }),
+      );
+
+      const result = await service.findOneInternal('lead-123');
+      expect(result.id).toBe('lead-123');
     });
 
     it('scopes Sales lead lists to the authenticated owner', async () => {
