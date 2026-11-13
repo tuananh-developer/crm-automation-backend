@@ -215,11 +215,19 @@ export class ConversationsService {
       .update(safeTranscript)
       .digest('hex');
 
-    // Deterministic client key: prefer explicitly passed key; fallback to content hash so repeated submissions without key are replay-safe
-    const clientKey = dto.idempotencyKey?.trim() || `content:${contentHash}`;
+    // Deterministic client key: prefer explicitly passed key; fallback to event-scoped content hash so repeated submissions without key are replay-safe without colliding across distinct meetings/entities
+    const fallbackScope = [
+      dto.meetingId || 'no-meeting',
+      dto.customerId || 'no-customer',
+      dto.leadId || 'no-lead',
+      dto.sourceType || 'CALL',
+      contentHash,
+    ].join(':');
+    const clientKey = dto.idempotencyKey?.trim() || `content:${fallbackScope}`;
     const idempotencyKey = `wf09:${user.id}:${clientKey}`;
 
     const inputPayload = {
+      meetingId: dto.meetingId || null,
       sourceType: dto.sourceType || 'CALL',
       customerId: dto.customerId || null,
       leadId: dto.leadId || null,
@@ -227,48 +235,52 @@ export class ConversationsService {
       contentHash,
     };
 
-    return this.dataSource.transaction(async (manager) => {
-      const runRepo = manager.getRepository(WorkflowRun);
-      const transcriptRepo = manager.getRepository(ConversationTranscript);
-
-      const reuseExisting = async (existing: WorkflowRun) => {
-        if (existing.workflowName !== WF09_NAME) {
-          throw new ConflictException(
-            `Idempotency key is already used by another workflow: ${existing.workflowName}`,
-          );
-        }
-        if (!hasSamePayload(existing.inputPayload, inputPayload)) {
-          throw new ConflictException(
-            'Idempotency key was already used with a different transcript payload',
-          );
-        }
-        const existingTranscript = await transcriptRepo.findOne({
-          where: { workflowRunId: existing.id },
-        });
-
-        this.logger.log(
-          `Replaying existing transcript for idempotencyKey=${idempotencyKey}`,
+    const reuseExisting = async (
+      existing: WorkflowRun,
+      transcriptRepo: Repository<ConversationTranscript> = this
+        .transcriptsRepository,
+    ): Promise<IngestTranscriptResult> => {
+      if (existing.workflowName !== WF09_NAME) {
+        throw new ConflictException(
+          `Idempotency key is already used by another workflow: ${existing.workflowName}`,
         );
-
-        return {
-          message: 'Transcript ingested and AI summarization initiated',
-          transcriptId: existingTranscript?.id || existing.id,
-          workflowRunId: existing.id,
-          processingStatus: existing.status,
-          redactedContent: existingTranscript?.redactedText || safeTranscript,
-          createdAt: existingTranscript?.createdAt || existing.startedAt,
-          reused: true,
-        };
-      };
-
-      const existingRun = await runRepo.findOne({
-        where: { idempotencyKey },
-      });
-      if (existingRun) {
-        return await reuseExisting(existingRun);
       }
+      if (!hasSamePayload(existing.inputPayload, inputPayload)) {
+        throw new ConflictException(
+          'Idempotency key was already used with a different transcript payload',
+        );
+      }
+      const existingTranscript = await transcriptRepo.findOne({
+        where: { workflowRunId: existing.id },
+      });
 
-      try {
+      this.logger.log(
+        `Replaying existing transcript for idempotencyKey=${idempotencyKey}`,
+      );
+
+      return {
+        message: 'Transcript ingested and AI summarization initiated',
+        transcriptId: existingTranscript?.id || existing.id,
+        workflowRunId: existing.id,
+        processingStatus: existing.status,
+        redactedContent: existingTranscript?.redactedText || safeTranscript,
+        createdAt: existingTranscript?.createdAt || existing.startedAt,
+        reused: true,
+      };
+    };
+
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        const runRepo = manager.getRepository(WorkflowRun);
+        const transcriptRepo = manager.getRepository(ConversationTranscript);
+
+        const existingRun = await runRepo.findOne({
+          where: { idempotencyKey },
+        });
+        if (existingRun) {
+          return await reuseExisting(existingRun, transcriptRepo);
+        }
+
         const workflowRun = runRepo.create({
           workflowName: WF09_NAME,
           status: WorkflowStatus.PENDING,
@@ -317,19 +329,20 @@ export class ConversationsService {
           createdAt: savedTranscript.createdAt,
           reused: false,
         };
-      } catch (error) {
-        if (!isPostgresUniqueViolation(error)) {
-          throw error;
-        }
-        const concurrent = await runRepo.findOne({
-          where: { idempotencyKey },
-        });
-        if (!concurrent) {
-          throw error;
-        }
-        return await reuseExisting(concurrent);
+      });
+    } catch (error) {
+      if (!isPostgresUniqueViolation(error)) {
+        throw error;
       }
-    });
+      // Lookup outside the rolled-back transaction to avoid PostgreSQL 25P02
+      const concurrent = await this.workflowRunsRepository.findOne({
+        where: { idempotencyKey },
+      });
+      if (!concurrent) {
+        throw error;
+      }
+      return await reuseExisting(concurrent, this.transcriptsRepository);
+    }
   }
 
   async getTranscript(id: string, user: AuthenticatedUser) {

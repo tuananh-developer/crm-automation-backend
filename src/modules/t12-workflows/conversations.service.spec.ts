@@ -1175,6 +1175,7 @@ describe('ConversationsService', () => {
       );
       const contentHash = createHash('sha256').update(safeText).digest('hex');
       const expectedPayload = {
+        meetingId: null,
         sourceType: 'CALL',
         customerId: 'customer-1',
         leadId: null,
@@ -1270,6 +1271,7 @@ describe('ConversationsService', () => {
       const safeText = service.redactSensitiveContent(text);
       const contentHash = createHash('sha256').update(safeText).digest('hex');
       const expectedPayload = {
+        meetingId: null,
         sourceType: 'CALL',
         customerId: 'customer-1',
         leadId: null,
@@ -1280,7 +1282,7 @@ describe('ConversationsService', () => {
       const existingRun = {
         id: 'run-hash-1',
         workflowName: 't12-wf09-conversation-summarizer',
-        idempotencyKey: `wf09:${mockSalesUser1.id}:content:${contentHash}`,
+        idempotencyKey: `wf09:${mockSalesUser1.id}:content:no-meeting:customer-1:no-lead:CALL:${contentHash}`,
         status: WorkflowStatus.PENDING,
         inputPayload: expectedPayload,
         startedAt: new Date('2026-11-01T10:00:00.000Z'),
@@ -1321,6 +1323,7 @@ describe('ConversationsService', () => {
       );
       const contentHash = createHash('sha256').update(safeText).digest('hex');
       const expectedPayload = {
+        meetingId: null,
         sourceType: 'CALL',
         customerId: 'customer-1',
         leadId: null,
@@ -1364,6 +1367,69 @@ describe('ConversationsService', () => {
       expect(result.reused).toBe(true);
       expect(result.transcriptId).toBe('transcript-concurrent-1');
       expect(result.workflowRunId).toBe('run-concurrent-1');
+    });
+
+    it('creates distinct transcripts for two different meetingIds with identical text when idempotencyKey is omitted', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: mockSalesUser1.id,
+      });
+
+      workflowRunsRepository.findOne.mockResolvedValue(null);
+      workflowRunsRepository.create
+        .mockImplementationOnce((payload: any) => ({
+          id: 'run-meeting-1',
+          status: WorkflowStatus.PENDING,
+          ...payload,
+        }))
+        .mockImplementationOnce((payload: any) => ({
+          id: 'run-meeting-2',
+          status: WorkflowStatus.PENDING,
+          ...payload,
+        }));
+      workflowRunsRepository.save
+        .mockImplementationOnce((run: any) => Promise.resolve(run))
+        .mockImplementationOnce((run: any) => Promise.resolve(run));
+
+      transcriptsRepository.create
+        .mockImplementationOnce((payload: any) => ({
+          id: 'transcript-meeting-1',
+          createdAt: new Date(),
+          ...payload,
+        }))
+        .mockImplementationOnce((payload: any) => ({
+          id: 'transcript-meeting-2',
+          createdAt: new Date(),
+          ...payload,
+        }));
+      transcriptsRepository.save
+        .mockImplementationOnce((t: any) => Promise.resolve(t))
+        .mockImplementationOnce((t: any) => Promise.resolve(t));
+
+      const first = await service.createTranscript(
+        {
+          customerId: 'customer-1',
+          meetingId: '11111111-1111-4111-8111-111111111111',
+          content: 'Identical transcript body across two meetings.',
+        },
+        mockSalesUser1,
+      );
+
+      const second = await service.createTranscript(
+        {
+          customerId: 'customer-1',
+          meetingId: '22222222-2222-4222-8222-222222222222',
+          content: 'Identical transcript body across two meetings.',
+        },
+        mockSalesUser1,
+      );
+
+      expect(first.reused).toBe(false);
+      expect(second.reused).toBe(false);
+      expect(first.transcriptId).toBe('transcript-meeting-1');
+      expect(second.transcriptId).toBe('transcript-meeting-2');
+      expect(workflowRunsRepository.save).toHaveBeenCalledTimes(2);
+      expect(transcriptsRepository.save).toHaveBeenCalledTimes(2);
     });
   });
 });

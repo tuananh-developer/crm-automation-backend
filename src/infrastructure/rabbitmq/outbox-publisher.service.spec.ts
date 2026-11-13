@@ -312,7 +312,8 @@ describe('OutboxPublisher', () => {
     const config = {
       get: jest.fn((key: string) => {
         if (key === 'NODE_ENV') return 'production';
-        if (key === 'N8N_WF11_WEBHOOK_URL') return 'https://n8n.example/webhook';
+        if (key === 'N8N_WF11_WEBHOOK_URL')
+          return 'https://n8n.example/webhook';
         if (key === 'N8N_API_KEY') return 'test-n8n-secret';
         return undefined;
       }),
