@@ -5,6 +5,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module.js';
+import { AddNotificationSeverityColumn1728450000000 } from '../src/database/migrations/1728450000000-AddNotificationSeverityColumn.js';
 import { Quote } from '../src/modules/t12-workflows/entities/quote.entity.js';
 import { QuoteApproval } from '../src/modules/t12-workflows/entities/quote-approval.entity.js';
 import { WF12_NAME } from '../src/modules/t12-workflows/quotes.service.js';
@@ -104,10 +105,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       });
     expect(adminRegistration.status).toBe(201);
     adminUserId = adminRegistration.body.user.id;
-    await dataSource.query(
-      "UPDATE users SET role = 'ADMIN' WHERE id = $1;",
-      [adminUserId],
-    );
+    await dataSource.query("UPDATE users SET role = 'ADMIN' WHERE id = $1;", [
+      adminUserId,
+    ]);
 
     const adminLogin = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
@@ -444,10 +444,11 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
 
       expect(apply.status).toBe(500);
 
-      const leads = await dataSource.query(
-        'SELECT id, phone FROM leads WHERE id = ANY($1::uuid[]) ORDER BY id;',
-        [[firstLeadId, secondLeadId]],
-      );
+      const leads: Array<{ id: string; phone: string }> =
+        await dataSource.query(
+          'SELECT id, phone FROM leads WHERE id = ANY($1::uuid[]) ORDER BY id;',
+          [[firstLeadId, secondLeadId]],
+        );
       const phonesById = new Map(leads.map((lead) => [lead.id, lead.phone]));
       expect(phonesById.get(firstLeadId)).toBe('+1 (415) 555-0101');
       expect(phonesById.get(secondLeadId)).toBe('+1 (415) 555-0102');
@@ -474,17 +475,19 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
   it('returns one success and one 409 for concurrent registrations with the same email', async () => {
     const email = `register.race.${suffix}@example.test`;
     const register = () =>
-      request(app.getHttpServer())
-        .post('/api/v1/auth/register')
-        .send({
-          name: 'Concurrent Registration',
-          email,
-          password: 'E2eStrongPassword123!',
-        });
+      request(app.getHttpServer()).post('/api/v1/auth/register').send({
+        name: 'Concurrent Registration',
+        email,
+        password: 'E2eStrongPassword123!',
+      });
 
     const responses = await Promise.all([register(), register()]);
-    expect(responses.filter((response) => response.status === 201)).toHaveLength(1);
-    expect(responses.filter((response) => response.status === 409)).toHaveLength(1);
+    expect(
+      responses.filter((response) => response.status === 201),
+    ).toHaveLength(1);
+    expect(
+      responses.filter((response) => response.status === 409),
+    ).toHaveLength(1);
 
     const [users] = await dataSource.query(
       'SELECT COUNT(*)::int AS count FROM users WHERE email = $1;',
@@ -506,7 +509,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     }
 
     expect(statuses).toContain(429);
-    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(0);
+    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('preserves Lead contact edits when review resolution runs concurrently', async () => {
@@ -627,9 +632,7 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       await dataSource.query(
         `DROP TRIGGER IF EXISTS ${triggerName} ON audit_logs;`,
       );
-      await dataSource.query(
-        `DROP FUNCTION IF EXISTS ${functionName}();`,
-      );
+      await dataSource.query(`DROP FUNCTION IF EXISTS ${functionName}();`);
     }
   });
 
@@ -741,5 +744,56 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     expect(rejectedRequest.decision_comment).toBe(
       'Discount exceeds the permitted policy',
     );
+  });
+
+  it('upgrades a pre-existing nullable notifications.severity column (PR #52 applied first) to NOT NULL DEFAULT INFO', async () => {
+    const queryRunner = dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      // Simulate PR #52 (1728600000000) having already created a nullable varchar(20) severity column
+      await queryRunner.query(`
+        ALTER TABLE "notifications"
+        ALTER COLUMN "severity" DROP NOT NULL,
+        ALTER COLUMN "severity" DROP DEFAULT,
+        ALTER COLUMN "severity" TYPE varchar(20)
+      `);
+
+      const nullNotifId = randomUUID();
+      await queryRunner.query(
+        `INSERT INTO "notifications" ("id", "user_id", "type", "title", "content", "severity", "is_read")
+         VALUES ($1, $2, 'WORKFLOW_COMPLETED', 'Nullable severity test', 'Created before UC03 migration', NULL, false)`,
+        [nullNotifId, userId],
+      );
+
+      const migration = new AddNotificationSeverityColumn1728450000000();
+      await migration.up(queryRunner);
+
+      const colMeta: Array<{
+        is_nullable: string;
+        character_maximum_length: number;
+        column_default: string | null;
+      }> = await queryRunner.query(
+        `SELECT is_nullable, character_maximum_length, column_default
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'notifications'
+           AND column_name = 'severity'`,
+      );
+      expect(colMeta).toHaveLength(1);
+      expect(colMeta[0].is_nullable).toBe('NO');
+      expect(Number(colMeta[0].character_maximum_length)).toBe(30);
+      expect(colMeta[0].column_default).toContain('INFO');
+
+      const backfilledRows: Array<{ severity: string }> =
+        await queryRunner.query(
+          `SELECT severity FROM "notifications" WHERE id = $1`,
+          [nullNotifId],
+        );
+      expect(backfilledRows).toEqual([{ severity: 'INFO' }]);
+    } finally {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+    }
   });
 });
