@@ -762,17 +762,17 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     try {
       const [first, second] = await Promise.all([
         api
-          .post(`/api/v1/customers/${customerId}/360`)
+          .post(`/api/v1/customers/${customerId}/360/trigger`)
           .set('Idempotency-Key', idempotencyKey)
           .send({}),
         api
-          .post(`/api/v1/customers/${customerId}/360`)
+          .post(`/api/v1/customers/${customerId}/360/trigger`)
           .set('Idempotency-Key', idempotencyKey)
           .send({}),
       ]);
 
-      expect([200, 201]).toContain(first.status);
-      expect([200, 201]).toContain(second.status);
+      expect(first.status).toBe(202);
+      expect(second.status).toBe(202);
       expect(first.body.workflowRunId).toBeDefined();
       expect(second.body.workflowRunId).toBe(first.body.workflowRunId);
       workflowRunIds.push(first.body.workflowRunId as string);
@@ -791,14 +791,14 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
 
       // Omitting Idempotency-Key creates distinct WorkflowRuns
       const unkeyedFirst = await api
-        .post(`/api/v1/customers/${customerId}/360`)
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
         .send({});
       const unkeyedSecond = await api
-        .post(`/api/v1/customers/${customerId}/360`)
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
         .send({});
 
-      expect([200, 201]).toContain(unkeyedFirst.status);
-      expect([200, 201]).toContain(unkeyedSecond.status);
+      expect(unkeyedFirst.status).toBe(202);
+      expect(unkeyedSecond.status).toBe(202);
       expect(unkeyedFirst.body.workflowRunId).toBeDefined();
       expect(unkeyedSecond.body.workflowRunId).toBeDefined();
       expect(unkeyedSecond.body.workflowRunId).not.toBe(
