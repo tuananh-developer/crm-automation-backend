@@ -36,6 +36,7 @@
     "@nestjs/jwt": "^12.0.2",
     "@nestjs/mapped-types": "^12.0.0",
     "@nestjs/microservices": "^12.0.3",
+    "@nestjs/observe": "0.3.24",
     "@nestjs/passport": "^12.0.0",
     "@nestjs/platform-express": "^12.0.3",
     "@nestjs/schedule": "^12.0.2",
@@ -54,7 +55,8 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "swagger-ui-express": "^5.0.1",
-    "typeorm": "^1.1.1"
+    "typeorm": "^1.1.1",
+    "nodemailer": "^10.2.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",

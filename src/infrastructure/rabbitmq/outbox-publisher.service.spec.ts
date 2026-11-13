@@ -202,34 +202,125 @@ describe('OutboxPublisher', () => {
     fetchSpy.mockRestore();
   });
 
-  it('schedules an exponential retry when publication fails', async () => {
-    (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
-      new Error('broker unavailable'),
+  it('does not send production webhooks over plaintext HTTP', async () => {
+    const workflowRunId = '11111111-1111-1111-1111-111111111111';
+    const httpEvent = {
+      ...event,
+      transport: OutboxTransport.HTTP,
+      destination: 'N8N_WF10_WEBHOOK_URL',
+      destinationPath: 'internal/t12-wf10-next-best-action',
+      payload: { workflowRunId, entityType: 'Lead', entityId: 'lead-1' },
+    };
+    manager.query.mockResolvedValueOnce([httpEvent]);
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'NODE_ENV') return 'production';
+        if (key === 'N8N_WF10_WEBHOOK_URL') return 'http://n8n.example/webhook';
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        return undefined;
+      }),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      config as unknown as ConfigService,
     );
 
-    const before = Date.now();
     await publisher.publishPendingEvents();
 
-    const update = (repository.update as jest.Mock).mock.calls[0][1] as {
-      status: OutboxEventStatus;
-      lastError: string;
-      nextAttemptAt: Date;
-    };
-    expect(update.status).toBe(OutboxEventStatus.PENDING);
-    expect(update.lastError).toBe('broker unavailable');
-    expect(update.nextAttemptAt).toBeInstanceOf(Date);
-    expect(update.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(
-      before + 60_000,
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repository.update).toHaveBeenCalledWith(
+      { id: httpEvent.id, lockToken: httpEvent.lockToken },
+      expect.objectContaining({
+        status: OutboxEventStatus.FAILED,
+        lastError: expect.stringContaining('must use https'),
+      }),
     );
-    expect(update.nextAttemptAt.getTime()).toBeLessThanOrEqual(
-      Date.now() + 60_000,
-    );
+    fetchSpy.mockRestore();
   });
 
-  it('moves an event to terminal failure after the retry limit', async () => {
-    manager.query.mockResolvedValueOnce([{ ...event, attempts: 10 }]);
+  it('blocks production transcript dispatch until external processing is explicitly enabled', async () => {
+    const workflowRunId = '11111111-1111-1111-1111-111111111111';
+    const httpEvent = {
+      ...event,
+      transport: OutboxTransport.HTTP,
+      destination: 'N8N_WF11_WEBHOOK_URL',
+      destinationPath: 'internal/t12-wf11-sales-meeting',
+      payload: { workflowRunId, transcript: 'Sensitive meeting transcript' },
+    };
+    manager.query.mockResolvedValueOnce([httpEvent]);
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'NODE_ENV') return 'production';
+        if (key === 'N8N_WF11_WEBHOOK_URL')
+          return 'https://n8n.example/webhook';
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        return undefined;
+      }),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      config as unknown as ConfigService,
+    );
+
+    await publisher.publishPendingEvents();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repository.update).toHaveBeenCalledWith(
+      { id: httpEvent.id, lockToken: httpEvent.lockToken },
+      expect.objectContaining({
+        status: OutboxEventStatus.FAILED,
+        lastError: expect.stringContaining('disabled by production policy'),
+      }),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it.each([
+    { attempts: 1, delayMs: 60_000 },
+    { attempts: 2, delayMs: 5 * 60_000 },
+    { attempts: 3, delayMs: 15 * 60_000 },
+  ])(
+    'schedules attempt $attempts retry according to the 1/5/15-minute policy',
+    async ({ attempts, delayMs }) => {
+      manager.query.mockResolvedValueOnce([{ ...event, attempts }]);
+      (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
+        new Error('broker unavailable'),
+      );
+
+      const before = Date.now();
+      await publisher.publishPendingEvents();
+
+      const update = (repository.update as jest.Mock).mock.calls[0][1] as {
+        status: OutboxEventStatus;
+        lastError: string;
+        nextAttemptAt: Date;
+      };
+      expect(update.status).toBe(OutboxEventStatus.PENDING);
+      expect(update.lastError).toBe('broker unavailable');
+      expect(update.nextAttemptAt).toBeInstanceOf(Date);
+      expect(update.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(
+        before + delayMs,
+      );
+      expect(update.nextAttemptAt.getTime()).toBeLessThanOrEqual(
+        Date.now() + delayMs,
+      );
+    },
+  );
+
+  it('moves an event to terminal failure on the fourth total attempt', async () => {
+    manager.query.mockResolvedValueOnce([{ ...event, attempts: 4 }]);
     (rabbitmq.publishOutboxEvent as jest.Mock).mockRejectedValueOnce(
-      new Error('permanent broker failure'),
+      new Error('broker unavailable'),
     );
 
     await publisher.publishPendingEvents();
@@ -238,7 +329,7 @@ describe('OutboxPublisher', () => {
       { id: event.id, lockToken: event.lockToken },
       expect.objectContaining({
         status: OutboxEventStatus.FAILED,
-        lastError: 'permanent broker failure',
+        lastError: 'broker unavailable',
         nextAttemptAt: null,
         lockedUntil: null,
         lockToken: null,
