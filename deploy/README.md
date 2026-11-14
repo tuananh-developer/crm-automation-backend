@@ -8,24 +8,19 @@ This deployment runs the CRM application on one Ubuntu EC2 instance:
 - PostgreSQL stores CRM and n8n data in separate databases and roles.
 - RabbitMQ is private to the Docker network.
 - n8n runs workflows and calls the backend over the private Docker network.
+- GitHub Actions builds and publishes immutable Docker Hub image tags after CI succeeds, then deploys the changed app through AWS Systems Manager Run Command.
 
 This is a practical single-node deployment, not a highly available architecture. The EC2 instance, its EBS volume, and its Availability Zone remain single points of failure. Keep independent database and n8n backups before relying on it for important data.
 
 ## 1. Prerequisites
 
-- Ubuntu EC2 with Docker Engine and Docker Compose v2.
-- The backend and frontend repositories checked out as sibling directories:
-  
-  ```text
-  ~/Projects/
-  ├── crm-automation-backend/
-  └── crm-automation-frontend/
-  ```
-
-- Two DNS A records pointing to the EC2 public IPv4 address:
-  - `CRM_DOMAIN`, for example `crm.your-domain.tld`
-  - `N8N_DOMAIN`, for example `n8n.your-domain.tld`
-- An AWS Security Group that permits inbound TCP 80 and 443 from the Internet. Do not expose 3000, 3001, 5432, 5672, 5678, or 15672. Keep Session Manager for administration.
+- Ubuntu EC2 with Docker Engine, Docker Compose v2, Git, and an online Systems Manager Agent.
+- The backend repository checked out at `/home/ssm-user/Projects/crm-automation-backend` on branch `main`. The frontend source checkout is not needed on EC2 because the frontend image is pulled from Docker Hub.
+- The EC2 instance profile has `AmazonSSMManagedInstanceCore` and the instance is Online in Systems Manager Managed nodes.
+- The GitHub IAM user has only the `ssm:SendCommand` permission for this EC2 instance and `AWS-RunShellScript`, plus `ssm:GetCommandInvocation` for command status.
+- Both Docker Hub repositories are readable by EC2. Public repositories need no Docker login; for private repositories configure a Docker Hub read-only credential on EC2 outside GitHub workflow command parameters.
+- Two DNS A records point to the EC2 public IPv4 address: `CRM_DOMAIN` and `N8N_DOMAIN`.
+- The EC2 Security Group permits inbound TCP 80 and 443 only for the public application. Do not expose 3000, 3001, 5432, 5672, 5678, or 15672. Keep Session Manager for administration.
 - A stable public IP is recommended for DNS. An automatically assigned public IPv4 can change after a stop/start; update DNS or use an Elastic IP if a stable address is required.
 
 ## 2. Prepare secrets and domains
@@ -37,117 +32,80 @@ cp deploy/.env.production.example deploy/.env.production
 nano deploy/.env.production
 ```
 
-Replace the two example hostnames and ACME email with real values. Generate a different random value for every secret/password field. Use this command once per field and do not reuse its output:
+Replace the example hostnames and ACME email with real values. Generate a different random value for every secret/password field with `openssl rand -hex 32`.
 
-```bash
-openssl rand -hex 32
-```
+Required unique secrets include `POSTGRES_ADMIN_PASSWORD`, `LOCAL_DB_PASSWORD`, `N8N_DB_PASSWORD`, `LOCAL_RABBITMQ_PASSWORD`, `JWT_SECRET`, `N8N_API_KEY`, `N8N_WEBHOOK_SECRET`, and `N8N_ENCRYPTION_KEY`. Keep the n8n encryption key stable; changing it without a planned credential migration can make stored credentials unreadable.
 
-The following values must each be unique and at least 32 characters:
-
-- `POSTGRES_ADMIN_PASSWORD`
-- `LOCAL_DB_PASSWORD`
-- `N8N_DB_PASSWORD`
-- `LOCAL_RABBITMQ_PASSWORD`
-- `JWT_SECRET`
-- `N8N_API_KEY`
-- `N8N_WEBHOOK_SECRET`
-- `N8N_ENCRYPTION_KEY`
-
-The application and n8n share `N8N_API_KEY` / `N8N_WEBHOOK_SECRET` for machine-to-machine callbacks. Keep the n8n encryption key stable: changing it without a planned credential migration can make previously stored n8n credentials unreadable.
-
-Check the environment file:
+Run:
 
 ```bash
 bash deploy/check-env.sh
 ```
 
-The script validates required values, hostnames, secret length and uniqueness, then restricts the file permissions to owner read/write. It never prints secret values. Keep `deploy/.env.production` out of Git and backups must be access-controlled.
+The script validates required values, hostnames, secret length and uniqueness, then restricts file permissions. Keep `deploy/.env.production` out of Git.
 
-## 3. Validate, build, and start
+## 3. First-time stack start
 
-Run from the backend repository root. Use the same Compose file and environment file on every command:
+Configure initial image tags in `deploy/.env.production` (normally `latest` for the first deployment):
 
-```bash
-docker compose \
-  --env-file deploy/.env.production \
-  -f deploy/compose.production.yml \
-  config --quiet
+```dotenv
+BACKEND_IMAGE_TAG=latest
+FRONTEND_IMAGE_TAG=latest
 ```
 
-Build the images sequentially to avoid simultaneous Next.js and NestJS build peaks on a 2-vCPU / 8-GiB instance:
+Validate and pull images:
 
 ```bash
-docker compose --env-file deploy/.env.production -f deploy/compose.production.yml build backend
-docker compose --env-file deploy/.env.production -f deploy/compose.production.yml build frontend
+docker compose --env-file deploy/.env.production -f deploy/compose.production.yml config --quiet
+docker compose --env-file deploy/.env.production -f deploy/compose.production.yml pull
+docker compose --env-file deploy/.env.production -f deploy/compose.production.yml up -d --no-build
 ```
 
-Start the stack:
+The backend migration one-shot container runs after PostgreSQL is healthy and before the API starts. It uses the same published backend image. If migrations fail, the API is not started.
 
-```bash
-docker compose --env-file deploy/.env.production -f deploy/compose.production.yml up -d
-```
-
-The backend migration one-shot container runs after PostgreSQL is healthy and before the API starts. It uses the same production image and the explicitly enabled private Compose database mode. If migration exits unsuccessfully, the API is not started.
-
-Inspect services and logs:
+Inspect services:
 
 ```bash
 docker compose --env-file deploy/.env.production -f deploy/compose.production.yml ps
 docker compose --env-file deploy/.env.production -f deploy/compose.production.yml logs --tail=150 backend backend-migrate
-docker compose --env-file deploy/.env.production -f deploy/compose.production.yml logs --tail=150 postgres rabbitmq n8n
 ```
 
-Check the public application:
+## 4. GitHub Actions configuration
 
-```bash
-curl -fsS https://CRM_DOMAIN/api/v1/health
-```
+Set these repository variables in both backend and frontend repositories:
 
-Replace `CRM_DOMAIN` with the real hostname from the environment file. Open `https://CRM_DOMAIN` for the CRM and `https://N8N_DOMAIN` for n8n.
+- `DOCKERHUB_USERNAME=tanhisme`
+- `AWS_REGION=ap-southeast-2`
+- `AWS_EC2_INSTANCE_ID=i-05f96c4993945b4e9`
 
-## 4. Complete n8n setup
+Set these repository secrets in both repositories:
 
-After first startup:
+- `DOCKERHUB_TOKEN`: Docker Hub token with Read & Write access.
+- `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`: credentials for the restricted `github-actions-ssm` IAM user.
 
-1. Open the n8n hostname and complete n8n owner setup.
-2. Import the workflow JSON files from `integrations/n8n/workflows/` that belong to the deployment.
-3. Configure the RabbitMQ connection credential for the private broker and the HTTP Header credential used by protected webhook nodes. Use the same values from the production environment file; do not put credentials into exported workflow JSON.
-4. Import the shared error handler and select it as the Error Workflow for WF01, WF08, WF10, WF11 and WF12. Do not assign it to itself.
-5. Confirm the RabbitMQ queues and each workflow independently with synthetic records before using real CRM data.
-6. Configure Gemini and SMTP credentials as needed. AI workflows need a valid `GEMINI_API_KEY`; email delivery remains unavailable until the SMTP values and sender are configured.
-7. WF11 external transcript processing remains disabled by default. Keep it disabled until data classification, provider terms and retention controls are approved.
+After the normal CI workflow succeeds on a push to `main`, the publish workflow builds `linux/amd64`, pushes `latest` and `sha-<7-character-commit>` tags, then invokes AWS Systems Manager Run Command. EC2 pulls the exact SHA tag and updates only the affected service. The workflow waits for SSM completion and the container health check.
 
-The existing workflow exports use runtime environment variables for trusted internal calls. The n8n container receives only the variables it needs, but access to environment variables from n8n nodes is enabled for compatibility with those exports. Only import trusted workflow definitions and restrict n8n owner access.
+Before enabling automatic deployment, confirm the instance appears Online in Systems Manager Managed nodes. The EC2 instance profile must include `AmazonSSMManagedInstanceCore` and its outbound HTTPS connectivity to Systems Manager endpoints must work.
 
 ## 5. Updates
 
-After changes have been merged into `main`, update both sibling repositories:
+Normal application updates are automatic after a successful push/merge to `main`. The EC2 deployment script uses a shared file lock, updates only the corresponding image tag in `.env.production`, pulls the immutable tag, and recreates only `backend` or `frontend`. Backend updates run the migration dependency first. PostgreSQL, RabbitMQ, n8n, Caddy and named volumes are not intentionally recreated by app-only updates.
+
+To manually inspect or recover:
 
 ```bash
-cd ~/Projects/crm-automation-backend
-git switch main
-git pull --ff-only
-
-cd ~/Projects/crm-automation-frontend
-git switch main
-git pull --ff-only
+cd /home/ssm-user/Projects/crm-automation-backend
+docker compose --env-file deploy/.env.production -f deploy/compose.production.yml ps
+docker compose --env-file deploy/.env.production -f deploy/compose.production.yml logs --tail=150 backend frontend
 ```
 
-Then return to the backend root, validate and rebuild sequentially:
+Never run `docker compose down -v`; it deletes named volumes containing PostgreSQL, RabbitMQ and n8n state.
 
-```bash
-cd ~/Projects/crm-automation-backend
-./deploy/check-env.sh
-docker compose --env-file deploy/.env.production -f deploy/compose.production.yml config --quiet
-docker compose --env-file deploy/.env.production -f deploy/compose.production.yml build backend
-docker compose --env-file deploy/.env.production -f deploy/compose.production.yml build frontend
-docker compose --env-file deploy/.env.production -f deploy/compose.production.yml up -d
-```
+## 6. Complete n8n setup
 
-Review migration logs and health status after every update. Back up the database before schema changes.
+After first startup, complete n8n owner setup, import trusted workflow JSON from `integrations/n8n/workflows/`, configure RabbitMQ and protected HTTP credentials, and test with synthetic records before processing real CRM data. Configure Gemini and SMTP credentials as required. Keep WF11 external transcript processing disabled until data classification, provider terms and retention controls are approved.
 
-## 6. Backups and safety
+## 7. Backups and safety
 
 Create a restricted backup directory:
 
@@ -156,22 +114,8 @@ mkdir -p ~/crm-backups
 chmod 700 ~/crm-backups
 ```
 
-Create PostgreSQL backups for both databases (run from the backend repository root):
+Back up both PostgreSQL databases and n8n data volume, preserve the exact `N8N_ENCRYPTION_KEY`, store backups off-instance in an encrypted location, and periodically verify restores. EBS snapshots complement but do not replace application-consistent database backups.
 
-```bash
-docker compose --env-file deploy/.env.production -f deploy/compose.production.yml exec -T postgres sh -c 'pg_dump -U "$LOCAL_DB_USER" -d "$LOCAL_DB_NAME" -Fc' > ~/crm-backups/crm_backend-$(date +%F-%H%M).dump
+## 8. Network and resource boundaries
 
-docker compose --env-file deploy/.env.production -f deploy/compose.production.yml exec -T postgres sh -c 'pg_dump -U "$N8N_DB_USER" -d "$N8N_DB_NAME" -Fc' > ~/crm-backups/crm_n8n-$(date +%F-%H%M).dump
-```
-
-Back up the environment file and the n8n data volume securely as well. The n8n PostgreSQL dump alone does not replace the encryption key; preserve the exact `N8N_ENCRYPTION_KEY`.
-
-Never run `docker compose down -v` on this stack. The `-v` option deletes named volumes containing PostgreSQL, RabbitMQ and n8n state. A normal `docker compose down` preserves named volumes, but it causes downtime. Prefer `up -d` for routine updates.
-
-Keep database dumps off the instance (for example, in a private encrypted backup location) and periodically verify a restore. EBS snapshots are useful but are not a replacement for application-consistent database backups.
-
-## 7. Network and resource boundaries
-
-Only Caddy publishes ports 80 and 443. PostgreSQL, RabbitMQ, n8n, backend and frontend use the private Compose network and have no host-published ports. The service memory limits are designed as an initial budget for a 8-GiB EC2 instance; monitor memory and disk use before raising limits or enabling additional worker concurrency.
-
-The app uses a single PostgreSQL instance and a single RabbitMQ instance. There is no Multi-AZ failover or automatic horizontal scaling in this Compose deployment.
+Only Caddy publishes ports 80 and 443. PostgreSQL, RabbitMQ, n8n, backend and frontend use the private Compose network and have no host-published ports. The single EC2, PostgreSQL and RabbitMQ instances are single points of failure; this is not a Multi-AZ or horizontally scaled deployment.
