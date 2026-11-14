@@ -6,14 +6,22 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { CustomersService } from './customers.service.js';
 import { QueryCustomerDto } from './dto/index.js';
 import { CustomerResponseDto } from './dto/customer-response.dto.js';
 import { ApiPaginatedResponse } from '../../common/index.js';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Customers')
@@ -34,6 +42,25 @@ export class CustomersController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     return this.customersService.findAll(query, actor);
+  }
+
+  @Get(':id/internal')
+  @Public()
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal service read of customer details for n8n workflows',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the customer' })
+  @ApiResponse({ status: 200, type: CustomerResponseDto })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized internal service request.',
+  })
+  @ApiResponse({ status: 404, description: 'Customer not found.' })
+  findOneInternal(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<CustomerResponseDto> {
+    return this.customersService.findOneInternal(id);
   }
 
   @Get(':id')
