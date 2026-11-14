@@ -4,7 +4,7 @@
 
 - Vercel hosts the Next.js frontend and deploys it from the frontend GitHub repository.
 - One Ubuntu EC2 instance runs only the NestJS backend, RabbitMQ, n8n, and Caddy as separate Docker Compose services.
-- Neon PostgreSQL stores the CRM database and a separate n8n database.
+- Neon PostgreSQL stores the CRM database. n8n uses its default SQLite database on a persistent Docker volume.
 - Docker Hub stores the backend image.
 - GitHub Actions runs backend CI, publishes an immutable image tag, and deploys only the backend service through AWS Systems Manager Run Command.
 
@@ -19,16 +19,11 @@ This is a cost-conscious single-instance deployment for the current demo/workloa
 - Security Group inbound TCP 80 and 443 only. Do not expose 3000, 5672, 15672, 5678, or 5432.
 - Use an EC2 Elastic IP or a DNS name pointing to the EC2 public IP. For a demo without a purchased domain, `nip.io` hostnames can be used, for example `api.<EC2_PUBLIC_IP>.nip.io` and `n8n.<EC2_PUBLIC_IP>.nip.io`.
 
-## Neon databases
+## Neon database
 
-Create two separate databases and roles in the same Neon project/branch (or use separate branches if desired):
+Use the existing Neon PostgreSQL database for the CRM API. Set `DATABASE_URL` to its connection string and keep TLS enabled with `sslmode=require`. Prefer the direct Neon endpoint for the migration runner.
 
-- CRM API: database `crm_backend`, role dedicated to the backend.
-- n8n: database `crm_n8n`, role dedicated to n8n.
-
-Use TLS-required connection details. Set `DATABASE_URL` to the backend's PostgreSQL connection string. Prefer Neon's direct endpoint for the migration runner; keep `sslmode=require`. Set the n8n host, database, role, and password in the matching `N8N_DB_*` variables. n8n's TLS verification remains enabled.
-
-Do not reuse database roles/passwords between CRM and n8n.
+No second Neon database is needed for n8n. Self-hosted n8n uses SQLite by default; its database file and encryption settings are persisted in the `n8n_data` Docker volume. Keep that volume intact across container updates.
 
 ## Prepare the EC2 environment
 
@@ -52,8 +47,7 @@ Fill every placeholder:
 - `FRONTEND_URL`: exact production origin shown by the Vercel project.
 - `ACME_EMAIL`: an email address for Caddy/Let's Encrypt.
 - `DATABASE_URL`: Neon CRM database connection string with `sslmode=require`.
-- `N8N_DB_HOST/PORT/NAME/USER/PASSWORD`: the separate Neon n8n database and role.
-- Generate unique secrets for RabbitMQ, JWT, n8n API, webhook, and encryption key. Keep `N8N_ENCRYPTION_KEY` stable after n8n has started.
+- Generate unique secrets for RabbitMQ, JWT, n8n API, webhook, and encryption key. Keep `N8N_ENCRYPTION_KEY` stable after n8n has started. No n8n database credentials are needed.
 
 Generate a value without printing it to the terminal history:
 

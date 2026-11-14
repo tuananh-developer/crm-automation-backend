@@ -22,7 +22,6 @@ read_env() {
 
 required_secrets=(
   LOCAL_RABBITMQ_PASSWORD
-  N8N_DB_PASSWORD
   JWT_SECRET
   N8N_API_KEY
   N8N_WEBHOOK_SECRET
@@ -43,7 +42,7 @@ for key in "${required_secrets[@]}"; do
   seen_secrets["$value"]="$key"
 done
 
-for key in API_DOMAIN N8N_DOMAIN FRONTEND_URL ACME_EMAIL N8N_DB_HOST N8N_DB_NAME N8N_DB_USER LOCAL_RABBITMQ_USER; do
+for key in API_DOMAIN N8N_DOMAIN FRONTEND_URL ACME_EMAIL LOCAL_RABBITMQ_USER; do
   value="$(read_env "$key")"
   if [[ -z "$value" ]]; then
     echo "$key must be set in $ENV_FILE." >&2
@@ -96,11 +95,6 @@ if [[ "$api_domain" == "$n8n_domain" ]]; then
 fi
 if [[ "$api_domain" == *example.com* || "$n8n_domain" == *example.com* ]]; then
   echo "Replace example.com hostnames with real DNS names." >&2
-  exit 1
-fi
-
-if [[ "$(read_env N8N_DB_SSL_ENABLED)" != "true" || "$(read_env N8N_DB_SSL_REJECT_UNAUTHORIZED)" != "true" ]]; then
-  echo "n8n Neon PostgreSQL connections must use verified TLS." >&2
   exit 1
 fi
 
