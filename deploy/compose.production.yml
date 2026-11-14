@@ -104,7 +104,6 @@ services:
 
   backend-migrate:
     image: crm-automation-backend:production
-    build: *backend-build
     restart: "no"
     env_file:
       - .env.production
