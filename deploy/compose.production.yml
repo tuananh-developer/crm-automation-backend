@@ -148,8 +148,8 @@ services:
       DB_SSL: "false"
       FRONTEND_URL: https://${CRM_DOMAIN:?Set CRM_DOMAIN}
       BACKEND_INTERNAL_URL: http://backend:3000
-      N8N_BASE_URL: https://${N8N_DOMAIN:?Set N8N_DOMAIN}
-      N8N_WEBHOOK_BASE_URL: https://${N8N_DOMAIN:?Set N8N_DOMAIN}/webhook
+      N8N_BASE_URL: http://n8n:5678
+      N8N_WEBHOOK_BASE_URL: http://n8n:5678/webhook
     depends_on:
       postgres:
         condition: service_healthy
