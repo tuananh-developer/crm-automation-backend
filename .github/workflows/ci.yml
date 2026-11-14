@@ -137,7 +137,7 @@ jobs:
 
       - name: Validate deployment configuration
         env:
-          FRONTEND_BUILD_CONTEXT: \${{ github.workspace }}/crm-automation-frontend
+          FRONTEND_BUILD_CONTEXT: ${{ github.workspace }}/crm-automation-frontend
         run: |
           bash -n deploy/check-env.sh
           bash -n deploy/postgres-init/01-create-app-databases.sh
@@ -150,5 +150,5 @@ jobs:
 
       - name: Build frontend Docker image
         env:
-          FRONTEND_BUILD_CONTEXT: \${{ github.workspace }}/crm-automation-frontend
+          FRONTEND_BUILD_CONTEXT: ${{ github.workspace }}/crm-automation-frontend
         run: docker compose --env-file deploy/.env.production -f deploy/compose.production.yml build frontend
