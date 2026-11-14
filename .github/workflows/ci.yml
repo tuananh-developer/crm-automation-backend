@@ -104,7 +104,7 @@ jobs:
       - name: Prepare ephemeral CI environment
         run: |
           cp deploy/.env.production.example deploy/.env.production
-          for key in LOCAL_RABBITMQ_PASSWORD N8N_DB_PASSWORD JWT_SECRET N8N_API_KEY N8N_WEBHOOK_SECRET N8N_ENCRYPTION_KEY; do
+          for key in LOCAL_RABBITMQ_PASSWORD JWT_SECRET N8N_API_KEY N8N_WEBHOOK_SECRET N8N_ENCRYPTION_KEY; do
             value="$(openssl rand -hex 32)"
             sed -i "s|^${key}=.*|${key}=${value}|" deploy/.env.production
           done
@@ -112,9 +112,7 @@ jobs:
             -e 's#api.203.0.113.10.nip.io#api.127.0.0.1.nip.io#g' \
             -e 's#n8n.203.0.113.10.nip.io#n8n.127.0.0.1.nip.io#g' \
             -e 's#you@example.com#ci@example.test#g' \
-            -e 's#ep-example.region.aws.neon.tech#db.ci.example.test#g' \
             -e 's#crm_role#ci_crm#g' \
-            -e 's#n8n_role#ci_n8n#g' \
             -e 's#REPLACE_WITH_DATABASE_PASSWORD#ci-database-password#g' \
             deploy/.env.production
           chmod 600 deploy/.env.production
