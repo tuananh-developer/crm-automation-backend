@@ -54,7 +54,7 @@ jobs:
   deploy:
     name: Deploy backend image to EC2 through SSM
     needs: publish
-    if: ${{ success() }}
+    if: ${{ success() && vars.ENABLE_EC2_DEPLOY == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -74,10 +74,15 @@ jobs:
         run: |
           set -Eeuo pipefail
           IMAGE_TAG="sha-${HEAD_SHA:0:7}"
-          DEPLOY_REPO="/home/ssm-user/Projects/crm-automation-backend"
+          DEPLOY_REPO="/opt/crm-automation-backend"
           SCRIPT=$(cat <<EOF
           set -Eeuo pipefail
-          git -C "$DEPLOY_REPO" pull --ff-only origin main
+          if [[ ! -d "$DEPLOY_REPO/.git" ]]; then
+            mkdir -p /opt
+            git clone --depth 1 --branch main https://github.com/tuananh-developer/crm-automation-backend.git "$DEPLOY_REPO"
+          else
+            git -c safe.directory="$DEPLOY_REPO" -C "$DEPLOY_REPO" pull --ff-only origin main
+          fi
           bash "$DEPLOY_REPO/deploy/ssm-deploy-image.sh" backend "$IMAGE_TAG"
           EOF
           )
