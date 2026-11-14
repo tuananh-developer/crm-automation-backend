@@ -1,9 +1,5 @@
 name: crm-automation-prod
 
-x-backend-build: &backend-build
-  context: ..
-  dockerfile: Dockerfile
-
 x-default-logging: &default-logging
   driver: json-file
   options:
@@ -79,8 +75,7 @@ services:
       N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PERSONALIZATION_ENABLED: "false"
-      # Existing exported workflows read approved runtime secrets with $env.
-      # Restrict n8n access and import only trusted workflow JSON.
+      # Existing trusted workflow exports use selected runtime variables.
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY}
       N8N_RUNNERS_MODE: internal
@@ -113,7 +108,7 @@ services:
 
   backend-migrate:
     logging: *default-logging
-    image: crm-automation-backend:production
+    image: tanhisme/crm-automation-backend:${BACKEND_IMAGE_TAG:-latest}
     restart: "no"
     env_file:
       - .env.production
@@ -138,8 +133,7 @@ services:
 
   backend:
     logging: *default-logging
-    image: crm-automation-backend:production
-    build: *backend-build
+    image: tanhisme/crm-automation-backend:${BACKEND_IMAGE_TAG:-latest}
     restart: unless-stopped
     init: true
     env_file:
@@ -185,12 +179,7 @@ services:
 
   frontend:
     logging: *default-logging
-    image: crm-automation-frontend:production
-    build:
-      context: ${FRONTEND_BUILD_CONTEXT:-../../crm-automation-frontend}
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_BASE_URL: /api/v1
+    image: tanhisme/crm-automation-frontend:${FRONTEND_IMAGE_TAG:-latest}
     restart: unless-stopped
     init: true
     environment:
