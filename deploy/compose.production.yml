@@ -1,4 +1,4 @@
-name: crm-automation
+name: crm-automation-prod
 
 x-backend-build: &backend-build
   context: ..
