@@ -117,6 +117,76 @@ describe('CustomersService', () => {
     });
   });
 
+  it('applies the isStrategic=true filter', async () => {
+    const qb = createQueryBuilder();
+    qb.getManyAndCount.mockResolvedValue([[mockCustomer], 1]);
+    (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+    await service.findAll({ isStrategic: true }, adminActor);
+
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'customer.isStrategic = :isStrategic',
+      { isStrategic: true },
+    );
+  });
+
+  it('applies the isStrategic=false filter', async () => {
+    const qb = createQueryBuilder();
+    qb.getManyAndCount.mockResolvedValue([[mockCustomer], 1]);
+    (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+    await service.findAll({ isStrategic: false }, adminActor);
+
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'customer.isStrategic = :isStrategic',
+      { isStrategic: false },
+    );
+  });
+
+  it('does not filter by isStrategic when undefined', async () => {
+    const qb = createQueryBuilder();
+    qb.getManyAndCount.mockResolvedValue([[mockCustomer], 1]);
+    (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+    await service.findAll({ status: 'CONVERTED' }, adminActor);
+
+    expect(qb.andWhere).not.toHaveBeenCalledWith(
+      'customer.isStrategic = :isStrategic',
+      expect.anything(),
+    );
+  });
+
+  it('combines isStrategic with search, status, and pagination', async () => {
+    const qb = createQueryBuilder();
+    qb.getManyAndCount.mockResolvedValue([[mockCustomer], 1]);
+    (customersRepository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+    await service.findAll(
+      {
+        page: 2,
+        limit: 10,
+        search: 'acme',
+        status: 'CONVERTED',
+        isStrategic: true,
+      },
+      adminActor,
+    );
+
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('search'),
+      { search: '%acme%' },
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith('customer.status = :status', {
+      status: 'CONVERTED',
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'customer.isStrategic = :isStrategic',
+      { isStrategic: true },
+    );
+    expect(qb.skip).toHaveBeenCalledWith(10);
+    expect(qb.take).toHaveBeenCalledWith(10);
+  });
+
   it('returns a customer with its converted lead and segments', async () => {
     (customersRepository.findOne as jest.Mock).mockResolvedValue({
       ...mockCustomer,

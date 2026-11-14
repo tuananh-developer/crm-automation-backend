@@ -47,6 +47,11 @@ export class CustomersService {
     if (query.status) {
       qb.andWhere('customer.status = :status', { status: query.status });
     }
+    if (query.isStrategic !== undefined) {
+      qb.andWhere('customer.isStrategic = :isStrategic', {
+        isStrategic: query.isStrategic,
+      });
+    }
     if (actor.role === UserRole.SALES) {
       qb.andWhere('customer.createdBy = :actorId', { actorId: actor.id });
     }

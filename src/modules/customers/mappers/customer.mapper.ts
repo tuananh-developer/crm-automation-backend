@@ -18,6 +18,7 @@ export class CustomerMapper {
       jobTitle: entity.jobTitle,
       companySize: entity.companySize,
       industry: entity.industry,
+      isStrategic: entity.isStrategic ?? false,
       status: entity.status,
       createdBy: entity.createdBy,
       updatedBy: entity.updatedBy,

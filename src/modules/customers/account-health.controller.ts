@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
   ParseUUIDPipe,
   Post,
@@ -12,28 +13,12 @@ import { AccountHealthService } from './account-health.service.js';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AccountHealthSnapshot } from './entities/account-health-snapshot.entity.js';
-
-interface CalculateBody {
-  customerId?: string;
-  engagement?: number | null;
-  feedback?: number | null;
-  openIssues?: number | null;
-  followUpCompletion?: number | null;
-}
-
-interface ValidateActionsBody {
-  customerId?: string;
-  snapshotId?: string;
-  actions?: Array<{
-    type: string;
-    evidence?: Array<{ customerId?: string; snapshotId?: string }>;
-  }>;
-}
-
-interface ValidateAiBody {
-  score: number;
-  aiOutput: Record<string, unknown>;
-}
+import { Customer } from './entities/customer.entity.js';
+import {
+  CalculateAccountHealthDto,
+  ValidateActionsDto,
+  ValidateAiOutputDto,
+} from './dto/account-health.dto.js';
 
 @Controller('account-health')
 @UseGuards(N8nAuthGuard)
@@ -42,32 +27,74 @@ export class AccountHealthController {
     private readonly accountHealthService: AccountHealthService,
     @InjectRepository(AccountHealthSnapshot)
     private readonly snapshotRepo: Repository<AccountHealthSnapshot>,
+    @InjectRepository(Customer)
+    private readonly customerRepo: Repository<Customer>,
   ) {}
 
   @Post('calculate')
-  async calculate(@Body() body: CalculateBody) {
-    const result = this.accountHealthService.calculate({
-      engagement: body.engagement ?? null,
-      feedback: body.feedback ?? null,
-      openIssues: body.openIssues ?? null,
-      followUpCompletion: body.followUpCompletion ?? null,
-    });
+  async calculate(@Body() body: CalculateAccountHealthDto) {
+    const result = this.accountHealthService.calculate(
+      {
+        engagement: body.engagement ?? null,
+        feedback: body.feedback ?? null,
+        openIssues: body.openIssues ?? null,
+        followUpCompletion: body.followUpCompletion ?? null,
+      },
+      body.evidence,
+    );
+
+    let savedSnapshot: AccountHealthSnapshot | undefined;
 
     if (body.customerId && result.status !== 'INSUFFICIENT_DATA') {
-      const snapshot = this.snapshotRepo.create({
-        customerId: body.customerId,
-        score: result.score,
-        status: result.status,
-        breakdown: result.breakdown,
-        evidence: result.evidence,
-        missingData: result.missingData,
-        dataCoverage: {},
-        assessedAt: new Date(),
+      const customer = await this.customerRepo.findOne({
+        where: { id: body.customerId },
       });
-      await this.snapshotRepo.save(snapshot);
+      if (!customer) {
+        throw new NotFoundException(
+          `Customer with ID '${body.customerId}' not found`,
+        );
+      }
+
+      // Idempotency: avoid duplicate snapshot on workflow retries within 5 minutes
+      const recentThreshold = new Date(Date.now() - 5 * 60 * 1000);
+      const existing = await this.snapshotRepo.findOne({
+        where: { customerId: body.customerId },
+        order: { assessedAt: 'DESC' },
+      });
+
+      if (
+        existing &&
+        existing.score === result.score &&
+        existing.status === result.status &&
+        existing.assessedAt >= recentThreshold
+      ) {
+        savedSnapshot = existing;
+      } else {
+        const snapshot = this.snapshotRepo.create({
+          customerId: body.customerId,
+          score: result.score,
+          status: result.status,
+          breakdown: {
+            ...result.breakdown,
+            policyVersion: result.policyVersion,
+          },
+          evidence: result.evidence,
+          missingData: result.missingData,
+          dataCoverage: {
+            policyVersion: result.policyVersion,
+            evaluatedAt: new Date().toISOString(),
+          },
+          assessedAt: new Date(),
+        });
+        savedSnapshot = await this.snapshotRepo.save(snapshot);
+      }
     }
 
-    return result;
+    return {
+      ...result,
+      id: savedSnapshot?.id,
+      snapshotId: savedSnapshot?.id,
+    };
   }
 
   @Get('snapshots/:customerId')
@@ -79,7 +106,7 @@ export class AccountHealthController {
   }
 
   @Post('validate-actions')
-  validateActions(@Body() body: ValidateActionsBody) {
+  validateActions(@Body() body: ValidateActionsDto) {
     const allowedActions = [
       'CREATE_RETENTION_TASK',
       'ESCALATE_RISK',
@@ -95,11 +122,15 @@ export class AccountHealthController {
           e.customerId === body.customerId && e.snapshotId === body.snapshotId,
       );
     });
-    return { valid: validated, rejected: actions.length - validated.length };
+    return {
+      valid: validated,
+      rejected: actions.length - validated.length,
+      success: validated.length > 0 && actions.length === validated.length,
+    };
   }
 
   @Post('validate-ai-output')
-  validateAiOutput(@Body() body: ValidateAiBody) {
+  validateAiOutput(@Body() body: ValidateAiOutputDto) {
     const required = [
       'summary',
       'keyEvidence',
@@ -109,9 +140,27 @@ export class AccountHealthController {
       'actionPriority',
       'evidenceReferences',
     ];
-    const ai = body.aiOutput || {};
+
+    let ai: Record<string, unknown> = {};
+    if (typeof body.aiOutput === 'string') {
+      try {
+        ai = JSON.parse(body.aiOutput) as Record<string, unknown>;
+      } catch {
+        return {
+          valid: false,
+          missing: required,
+          scoreMismatch: false,
+          error: 'aiOutput is not valid JSON',
+        };
+      }
+    } else if (body.aiOutput && typeof body.aiOutput === 'object') {
+      ai = body.aiOutput;
+    }
+
     const missing = required.filter((k) => !(k in ai));
-    const scoreMismatch = ai.score !== undefined && ai.score !== body.score;
+    const aiScore = typeof ai.score === 'number' ? ai.score : undefined;
+    const scoreMismatch = aiScore !== undefined && aiScore !== body.score;
+
     return {
       valid: missing.length === 0 && !scoreMismatch,
       missing,

@@ -10,17 +10,26 @@ export interface AccountHealthInput {
 export interface AccountHealthResult {
   score: number;
   status: 'HEALTHY' | 'GOOD' | 'AT_RISK' | 'CRITICAL' | 'INSUFFICIENT_DATA';
+  policyVersion: string;
   breakdown: {
     engagement: number | null;
     feedback: number | null;
     openIssues: number | null;
     followUpCompletion: number | null;
+    weights: {
+      engagement: number;
+      feedback: number;
+      openIssues: number;
+      followUpCompletion: number;
+    };
   };
   evidence: string[];
   missingData: string[];
 }
 
-const WEIGHTS = {
+export const ACCOUNT_HEALTH_POLICY_VERSION = 'v1';
+
+export const ACCOUNT_HEALTH_WEIGHTS = {
   engagement: 0.3,
   feedback: 0.25,
   openIssues: 0.25,
@@ -31,39 +40,57 @@ const WEIGHTS = {
 export class AccountHealthService {
   private readonly logger = new Logger(AccountHealthService.name);
 
-  calculate(input: AccountHealthInput): AccountHealthResult {
+  calculate(
+    input: AccountHealthInput,
+    evidenceInput?: string[],
+  ): AccountHealthResult {
     const missingData: string[] = [];
-    if (input.engagement === null) missingData.push('engagement');
-    if (input.feedback === null) missingData.push('feedback');
-    if (input.openIssues === null) missingData.push('openIssues');
-    if (input.followUpCompletion === null)
+    if (input.engagement === null || input.engagement === undefined) {
+      missingData.push('engagement');
+    }
+    if (input.feedback === null || input.feedback === undefined) {
+      missingData.push('feedback');
+    }
+    if (input.openIssues === null || input.openIssues === undefined) {
+      missingData.push('openIssues');
+    }
+    if (
+      input.followUpCompletion === null ||
+      input.followUpCompletion === undefined
+    ) {
       missingData.push('followUpCompletion');
+    }
 
     if (missingData.length > 0) {
       return {
         score: 0,
         status: 'INSUFFICIENT_DATA',
+        policyVersion: ACCOUNT_HEALTH_POLICY_VERSION,
         breakdown: {
-          engagement: input.engagement,
-          feedback: input.feedback,
-          openIssues: input.openIssues,
-          followUpCompletion: input.followUpCompletion,
+          engagement: input.engagement ?? null,
+          feedback: input.feedback ?? null,
+          openIssues: input.openIssues ?? null,
+          followUpCompletion: input.followUpCompletion ?? null,
+          weights: ACCOUNT_HEALTH_WEIGHTS,
         },
-        evidence: [],
+        evidence: evidenceInput ?? [],
         missingData,
       };
     }
 
-    const engagement = input.engagement as number;
-    const feedback = input.feedback as number;
-    const openIssues = input.openIssues as number;
-    const followUpCompletion = input.followUpCompletion as number;
+    const engagement = Math.min(100, Math.max(0, input.engagement as number));
+    const feedback = Math.min(100, Math.max(0, input.feedback as number));
+    const openIssues = Math.min(100, Math.max(0, input.openIssues as number));
+    const followUpCompletion = Math.min(
+      100,
+      Math.max(0, input.followUpCompletion as number),
+    );
 
     const score = Math.round(
-      engagement * WEIGHTS.engagement +
-        feedback * WEIGHTS.feedback +
-        openIssues * WEIGHTS.openIssues +
-        followUpCompletion * WEIGHTS.followUpCompletion,
+      engagement * ACCOUNT_HEALTH_WEIGHTS.engagement +
+        feedback * ACCOUNT_HEALTH_WEIGHTS.feedback +
+        openIssues * ACCOUNT_HEALTH_WEIGHTS.openIssues +
+        followUpCompletion * ACCOUNT_HEALTH_WEIGHTS.followUpCompletion,
     );
 
     let status: AccountHealthResult['status'];
@@ -72,16 +99,28 @@ export class AccountHealthService {
     else if (score >= 40) status = 'AT_RISK';
     else status = 'CRITICAL';
 
+    const evidence: string[] =
+      evidenceInput && evidenceInput.length > 0
+        ? evidenceInput
+        : [
+            `Engagement score: ${engagement}/100 (weight: ${ACCOUNT_HEALTH_WEIGHTS.engagement * 100}%)`,
+            `Feedback score: ${feedback}/100 (weight: ${ACCOUNT_HEALTH_WEIGHTS.feedback * 100}%)`,
+            `Open issues resolution metric: ${openIssues}/100 (weight: ${ACCOUNT_HEALTH_WEIGHTS.openIssues * 100}%)`,
+            `Follow-up completion: ${followUpCompletion}/100 (weight: ${ACCOUNT_HEALTH_WEIGHTS.followUpCompletion * 100}%)`,
+          ];
+
     return {
       score,
       status,
+      policyVersion: ACCOUNT_HEALTH_POLICY_VERSION,
       breakdown: {
         engagement,
         feedback,
         openIssues,
         followUpCompletion,
+        weights: ACCOUNT_HEALTH_WEIGHTS,
       },
-      evidence: [],
+      evidence,
       missingData: [],
     };
   }

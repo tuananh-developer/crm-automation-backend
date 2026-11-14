@@ -28,6 +28,7 @@ export class CustomersController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiQuery({ name: 'isStrategic', required: false, type: Boolean })
   @ApiPaginatedResponse(CustomerResponseDto)
   findAll(
     @Query() query: QueryCustomerDto,
