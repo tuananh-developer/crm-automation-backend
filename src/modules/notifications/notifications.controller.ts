@@ -14,6 +14,7 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service.js';
 import {
   CreateNotificationDto,
@@ -27,7 +28,6 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole } from '../users/enums/user.enum.js';
-import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 @ApiTags('Notifications')
 @Controller('notifications')
@@ -36,6 +36,7 @@ export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
   @Get()
+  @ApiOperation({ summary: 'Find notifications for a user' })
   findAll(
     @Query() query: QueryNotificationsDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -45,6 +46,7 @@ export class NotificationsController {
   }
 
   @Get('unread-count')
+  @ApiOperation({ summary: 'Get unread notification count for a user' })
   async unreadCount(
     @Query('userId', ParseUUIDPipe) userId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -54,6 +56,7 @@ export class NotificationsController {
   }
 
   @Patch('read-all')
+  @ApiOperation({ summary: 'Mark all notifications as read for a user' })
   async markAllRead(
     @Body() dto: MarkNotificationReadDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -65,6 +68,7 @@ export class NotificationsController {
   }
 
   @Patch(':id/read')
+  @ApiOperation({ summary: 'Mark specific notification as read' })
   markRead(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: MarkNotificationReadDto,
@@ -75,7 +79,7 @@ export class NotificationsController {
   }
 
   /**
-   * Internal endpoint used by n8n workflows (WF01/WF08/WF10/WF11/WF12) to
+   * Internal endpoint used by n8n workflows (WF01/WF08/WF09/WF10/WF11/WF12/WF14) to
    * raise an in-app notification after the caller has been authorized and
    * correlated through the backend. Browsers never call this directly.
    */
@@ -109,7 +113,8 @@ export class NotificationsController {
       userId: dto.userId,
       type: dto.type,
       title: dto.title,
-      content: dto.content ?? null,
+      content: dto.content ?? dto.message ?? null,
+      severity: dto.severity ?? 'INFO',
       leadId: dto.leadId ?? null,
       customerId: dto.customerId ?? null,
       reviewTaskId: dto.reviewTaskId ?? null,

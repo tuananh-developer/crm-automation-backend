@@ -8,7 +8,10 @@ import {
   QueryNotificationsDto,
 } from './dto/index.js';
 import type { CreateNotificationInput } from './interfaces/index.js';
-import { hasSamePayload, isPostgresUniqueViolation } from '../../common/utils/idempotency.util.js';
+import {
+  hasSamePayload,
+  isPostgresUniqueViolation,
+} from '../../common/utils/idempotency.util.js';
 
 export type { CreateNotificationInput };
 
@@ -64,20 +67,51 @@ export class NotificationsService {
     return result.affected ?? 0;
   }
 
-  /** Used by other modules (UC06, UC07) to raise an in-app notification. */
+  /** Used by other modules (UC06, UC07, WF14) to raise an in-app notification. */
   async create(input: CreateNotificationInput): Promise<Notification> {
-    const payload = { userId: input.userId, type: input.type, title: input.title, content: input.content ?? null, leadId: input.leadId ?? null, customerId: input.customerId ?? null, reviewTaskId: input.reviewTaskId ?? null };
+    const payload = {
+      userId: input.userId,
+      type: input.type,
+      title: input.title,
+      content: input.content ?? input.message ?? null,
+      severity: input.severity ?? 'INFO',
+      leadId: input.leadId ?? null,
+      customerId: input.customerId ?? null,
+      reviewTaskId: input.reviewTaskId ?? null,
+    };
     const idempotencyKey = input.idempotencyKey?.trim() || null;
-    const findExisting = () => idempotencyKey ? this.notificationRepository.findOne({ where: { idempotencyKey } }) : Promise.resolve(null);
+    const findExisting = () =>
+      idempotencyKey
+        ? this.notificationRepository.findOne({ where: { idempotencyKey } })
+        : Promise.resolve(null);
     const reuseExisting = (existing: Notification) => {
-      const existingPayload = { userId: existing.userId, type: existing.type, title: existing.title, content: existing.content, leadId: existing.leadId, customerId: existing.customerId, reviewTaskId: existing.reviewTaskId };
-      if (!hasSamePayload(existingPayload, payload)) throw new ConflictException('Idempotency key was already used with a different notification payload');
+      const existingPayload = {
+        userId: existing.userId,
+        type: existing.type,
+        title: existing.title,
+        content: existing.content,
+        severity: existing.severity ?? 'INFO',
+        leadId: existing.leadId,
+        customerId: existing.customerId,
+        reviewTaskId: existing.reviewTaskId,
+      };
+      if (!hasSamePayload(existingPayload, payload))
+        throw new ConflictException(
+          'Idempotency key was already used with a different notification payload',
+        );
       return existing;
     };
     const existing = await findExisting();
     if (existing) return reuseExisting(existing);
     try {
-      return await this.notificationRepository.save(this.notificationRepository.create({ ...payload, idempotencyKey, isRead: false, readAt: null }));
+      return await this.notificationRepository.save(
+        this.notificationRepository.create({
+          ...payload,
+          idempotencyKey,
+          isRead: false,
+          readAt: null,
+        }),
+      );
     } catch (error) {
       if (!idempotencyKey || !isPostgresUniqueViolation(error)) throw error;
       const concurrent = await findExisting();
@@ -85,6 +119,4 @@ export class NotificationsService {
       return reuseExisting(concurrent);
     }
   }
-
-
 }

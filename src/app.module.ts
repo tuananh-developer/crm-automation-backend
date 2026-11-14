@@ -20,6 +20,7 @@ import { AuditModule } from './modules/audit/audit.module.js';
 import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module.js';
+import { FeedbackModule } from './modules/feedback/feedback.module.js';
 import { T12WorkflowsModule } from './modules/t12-workflows/t12-workflows.module.js';
 import { CommunicationModule } from './modules/communication/communication.module.js';
 import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
@@ -140,6 +141,7 @@ import { validateEnvironmentConfiguration } from './config/environment.validatio
     AuditModule,
     AuthModule,
     DataCleaningModule,
+    FeedbackModule,
     T12WorkflowsModule,
     CommunicationModule,
     ThrottlerModule.forRoot([

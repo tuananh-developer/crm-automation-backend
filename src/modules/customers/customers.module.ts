@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Customer } from './entities/customer.entity.js';
+import { CustomerTask } from './entities/customer-task.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
 import { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
@@ -10,11 +11,13 @@ import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
 import { CustomersController } from './customers.controller.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Customer,
+      CustomerTask,
       Segment,
       CustomerSegment,
       LeadScore,
@@ -23,7 +26,7 @@ import { AuthModule } from '../auth/auth.module.js';
     AuthModule,
   ],
   controllers: [SegmentsController, CustomersController],
-  providers: [SegmentsService, CustomersService],
+  providers: [SegmentsService, CustomersService, N8nAuthGuard],
   exports: [TypeOrmModule, SegmentsService, CustomersService],
 })
 export class CustomersModule {}

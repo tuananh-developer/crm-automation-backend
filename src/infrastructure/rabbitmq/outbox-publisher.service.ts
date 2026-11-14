@@ -131,7 +131,9 @@ export class OutboxPublisher {
       const terminal =
         error instanceof PermanentOutboxError || event.attempts >= 4;
       const retryDelayMs =
-        retryDelaysMs[Math.min(Math.max(event.attempts - 1, 0), retryDelaysMs.length - 1)];
+        retryDelaysMs[
+          Math.min(Math.max(event.attempts - 1, 0), retryDelaysMs.length - 1)
+        ];
       await this.dataSource.transaction(async (manager) => {
         const updated = await manager.getRepository(OutboxEvent).update(
           { id: event.id, lockToken: event.lockToken },
@@ -140,7 +142,9 @@ export class OutboxPublisher {
               ? OutboxEventStatus.FAILED
               : OutboxEventStatus.PENDING,
             lastError: message.slice(0, 4000),
-            nextAttemptAt: terminal ? null : new Date(Date.now() + retryDelayMs),
+            nextAttemptAt: terminal
+              ? null
+              : new Date(Date.now() + retryDelayMs),
             lockedUntil: null,
             lockToken: null,
           },
@@ -173,6 +177,21 @@ export class OutboxPublisher {
                 [workflowRunId],
               );
             }
+
+            if (
+              (failedRun.affected ?? 0) === 1 &&
+              event.destination === 'N8N_WF14_WEBHOOK_URL'
+            ) {
+              await manager.query(
+                `UPDATE customer_feedback
+                 SET status = 'FAILED', error_message = $2, updated_at = NOW()
+                 WHERE workflow_run_id = $1 AND status = 'NEW'`,
+                [
+                  workflowRunId,
+                  `n8n dispatch failed: ${message}`.slice(0, 1000),
+                ],
+              );
+            }
           }
         }
       });
@@ -187,6 +206,7 @@ export class OutboxPublisher {
       'N8N_WF10_WEBHOOK_URL',
       'N8N_WF11_WEBHOOK_URL',
       'N8N_WF12_WEBHOOK_URL',
+      'N8N_WF14_WEBHOOK_URL',
     ] as const;
     if (
       !event.destination ||
@@ -219,7 +239,9 @@ export class OutboxPublisher {
     }
 
     const nodeEnv = (
-      this.config.get<string>('NODE_ENV') || process.env.NODE_ENV || ''
+      this.config.get<string>('NODE_ENV') ||
+      process.env.NODE_ENV ||
+      ''
     )
       .trim()
       .toLowerCase();
@@ -240,7 +262,10 @@ export class OutboxPublisher {
 
       if (
         typeof event.payload.transcript === 'string' &&
-        (this.config.get<string>('TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED') || '')
+        (
+          this.config.get<string>('TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED') ||
+          ''
+        )
           .trim()
           .toLowerCase() !== 'true'
       ) {
