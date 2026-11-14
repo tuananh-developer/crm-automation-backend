@@ -52,25 +52,20 @@ jobs:
       LOCAL_RABBITMQ_PASSWORD: guest
       JWT_SECRET: ci-only-test-secret
       N8N_API_KEY: ci-only-test-api-key
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
-
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: latest
-
       - name: Get pnpm store directory
         id: pnpm-cache
         run: echo "store=$(pnpm store path)" >> $GITHUB_OUTPUT
-
       - name: Cache pnpm store
         uses: actions/cache@v4
         with:
@@ -78,25 +73,18 @@ jobs:
           key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
       - name: Lint
         run: pnpm lint
-
       - name: Build
         run: pnpm build
-
       - name: Unit tests with coverage
         run: pnpm test:cov --coverageReporters=text-summary --coverageReporters=lcov
-
       - name: Run database migrations
         run: pnpm migration:run
-
       - name: End-to-end tests
         run: pnpm test:e2e
-
       - name: Upload Jest coverage report
         if: always()
         uses: actions/upload-artifact@v4
@@ -107,20 +95,18 @@ jobs:
           retention-days: 14
 
   deployment-config:
-    name: Validate and build EC2 Docker deployment
+    name: Validate production Compose and Dockerfiles
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Checkout backend
         uses: actions/checkout@v4
-
       - name: Checkout frontend
         uses: actions/checkout@v4
         with:
           repository: tuananh-developer/crm-automation-frontend
           ref: main
           path: crm-automation-frontend
-
       - name: Prepare ephemeral CI environment
         run: |
           cp deploy/.env.production.example deploy/.env.production
@@ -134,21 +120,15 @@ jobs:
             -e 's#ops@example.com#ci@example.test#g' \
             deploy/.env.production
           chmod 600 deploy/.env.production
-
       - name: Validate deployment configuration
-        env:
-          FRONTEND_BUILD_CONTEXT: ${{ github.workspace }}/crm-automation-frontend
         run: |
           bash -n deploy/check-env.sh
           bash -n deploy/postgres-init/01-create-app-databases.sh
+          bash -n deploy/ssm-deploy-image.sh
           node --check deploy/run-migrations.cjs
           bash deploy/check-env.sh
           docker compose --env-file deploy/.env.production -f deploy/compose.production.yml config --quiet
-
       - name: Build backend Docker image
-        run: docker compose --env-file deploy/.env.production -f deploy/compose.production.yml build backend
-
+        run: docker build --platform linux/amd64 -f Dockerfile -t crm-automation-backend:ci .
       - name: Build frontend Docker image
-        env:
-          FRONTEND_BUILD_CONTEXT: ${{ github.workspace }}/crm-automation-frontend
-        run: docker compose --env-file deploy/.env.production -f deploy/compose.production.yml build frontend
+        run: docker build --platform linux/amd64 --build-arg NEXT_PUBLIC_API_BASE_URL=/api/v1 -f crm-automation-frontend/Dockerfile -t crm-automation-frontend:ci crm-automation-frontend
