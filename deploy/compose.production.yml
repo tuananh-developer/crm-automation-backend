@@ -4,8 +4,15 @@ x-backend-build: &backend-build
   context: ..
   dockerfile: Dockerfile
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
+    logging: *default-logging
     image: postgres:18.6
     restart: unless-stopped
     environment:
@@ -32,6 +39,7 @@ services:
     pids_limit: 256
 
   rabbitmq:
+    logging: *default-logging
     image: rabbitmq:4.3.6-management-alpine
     hostname: rabbitmq
     restart: unless-stopped
@@ -53,6 +61,7 @@ services:
     pids_limit: 256
 
   n8n:
+    logging: *default-logging
     image: docker.n8n.io/n8nio/n8n:2.47.5
     restart: unless-stopped
     init: true
@@ -103,6 +112,7 @@ services:
     pids_limit: 512
 
   backend-migrate:
+    logging: *default-logging
     image: crm-automation-backend:production
     restart: "no"
     env_file:
@@ -127,6 +137,7 @@ services:
     pids_limit: 128
 
   backend:
+    logging: *default-logging
     image: crm-automation-backend:production
     build: *backend-build
     restart: unless-stopped
@@ -173,6 +184,7 @@ services:
     pids_limit: 256
 
   frontend:
+    logging: *default-logging
     image: crm-automation-frontend:production
     build:
       context: ${FRONTEND_BUILD_CONTEXT:-../../crm-automation-frontend}
@@ -205,6 +217,7 @@ services:
     pids_limit: 128
 
   caddy:
+    logging: *default-logging
     image: caddy:2-alpine
     restart: unless-stopped
     environment:
