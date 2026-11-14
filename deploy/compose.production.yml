@@ -1,11 +1,13 @@
 name: crm-automation
 
+x-backend-build: &backend-build
+  context: ..
+  dockerfile: Dockerfile
+
 services:
   postgres:
     image: postgres:18.6
     restart: unless-stopped
-    env_file:
-      - .env.production
     environment:
       POSTGRES_USER: ${POSTGRES_ADMIN_USER:?Set POSTGRES_ADMIN_USER in deploy/.env.production}
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD in deploy/.env.production}
@@ -27,13 +29,12 @@ services:
       retries: 12
       start_period: 20s
     mem_limit: 1g
+    pids_limit: 256
 
   rabbitmq:
     image: rabbitmq:4.3.6-management-alpine
     hostname: rabbitmq
     restart: unless-stopped
-    env_file:
-      - .env.production
     environment:
       RABBITMQ_DEFAULT_USER: ${LOCAL_RABBITMQ_USER:?Set LOCAL_RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${LOCAL_RABBITMQ_PASSWORD:?Set LOCAL_RABBITMQ_PASSWORD}
@@ -49,13 +50,12 @@ services:
       retries: 12
       start_period: 20s
     mem_limit: 512m
+    pids_limit: 256
 
   n8n:
     image: docker.n8n.io/n8nio/n8n:2.47.5
     restart: unless-stopped
     init: true
-    env_file:
-      - .env.production
     environment:
       NODE_ENV: production
       GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
@@ -70,6 +70,8 @@ services:
       N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PERSONALIZATION_ENABLED: "false"
+      # Existing exported workflows read approved runtime secrets with $env.
+      # Restrict n8n access and import only trusted workflow JSON.
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY}
       N8N_RUNNERS_MODE: internal
@@ -98,9 +100,11 @@ services:
       postgres:
         condition: service_healthy
     mem_limit: 2g
+    pids_limit: 512
 
   backend-migrate:
     image: crm-automation-backend:production
+    build: *backend-build
     restart: "no"
     env_file:
       - .env.production
@@ -121,18 +125,19 @@ services:
       postgres:
         condition: service_healthy
     mem_limit: 512m
+    pids_limit: 128
 
   backend:
     image: crm-automation-backend:production
-    build:
-      context: ..
-      dockerfile: Dockerfile
+    build: *backend-build
     restart: unless-stopped
+    init: true
     env_file:
       - .env.production
     environment:
       NODE_ENV: production
       PORT: 3000
+      NODE_OPTIONS: --max-old-space-size=768
       ALLOW_LOCAL_INFRA_IN_PRODUCTION: "true"
       USE_LOCAL_DB: "true"
       USE_LOCAL_AMQP: "true"
@@ -165,7 +170,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 45s
-    mem_limit: 1536m
+    mem_limit: 1280m
+    pids_limit: 256
 
   frontend:
     image: crm-automation-frontend:production
@@ -175,10 +181,12 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: /api/v1
     restart: unless-stopped
+    init: true
     environment:
       NODE_ENV: production
       PORT: 3001
       HOSTNAME: 0.0.0.0
+      NODE_OPTIONS: --max-old-space-size=384
     depends_on:
       backend:
         condition: service_healthy
@@ -194,7 +202,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 45s
-    mem_limit: 768m
+    mem_limit: 512m
+    pids_limit: 128
 
   caddy:
     image: caddy:2-alpine
@@ -218,7 +227,8 @@ services:
         condition: service_healthy
       n8n:
         condition: service_started
-    mem_limit: 256m
+    mem_limit: 128m
+    pids_limit: 128
 
 volumes:
   postgres_data:
