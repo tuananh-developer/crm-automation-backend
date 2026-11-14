@@ -6,9 +6,15 @@ import {
 describe('validateEnvironmentConfiguration', () => {
   const productionEnvironment = () => ({
     NODE_ENV: 'production',
-    DATABASE_URL: 'postgresql://crm:secret@db.example.test:5432/crm',
+    DATABASE_URL: 'postgresql://crm:secret@db.example.test:5432/crm?sslmode=require',
     USE_LOCAL_DB: 'false',
+    USE_LOCAL_AMQP: 'false',
+    USE_CLOUD_AMQP: 'true',
     RABBITMQ_URL: 'amqps://broker.example.test/vhost',
+    JWT_SECRET: 'jwt-secret-' + 'a'.repeat(40),
+    N8N_API_KEY: 'n8n-api-secret-' + 'b'.repeat(40),
+    N8N_WEBHOOK_SECRET: 'n8n-webhook-secret-' + 'c'.repeat(40),
+    N8N_ENCRYPTION_KEY: 'n8n-encryption-secret-' + 'd'.repeat(40),
     N8N_BASE_URL: 'https://n8n.example.test',
     N8N_WF10_WEBHOOK_URL: '',
     N8N_WF11_WEBHOOK_URL: '',
@@ -38,6 +44,26 @@ describe('validateEnvironmentConfiguration', () => {
     N8N_WEBHOOK_BASE_URL: 'http://n8n:5678/webhook',
   });
 
+  const hybridProductionEnvironment = () => ({
+    NODE_ENV: 'production',
+    ALLOW_LOCAL_INFRA_IN_PRODUCTION: 'true',
+    USE_LOCAL_DB: 'false',
+    DATABASE_URL: 'postgresql://crm:secret@db.example.test:5432/crm?sslmode=require',
+    USE_LOCAL_AMQP: 'true',
+    USE_CLOUD_AMQP: 'false',
+    RABBITMQ_URL: '',
+    LOCAL_RABBITMQ_HOST: 'rabbitmq',
+    LOCAL_RABBITMQ_PORT: '5672',
+    LOCAL_RABBITMQ_USER: 'crm_broker',
+    LOCAL_RABBITMQ_PASSWORD: 'rabbit-secret-' + 'x'.repeat(40),
+    JWT_SECRET: 'jwt-secret-' + '1'.repeat(40),
+    N8N_API_KEY: 'n8n-api-secret-' + '2'.repeat(40),
+    N8N_WEBHOOK_SECRET: 'n8n-webhook-secret-' + '3'.repeat(40),
+    N8N_ENCRYPTION_KEY: 'n8n-encryption-secret-' + '4'.repeat(40),
+    N8N_BASE_URL: 'http://n8n:5678',
+    N8N_WEBHOOK_BASE_URL: 'http://n8n:5678/webhook',
+  });
+
   it('keeps development configuration compatible with local Docker services', () => {
     const environment = {
       NODE_ENV: 'development',
@@ -48,7 +74,7 @@ describe('validateEnvironmentConfiguration', () => {
     expect(validateEnvironmentConfiguration(environment)).toBe(environment);
   });
 
-  it('requires managed production database and broker unless private Compose mode is explicit', () => {
+  it('requires managed production database and broker unless local services are explicitly enabled', () => {
     const missingDatabase = productionEnvironment();
     missingDatabase.DATABASE_URL = '';
     expect(() =>
@@ -67,7 +93,12 @@ describe('validateEnvironmentConfiguration', () => {
     expect(validateEnvironmentConfiguration(environment)).toBe(environment);
   });
 
-  it('requires the private Compose service DNS names and non-default credentials', () => {
+  it('accepts Neon PostgreSQL combined with private Docker Compose RabbitMQ and n8n', () => {
+    const environment = hybridProductionEnvironment();
+    expect(validateEnvironmentConfiguration(environment)).toBe(environment);
+  });
+
+  it('requires private Compose DNS names and non-default local service credentials', () => {
     const wrongDatabaseHost = privateComposeProductionEnvironment();
     wrongDatabaseHost.LOCAL_DB_HOST = 'localhost';
     expect(() =>
@@ -80,7 +111,7 @@ describe('validateEnvironmentConfiguration', () => {
       validateEnvironmentConfiguration(weakDatabasePassword),
     ).toThrow('LOCAL_DB_PASSWORD must be a unique, non-placeholder secret with at least 32 characters');
 
-    const defaultRabbitUser = privateComposeProductionEnvironment();
+    const defaultRabbitUser = hybridProductionEnvironment();
     defaultRabbitUser.LOCAL_RABBITMQ_USER = 'guest';
     expect(() =>
       validateEnvironmentConfiguration(defaultRabbitUser),
@@ -88,16 +119,16 @@ describe('validateEnvironmentConfiguration', () => {
   });
 
   it('allows only the private n8n service URL for internal production Compose traffic', () => {
-    const environment = privateComposeProductionEnvironment();
+    const environment = hybridProductionEnvironment();
     expect(validateEnvironmentConfiguration(environment)).toBe(environment);
 
-    const publicUrl = privateComposeProductionEnvironment();
+    const publicUrl = hybridProductionEnvironment();
     publicUrl.N8N_BASE_URL = 'http://n8n.example.test:5678';
     expect(() =>
       validateEnvironmentConfiguration(publicUrl),
     ).toThrow('must use the private Docker service URL http://n8n:5678');
 
-    const wrongPort = privateComposeProductionEnvironment();
+    const wrongPort = hybridProductionEnvironment();
     wrongPort.N8N_WEBHOOK_BASE_URL = 'http://n8n:8080/webhook';
     expect(() =>
       validateEnvironmentConfiguration(wrongPort),
@@ -105,21 +136,21 @@ describe('validateEnvironmentConfiguration', () => {
   });
 
   it('rejects placeholder or reused machine-to-machine production secrets', () => {
-    const placeholder = privateComposeProductionEnvironment();
+    const placeholder = hybridProductionEnvironment();
     placeholder.JWT_SECRET = 'REPLACE_WITH_OPENSSL_RANDOM_32_BYTE_HEX';
     expect(() =>
       validateEnvironmentConfiguration(placeholder),
     ).toThrow('JWT_SECRET must be a unique, non-placeholder secret');
 
-    const reused = privateComposeProductionEnvironment();
+    const reused = hybridProductionEnvironment();
     reused.N8N_API_KEY = reused.JWT_SECRET;
     expect(() =>
       validateEnvironmentConfiguration(reused),
     ).toThrow('must all be different secrets');
   });
 
-  it('does not allow mixed local and managed production broker modes', () => {
-    const environment = privateComposeProductionEnvironment();
+  it('does not allow local RabbitMQ to be combined with CloudAMQP', () => {
+    const environment = hybridProductionEnvironment();
     environment.USE_CLOUD_AMQP = 'true';
     expect(() =>
       validateEnvironmentConfiguration(environment),
@@ -135,7 +166,7 @@ describe('validateEnvironmentConfiguration', () => {
     );
   });
 
-  it('requires HTTPS for every configured n8n production URL', () => {
+  it('requires HTTPS for every configured public n8n production URL', () => {
     const environment = productionEnvironment();
     environment.N8N_WF11_WEBHOOK_URL =
       'http://n8n.example.test/webhook/sales-meeting';
