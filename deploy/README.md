@@ -15,7 +15,7 @@ This is a practical single-node deployment, not a highly available architecture.
 ## 1. Prerequisites
 
 - Ubuntu EC2 with Docker Engine, Docker Compose v2, Git, and an online Systems Manager Agent.
-- The backend repository checked out at `/home/ssm-user/Projects/crm-automation-backend` on branch `main`. The frontend source checkout is not needed on EC2 because the frontend image is pulled from Docker Hub.
+- The backend deployment repository is bootstrapped by the first SSM deployment under `/opt/crm-automation-backend` (root-owned). The frontend source checkout is not needed on EC2 because the frontend image is pulled from Docker Hub.
 - The EC2 instance profile has `AmazonSSMManagedInstanceCore` and the instance is Online in Systems Manager Managed nodes.
 - The GitHub IAM user has only the `ssm:SendCommand` permission for this EC2 instance and `AWS-RunShellScript`, plus `ssm:GetCommandInvocation` for command status.
 - Both Docker Hub repositories are readable by EC2. Public repositories need no Docker login; for private repositories configure a Docker Hub read-only credential on EC2 outside GitHub workflow command parameters.
@@ -75,6 +75,7 @@ docker compose --env-file deploy/.env.production -f deploy/compose.production.ym
 Set these repository variables in both backend and frontend repositories:
 
 - `DOCKERHUB_USERNAME=tanhisme`
+- `ENABLE_EC2_DEPLOY=true` only after `/opt/crm-automation-backend/deploy/.env.production` is configured and EC2 is ready; leave unset or false before that.
 - `AWS_REGION=ap-southeast-2`
 - `AWS_EC2_INSTANCE_ID=i-05f96c4993945b4e9`
 
@@ -83,7 +84,7 @@ Set these repository secrets in both repositories:
 - `DOCKERHUB_TOKEN`: Docker Hub token with Read & Write access.
 - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`: credentials for the restricted `github-actions-ssm` IAM user.
 
-After the normal CI workflow succeeds on a push to `main`, the publish workflow builds `linux/amd64`, pushes `latest` and `sha-<7-character-commit>` tags, then invokes AWS Systems Manager Run Command. EC2 pulls the exact SHA tag and updates only the affected service. The workflow waits for SSM completion and the container health check.
+After the normal CI workflow succeeds on a push to `main`, the publish workflow builds `linux/amd64` and pushes `latest` and `sha-<7-character-commit>` tags. The deploy job runs only when `ENABLE_EC2_DEPLOY=true`; it bootstraps `/opt/crm-automation-backend` and invokes AWS Systems Manager Run Command. EC2 pulls the exact SHA tag and updates only the affected service. The workflow waits for SSM completion and the container health check.
 
 Before enabling automatic deployment, confirm the instance appears Online in Systems Manager Managed nodes. The EC2 instance profile must include `AmazonSSMManagedInstanceCore` and its outbound HTTPS connectivity to Systems Manager endpoints must work.
 
@@ -94,7 +95,7 @@ Normal application updates are automatic after a successful push/merge to `main`
 To manually inspect or recover:
 
 ```bash
-cd /home/ssm-user/Projects/crm-automation-backend
+cd /opt/crm-automation-backend
 docker compose --env-file deploy/.env.production -f deploy/compose.production.yml ps
 docker compose --env-file deploy/.env.production -f deploy/compose.production.yml logs --tail=150 backend frontend
 ```
