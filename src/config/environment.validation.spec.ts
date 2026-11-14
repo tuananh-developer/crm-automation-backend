@@ -78,7 +78,7 @@ describe('validateEnvironmentConfiguration', () => {
     weakDatabasePassword.LOCAL_DB_PASSWORD = 'postgres';
     expect(() =>
       validateEnvironmentConfiguration(weakDatabasePassword),
-    ).toThrow('LOCAL_DB_PASSWORD must be configured with at least 32 characters');
+    ).toThrow('LOCAL_DB_PASSWORD must be a unique, non-placeholder secret with at least 32 characters');
 
     const defaultRabbitUser = privateComposeProductionEnvironment();
     defaultRabbitUser.LOCAL_RABBITMQ_USER = 'guest';
