@@ -69,7 +69,7 @@ if [[ "$(read_env LOCAL_DB_USER)" == "$(read_env POSTGRES_ADMIN_USER)" ]]; then
   echo "The CRM database role must differ from the PostgreSQL admin role." >&2
   exit 1
 fi
-if [[ "$(read_env N8N_DB_USER)" == "$(read_env POSTGRES_ADMIN_USER)" || "$(read_env N8N_DB_USER)" == "$(read_env LOCAL_DB_USER)" ]]; then
+if [[ "$(read_env N8N_DB_USER)" == "$(read_env POSTGRES_ADMIN_USER)" || "$(read_env N8N_DB_USER)" == "$(read_env LOCAL_DB_USER)" || "$(read_env N8N_DB_USER)" == "postgres" ]]; then
   echo "The n8n database role must be distinct from the other PostgreSQL roles." >&2
   exit 1
 fi
