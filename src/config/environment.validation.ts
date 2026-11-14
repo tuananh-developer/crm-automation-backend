@@ -1,7 +1,11 @@
 /**
  * Fail-closed validation for production-only transport and persistence settings.
- * Development keeps its local Docker defaults; production must opt into encrypted
- * remote services and may not fall back to localhost credentials.
+ *
+ * Production defaults to managed PostgreSQL + AMQPS. A single-EC2 Docker Compose
+ * deployment may explicitly opt into private, self-hosted PostgreSQL/RabbitMQ by
+ * setting ALLOW_LOCAL_INFRA_IN_PRODUCTION=true and both USE_LOCAL_DB/USE_LOCAL_AMQP.
+ * That mode is deliberately pinned to Compose service DNS names and non-default
+ * credentials; its services must not publish database/broker ports to the host.
  */
 type Environment = Record<string, unknown>;
 
@@ -11,8 +15,23 @@ function readString(environment: Environment, key: string): string {
 }
 
 function isEnabled(value: unknown): boolean {
-  return value === true ||
-    (typeof value === 'string' && value.trim().toLowerCase() === 'true');
+  return (
+    value === true ||
+    (typeof value === 'string' && value.trim().toLowerCase() === 'true')
+  );
+}
+
+function assertRequiredSecret(
+  environment: Environment,
+  key: string,
+  minimumLength = 32,
+): void {
+  const value = readString(environment, key);
+  if (value.length < minimumLength) {
+    throw new Error(
+      key + ' must be configured with at least ' + minimumLength + ' characters',
+    );
+  }
 }
 
 export function assertUrlUsesScheme(
@@ -59,18 +78,82 @@ export function validateEnvironmentConfiguration(
     return environment;
   }
 
+  const allowLocalInfra = isEnabled(
+    environment.ALLOW_LOCAL_INFRA_IN_PRODUCTION,
+  );
+  const useLocalDb = isEnabled(environment.USE_LOCAL_DB);
+  const useLocalAmqp = isEnabled(environment.USE_LOCAL_AMQP);
   const databaseUrl = readString(environment, 'DATABASE_URL');
-  if (isEnabled(environment.USE_LOCAL_DB) || !databaseUrl) {
-    throw new Error(
-      'FATAL: DATABASE_URL is required in production and USE_LOCAL_DB must not be true',
-    );
-  }
-
   const rabbitmqUrl = readString(environment, 'RABBITMQ_URL');
-  if (!rabbitmqUrl) {
-    throw new Error('FATAL: RABBITMQ_URL is required in production');
+
+  if (allowLocalInfra) {
+    if (!useLocalDb || !useLocalAmqp) {
+      throw new Error(
+        'ALLOW_LOCAL_INFRA_IN_PRODUCTION requires USE_LOCAL_DB=true and USE_LOCAL_AMQP=true',
+      );
+    }
+    if (databaseUrl || rabbitmqUrl) {
+      throw new Error(
+        'Local production infrastructure mode must not also configure DATABASE_URL or RABBITMQ_URL',
+      );
+    }
+    if (isEnabled(environment.USE_CLOUD_AMQP)) {
+      throw new Error(
+        'USE_CLOUD_AMQP must not be true with ALLOW_LOCAL_INFRA_IN_PRODUCTION',
+      );
+    }
+
+    if (readString(environment, 'LOCAL_DB_HOST') !== 'postgres') {
+      throw new Error(
+        'LOCAL_DB_HOST must be the private Compose service name "postgres" in local production infrastructure mode',
+      );
+    }
+    if (!readString(environment, 'LOCAL_DB_NAME')) {
+      throw new Error('LOCAL_DB_NAME is required in local production infrastructure mode');
+    }
+    if (
+      !readString(environment, 'LOCAL_DB_USER') ||
+      readString(environment, 'LOCAL_DB_USER').toLowerCase() === 'postgres'
+    ) {
+      throw new Error(
+        'LOCAL_DB_USER must be a dedicated non-postgres application role in local production infrastructure mode',
+      );
+    }
+    assertRequiredSecret(environment, 'LOCAL_DB_PASSWORD');
+
+    if (readString(environment, 'LOCAL_RABBITMQ_HOST') !== 'rabbitmq') {
+      throw new Error(
+        'LOCAL_RABBITMQ_HOST must be the private Compose service name "rabbitmq" in local production infrastructure mode',
+      );
+    }
+    if (
+      !readString(environment, 'LOCAL_RABBITMQ_USER') ||
+      readString(environment, 'LOCAL_RABBITMQ_USER').toLowerCase() === 'guest'
+    ) {
+      throw new Error(
+        'LOCAL_RABBITMQ_USER must not use the default guest account in local production infrastructure mode',
+      );
+    }
+    assertRequiredSecret(environment, 'LOCAL_RABBITMQ_PASSWORD');
+  } else {
+    if (useLocalDb) {
+      throw new Error(
+        'USE_LOCAL_DB must not be true in production unless ALLOW_LOCAL_INFRA_IN_PRODUCTION=true',
+      );
+    }
+    if (useLocalAmqp) {
+      throw new Error(
+        'USE_LOCAL_AMQP must not be true in production unless ALLOW_LOCAL_INFRA_IN_PRODUCTION=true',
+      );
+    }
+    if (!databaseUrl) {
+      throw new Error('DATABASE_URL is required in production');
+    }
+    if (!rabbitmqUrl) {
+      throw new Error('RABBITMQ_URL is required in production');
+    }
+    assertUrlUsesScheme(rabbitmqUrl, 'amqps:', 'RABBITMQ_URL');
   }
-  assertUrlUsesScheme(rabbitmqUrl, 'amqps:', 'RABBITMQ_URL');
 
   for (const key of PRODUCTION_N8N_URL_KEYS) {
     const value = readString(environment, key);
