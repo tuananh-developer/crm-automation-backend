@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { assertUrlUsesScheme } from '../../config/environment.validation.js';
+import {
+  assertPrivateN8nServiceUrl,
+  assertUrlUsesScheme,
+} from '../../config/environment.validation.js';
 import { Interval } from '@nestjs/schedule';
 import { DataSource } from 'typeorm';
 import { WorkflowRun } from '../../modules/workflow/entities/workflow-run.entity.js';
@@ -222,7 +225,13 @@ export class OutboxPublisher {
       .toLowerCase();
     if (nodeEnv === 'production') {
       try {
-        assertUrlUsesScheme(url, 'https:', event.destination);
+        const allowLocalInfra =
+          this.config.get<string>('ALLOW_LOCAL_INFRA_IN_PRODUCTION') === 'true';
+        if (allowLocalInfra && url.startsWith('http://')) {
+          assertPrivateN8nServiceUrl(url, event.destination);
+        } else {
+          assertUrlUsesScheme(url, 'https:', event.destination);
+        }
       } catch (error) {
         throw new PermanentOutboxError(
           error instanceof Error ? error.message : String(error),
