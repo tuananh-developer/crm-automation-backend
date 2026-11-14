@@ -71,6 +71,29 @@ const PRODUCTION_N8N_URL_KEYS = [
   'N8N_WEBHOOK_BASE_URL',
 ] as const;
 
+function assertPrivateN8nServiceUrl(value: string, configKey: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new Error(configKey + ' must be a valid absolute URL');
+  }
+
+  if (
+    parsed.protocol !== 'http:' ||
+    parsed.hostname !== 'n8n' ||
+    parsed.port !== '5678' ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash
+  ) {
+    throw new Error(
+      configKey +
+        ' must use the private Docker service URL http://n8n:5678 in local production infrastructure mode',
+    );
+  }
+}
+
 /**
  * Nest ConfigModule invokes this before constructing application providers.
  * Returning the original object preserves ConfigService's normal env behavior.
@@ -181,7 +204,13 @@ export function validateEnvironmentConfiguration(
   for (const key of PRODUCTION_N8N_URL_KEYS) {
     const value = readString(environment, key);
     if (value) {
-      assertUrlUsesScheme(value, 'https:', key);
+      if (allowLocalInfra && value.startsWith('http://')) {
+        // Backend-to-n8n traffic stays on the isolated Compose network. Public
+        // webhook URLs are still HTTPS and are configured inside the n8n service.
+        assertPrivateN8nServiceUrl(value, key);
+      } else {
+        assertUrlUsesScheme(value, 'https:', key);
+      }
     }
   }
 
