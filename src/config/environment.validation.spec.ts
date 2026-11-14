@@ -34,8 +34,8 @@ describe('validateEnvironmentConfiguration', () => {
     N8N_API_KEY: 'n8n-api-secret-' + 'd'.repeat(40),
     N8N_WEBHOOK_SECRET: 'n8n-webhook-secret-' + 'e'.repeat(40),
     N8N_ENCRYPTION_KEY: 'n8n-encryption-secret-' + 'f'.repeat(40),
-    N8N_BASE_URL: 'https://n8n.example.test',
-    N8N_WEBHOOK_BASE_URL: 'https://n8n.example.test/webhook',
+    N8N_BASE_URL: 'http://n8n:5678',
+    N8N_WEBHOOK_BASE_URL: 'http://n8n:5678/webhook',
   });
 
   it('keeps development configuration compatible with local Docker services', () => {
@@ -85,6 +85,23 @@ describe('validateEnvironmentConfiguration', () => {
     expect(() =>
       validateEnvironmentConfiguration(defaultRabbitUser),
     ).toThrow('must not use the default guest account');
+  });
+
+  it('allows only the private n8n service URL for internal production Compose traffic', () => {
+    const environment = privateComposeProductionEnvironment();
+    expect(validateEnvironmentConfiguration(environment)).toBe(environment);
+
+    const publicUrl = privateComposeProductionEnvironment();
+    publicUrl.N8N_BASE_URL = 'http://n8n.example.test:5678';
+    expect(() =>
+      validateEnvironmentConfiguration(publicUrl),
+    ).toThrow('must use the private Docker service URL http://n8n:5678');
+
+    const wrongPort = privateComposeProductionEnvironment();
+    wrongPort.N8N_WEBHOOK_BASE_URL = 'http://n8n:8080/webhook';
+    expect(() =>
+      validateEnvironmentConfiguration(wrongPort),
+    ).toThrow('must use the private Docker service URL http://n8n:5678');
   });
 
   it('rejects placeholder or reused machine-to-machine production secrets', () => {
