@@ -44,9 +44,14 @@ describe('WorkflowExecutionClaimsService', () => {
     };
     manager = { getRepository: jest.fn().mockReturnValue(repository) };
     dataSource = {
-      transaction: jest.fn((callback: (value: typeof manager) => Promise<unknown>) => callback(manager)),
+      transaction: jest.fn(
+        (callback: (value: typeof manager) => Promise<unknown>) =>
+          callback(manager),
+      ),
     };
-    service = new WorkflowExecutionClaimsService(dataSource as unknown as DataSource);
+    service = new WorkflowExecutionClaimsService(
+      dataSource as unknown as DataSource,
+    );
   });
 
   it('claims an active run under a row lock and sets a lease expiry', async () => {
@@ -55,41 +60,56 @@ describe('WorkflowExecutionClaimsService', () => {
       where: { id: request.workflowRunId, workflowName: request.workflowName },
       lock: { mode: 'pessimistic_write' },
     });
-    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({
-      n8nExecutionId: request.n8nExecutionId,
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        n8nExecutionId: request.n8nExecutionId,
+        status: WorkflowStatus.RUNNING,
+        claimExpiresAt: expect.any(Date),
+      }),
+    );
+    expect(result).toMatchObject({
+      claimed: true,
+      duplicate: false,
       status: WorkflowStatus.RUNNING,
-      claimExpiresAt: expect.any(Date),
-    }));
-    expect(result).toMatchObject({ claimed: true, duplicate: false, status: WorkflowStatus.RUNNING });
+    });
   });
 
   it('rejects whitespace-only execution IDs before opening a transaction', async () => {
-    await expect(service.claim({ ...request, n8nExecutionId: '  \n\t ' }))
-      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.claim({ ...request, n8nExecutionId: '  \n\t ' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 
   it('trims execution IDs before persisting a claim', async () => {
     await service.claim({ ...request, n8nExecutionId: '  execution-1  ' });
-    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({
-      n8nExecutionId: 'execution-1',
-      status: WorkflowStatus.RUNNING,
-    }));
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        n8nExecutionId: 'execution-1',
+        status: WorkflowStatus.RUNNING,
+      }),
+    );
   });
 
   it('renews a duplicate claim made by the same execution', async () => {
     run.n8nExecutionId = request.n8nExecutionId;
     run.status = WorkflowStatus.RUNNING;
-    expect(await service.claim(request)).toMatchObject({ claimed: true, duplicate: true });
-    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({ claimExpiresAt: expect.any(Date) }));
+    expect(await service.claim(request)).toMatchObject({
+      claimed: true,
+      duplicate: true,
+    });
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ claimExpiresAt: expect.any(Date) }),
+    );
   });
 
   it('rejects a competing execution while the current lease is active', async () => {
     run.n8nExecutionId = 'execution-original';
     run.claimExpiresAt = new Date(Date.now() + 60_000);
     run.status = WorkflowStatus.RUNNING;
-    expect(await service.claim({ ...request, n8nExecutionId: 'execution-retry' }))
-      .toMatchObject({ claimed: false, reason: 'ALREADY_CLAIMED' });
+    expect(
+      await service.claim({ ...request, n8nExecutionId: 'execution-retry' }),
+    ).toMatchObject({ claimed: false, reason: 'ALREADY_CLAIMED' });
     expect(repository.save).not.toHaveBeenCalled();
   });
 
@@ -97,12 +117,18 @@ describe('WorkflowExecutionClaimsService', () => {
     run.n8nExecutionId = 'execution-stale';
     run.claimExpiresAt = new Date(Date.now() - 1_000);
     run.status = WorkflowStatus.RUNNING;
-    expect(await service.claim({ ...request, n8nExecutionId: 'execution-recovered' }))
-      .toMatchObject({ claimed: true, duplicate: false, recovered: true });
-    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({
-      n8nExecutionId: 'execution-recovered',
-      claimExpiresAt: expect.any(Date),
-    }));
+    expect(
+      await service.claim({
+        ...request,
+        n8nExecutionId: 'execution-recovered',
+      }),
+    ).toMatchObject({ claimed: true, duplicate: false, recovered: true });
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        n8nExecutionId: 'execution-recovered',
+        claimExpiresAt: expect.any(Date),
+      }),
+    );
   });
 
   it('renews a lease only for its current owner', async () => {
@@ -110,14 +136,18 @@ describe('WorkflowExecutionClaimsService', () => {
     run.claimExpiresAt = new Date(Date.now() + 60_000);
     run.status = WorkflowStatus.RUNNING;
     expect(await service.heartbeat(request)).toMatchObject({ renewed: true });
-    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({ claimExpiresAt: expect.any(Date) }));
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ claimExpiresAt: expect.any(Date) }),
+    );
   });
 
   it('rejects a heartbeat after its lease expires', async () => {
     run.n8nExecutionId = request.n8nExecutionId;
     run.claimExpiresAt = new Date(Date.now() - 1_000);
     run.status = WorkflowStatus.RUNNING;
-    await expect(service.heartbeat(request)).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.heartbeat(request)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
   });
 
   it('records sanitized failure diagnostics for the owning execution', async () => {
@@ -130,14 +160,19 @@ describe('WorkflowExecutionClaimsService', () => {
       failedNodeName: 'Gemini Proposal Draft',
     };
     expect(await service.fail(failure)).toEqual({
-      failed: true, duplicate: false, status: WorkflowStatus.FAILED,
-    });
-    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({
+      failed: true,
+      duplicate: false,
       status: WorkflowStatus.FAILED,
-      finishedAt: expect.any(Date),
-      claimExpiresAt: null,
-      errorMessage: 'N8N_EXECUTION_FAILED:UPSTREAM_PROVIDER_FAILURE: Gemini Proposal Draft',
-    }));
+    });
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: WorkflowStatus.FAILED,
+        finishedAt: expect.any(Date),
+        claimExpiresAt: null,
+        errorMessage:
+          'N8N_EXECUTION_FAILED:UPSTREAM_PROVIDER_FAILURE: Gemini Proposal Draft',
+      }),
+    );
   });
 
   it('records a sanitized failure when validation fails before the first execution claim', async () => {
@@ -155,59 +190,69 @@ describe('WorkflowExecutionClaimsService', () => {
       duplicate: false,
       status: WorkflowStatus.FAILED,
     });
-    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({
-      n8nExecutionId: request.n8nExecutionId,
-      status: WorkflowStatus.FAILED,
-      claimExpiresAt: null,
-      errorMessage: 'N8N_EXECUTION_FAILED:INVALID_INPUT: Code: Validate Entity Reference',
-    }));
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        n8nExecutionId: request.n8nExecutionId,
+        status: WorkflowStatus.FAILED,
+        claimExpiresAt: null,
+        errorMessage:
+          'N8N_EXECUTION_FAILED:INVALID_INPUT: Code: Validate Entity Reference',
+      }),
+    );
   });
 
   it.each([
     { label: 'WF01', workflowName: 'lead-qualification' },
     { label: 'WF08', workflowName: 'UC10_DATA_CLEANING' },
-  ] as const)('records a pre-claim failure from $label using the persisted workflow name', async ({ workflowName }) => {
-    run.workflowName = workflowName;
-    run.n8nExecutionId = null;
-    run.claimExpiresAt = null;
-    run.status = WorkflowStatus.PENDING;
+  ] as const)(
+    'records a pre-claim failure from $label using the persisted workflow name',
+    async ({ workflowName }) => {
+      run.workflowName = workflowName;
+      run.n8nExecutionId = null;
+      run.claimExpiresAt = null;
+      run.status = WorkflowStatus.PENDING;
 
-    const result = await service.fail({
-      workflowRunId: request.workflowRunId,
-      workflowName,
-      n8nExecutionId: 'rabbitmq-execution-1',
-      errorCategory: 'UPSTREAM_PROVIDER_FAILURE',
-      failedNodeName: 'Gemini Provider',
-    });
-
-    expect(result).toEqual({
-      failed: true,
-      duplicate: false,
-      status: WorkflowStatus.FAILED,
-    });
-    expect(repository.findOne).toHaveBeenCalledWith({
-      where: {
-        id: request.workflowRunId,
+      const result = await service.fail({
+        workflowRunId: request.workflowRunId,
         workflowName,
-      },
-      lock: { mode: 'pessimistic_write' },
-    });
-    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({
-      workflowName,
-      n8nExecutionId: 'rabbitmq-execution-1',
-      status: WorkflowStatus.FAILED,
-      claimExpiresAt: null,
-    }));
-  });
+        n8nExecutionId: 'rabbitmq-execution-1',
+        errorCategory: 'UPSTREAM_PROVIDER_FAILURE',
+        failedNodeName: 'Gemini Provider',
+      });
+
+      expect(result).toEqual({
+        failed: true,
+        duplicate: false,
+        status: WorkflowStatus.FAILED,
+      });
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: {
+          id: request.workflowRunId,
+          workflowName,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowName,
+          n8nExecutionId: 'rabbitmq-execution-1',
+          status: WorkflowStatus.FAILED,
+          claimExpiresAt: null,
+        }),
+      );
+    },
+  );
 
   it('requires workflowRunId when reporting a failure before a run has been claimed', async () => {
     run.n8nExecutionId = null;
     run.status = WorkflowStatus.RUNNING;
-    await expect(service.fail({
-      workflowName: request.workflowName,
-      n8nExecutionId: request.n8nExecutionId,
-      errorCategory: 'INVALID_INPUT',
-    })).rejects.toBeInstanceOf(ConflictException);
+    await expect(
+      service.fail({
+        workflowName: request.workflowName,
+        n8nExecutionId: request.n8nExecutionId,
+        errorCategory: 'INVALID_INPUT',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
     expect(repository.save).not.toHaveBeenCalled();
   });
 
@@ -232,28 +277,101 @@ describe('WorkflowExecutionClaimsService', () => {
     run.n8nExecutionId = 'execution-current';
     run.claimExpiresAt = new Date(Date.now() + 60_000);
     run.status = WorkflowStatus.RUNNING;
-    await expect(service.fail({ ...request, errorCategory: 'UPSTREAM_PROVIDER_FAILURE' }))
-      .rejects.toBeInstanceOf(ConflictException);
+    await expect(
+      service.fail({ ...request, errorCategory: 'UPSTREAM_PROVIDER_FAILURE' }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('locates a failed run by execution ID when the Error Trigger has no run ID', async () => {
     run.n8nExecutionId = request.n8nExecutionId;
     run.claimExpiresAt = new Date(Date.now() + 60_000);
     run.status = WorkflowStatus.RUNNING;
-    await service.fail({ workflowName: request.workflowName, n8nExecutionId: request.n8nExecutionId, errorCategory: 'UPSTREAM_PROVIDER_FAILURE' });
-    expect(repository.findOne).toHaveBeenCalledWith({ where: { workflowName: request.workflowName, n8nExecutionId: request.n8nExecutionId }, lock: { mode: 'pessimistic_write' } });
+    await service.fail({
+      workflowName: request.workflowName,
+      n8nExecutionId: request.n8nExecutionId,
+      errorCategory: 'UPSTREAM_PROVIDER_FAILURE',
+    });
+    expect(repository.findOne).toHaveBeenCalledWith({
+      where: {
+        workflowName: request.workflowName,
+        n8nExecutionId: request.n8nExecutionId,
+      },
+      lock: { mode: 'pessimistic_write' },
+    });
   });
 
   it('rejects free-form error text instead of a stable category', async () => {
-    await expect(service.fail({ ...request, errorCategory: 'token=secret provider failed' }))
-      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.fail({
+        ...request,
+        errorCategory: 'token=secret provider failed',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('does not claim a terminal WorkflowRun', async () => {
     run.status = WorkflowStatus.SUCCESS;
     expect(await service.claim(request)).toMatchObject({
-      claimed: false, reason: 'RUN_NOT_ACTIVE', status: WorkflowStatus.SUCCESS,
+      claimed: false,
+      reason: 'RUN_NOT_ACTIVE',
+      status: WorkflowStatus.SUCCESS,
     });
     expect(repository.save).not.toHaveBeenCalled();
+  });
+
+  describe('T12-WF05 Customer 360 claim deduplication', () => {
+    const wf05Request: ClaimWorkflowExecutionDto = {
+      workflowRunId: '22222222-2222-4222-8222-222222222222',
+      workflowName: 't12-wf05-customer-360',
+      n8nExecutionId: 'exec-wf05-initial',
+    };
+
+    it('claims an active t12-wf05-customer-360 run and transitions status to RUNNING', async () => {
+      run.id = wf05Request.workflowRunId;
+      run.workflowName = wf05Request.workflowName;
+      run.status = WorkflowStatus.PENDING;
+
+      const result = await service.claim(wf05Request);
+
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: {
+          id: wf05Request.workflowRunId,
+          workflowName: 't12-wf05-customer-360',
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          n8nExecutionId: 'exec-wf05-initial',
+          status: WorkflowStatus.RUNNING,
+        }),
+      );
+      expect(result).toMatchObject({
+        claimed: true,
+        duplicate: false,
+        status: WorkflowStatus.RUNNING,
+      });
+    });
+
+    it('rejects a duplicate replayed execution for t12-wf05-customer-360 when lease is active', async () => {
+      run.id = wf05Request.workflowRunId;
+      run.workflowName = wf05Request.workflowName;
+      run.n8nExecutionId = 'exec-wf05-initial';
+      run.claimExpiresAt = new Date(Date.now() + 60_000);
+      run.status = WorkflowStatus.RUNNING;
+
+      const result = await service.claim({
+        ...wf05Request,
+        n8nExecutionId: 'exec-wf05-lost-ack-retry',
+      });
+
+      expect(result).toMatchObject({
+        claimed: false,
+        duplicate: false,
+        reason: 'ALREADY_CLAIMED',
+        status: WorkflowStatus.RUNNING,
+      });
+      expect(repository.save).not.toHaveBeenCalled();
+    });
   });
 });

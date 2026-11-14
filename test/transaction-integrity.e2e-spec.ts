@@ -742,4 +742,84 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       'Discount exceeds the permitted policy',
     );
   });
+
+  it('deduplicates concurrent Customer 360 triggers under PostgreSQL 23505 and creates distinct runs when Idempotency-Key is omitted', async () => {
+    const customerId = randomUUID();
+    const idempotencyKey = `wf05-concurrent-${suffix}`;
+
+    await dataSource.query(
+      `INSERT INTO customers (id, name, email, company_name, status, created_by)
+       VALUES ($1, $2, $3, $4, 'ACTIVE', $5);`,
+      [
+        customerId,
+        `Concurrent Customer ${suffix}`,
+        `concurrent.${suffix}@example.test`,
+        'Concurrent Integrity Corp',
+        userId,
+      ],
+    );
+
+    try {
+      const [first, second] = await Promise.all([
+        api
+          .post(`/api/v1/customers/${customerId}/360/trigger`)
+          .set('Idempotency-Key', idempotencyKey)
+          .send({}),
+        api
+          .post(`/api/v1/customers/${customerId}/360/trigger`)
+          .set('Idempotency-Key', idempotencyKey)
+          .send({}),
+      ]);
+
+      expect(first.status).toBe(202);
+      expect(second.status).toBe(202);
+      expect(first.body.workflowRunId).toBeDefined();
+      expect(second.body.workflowRunId).toBe(first.body.workflowRunId);
+      workflowRunIds.push(first.body.workflowRunId as string);
+
+      const runs = await dataSource.query(
+        'SELECT id FROM workflow_runs WHERE id = $1;',
+        [first.body.workflowRunId],
+      );
+      expect(runs).toHaveLength(1);
+
+      const outboxRows = await dataSource.query(
+        "SELECT id FROM outbox_events WHERE payload->>'workflowRunId' = $1;",
+        [first.body.workflowRunId],
+      );
+      expect(outboxRows).toHaveLength(1);
+
+      // Omitting Idempotency-Key creates distinct WorkflowRuns
+      const unkeyedFirst = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .send({});
+      const unkeyedSecond = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .send({});
+
+      expect(unkeyedFirst.status).toBe(202);
+      expect(unkeyedSecond.status).toBe(202);
+      expect(unkeyedFirst.body.workflowRunId).toBeDefined();
+      expect(unkeyedSecond.body.workflowRunId).toBeDefined();
+      expect(unkeyedSecond.body.workflowRunId).not.toBe(
+        unkeyedFirst.body.workflowRunId,
+      );
+      workflowRunIds.push(
+        unkeyedFirst.body.workflowRunId as string,
+        unkeyedSecond.body.workflowRunId as string,
+      );
+    } finally {
+      await dataSource.query(
+        "DELETE FROM outbox_events WHERE payload->>'workflowRunId' IN (SELECT id::text FROM workflow_runs WHERE customer_id = $1);",
+        [customerId],
+      );
+      await dataSource.query(
+        'DELETE FROM workflow_runs WHERE customer_id = $1;',
+        [customerId],
+      );
+      await dataSource.query('DELETE FROM customers WHERE id = $1;', [
+        customerId,
+      ]);
+    }
+  });
 });
