@@ -1,7 +1,4 @@
-import {
-  Injectable,
-  InternalServerErrorException,
-} from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import {
   OutboxEvent,
@@ -10,6 +7,7 @@ import {
 } from '../../infrastructure/rabbitmq/entities/outbox-event.entity.js';
 
 export type N8nWebhookKey =
+  | 'N8N_WF09_WEBHOOK_URL'
   | 'N8N_WF10_WEBHOOK_URL'
   | 'N8N_WF11_WEBHOOK_URL'
   | 'N8N_WF12_WEBHOOK_URL';
@@ -27,6 +25,7 @@ export class N8nWorkflowDispatchService {
     payload: Record<string, unknown>,
   ): Promise<OutboxEvent> {
     const allowedPaths: Record<N8nWebhookKey, string> = {
+      N8N_WF09_WEBHOOK_URL: 'internal/t12-wf09-conversation-summarizer',
       N8N_WF10_WEBHOOK_URL: 'internal/t12-wf10-next-best-action',
       N8N_WF11_WEBHOOK_URL: 'internal/t12-wf11-sales-meeting',
       N8N_WF12_WEBHOOK_URL: 'internal/t12-wf12-quote-proposal',

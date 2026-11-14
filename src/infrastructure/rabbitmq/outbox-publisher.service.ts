@@ -184,6 +184,7 @@ export class OutboxPublisher {
 
   private async publishWebhook(event: ClaimedEvent): Promise<void> {
     const allowedDestinations = [
+      'N8N_WF09_WEBHOOK_URL',
       'N8N_WF10_WEBHOOK_URL',
       'N8N_WF11_WEBHOOK_URL',
       'N8N_WF12_WEBHOOK_URL',

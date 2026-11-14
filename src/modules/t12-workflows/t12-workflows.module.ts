@@ -26,6 +26,8 @@ import { QuoteApproval } from './entities/quote-approval.entity.js';
 import { NextBestActionsService } from './next-best-actions.service.js';
 import { SalesMeetingsService } from './sales-meetings.service.js';
 import { QuotesService } from './quotes.service.js';
+import { ConversationsService } from './conversations.service.js';
+import { ConversationsController } from './conversations.controller.js';
 import { NextBestActionsController } from './next-best-actions.controller.js';
 import { InternalNextBestActionsController } from './internal-next-best-actions.controller.js';
 import { SalesMeetingsController } from './sales-meetings.controller.js';
@@ -64,6 +66,7 @@ const ENTITIES = [
 @Module({
   imports: [TypeOrmModule.forFeature(ENTITIES), AuthModule],
   controllers: [
+    ConversationsController,
     NextBestActionsController,
     InternalNextBestActionsController,
     SalesMeetingsController,
@@ -78,12 +81,14 @@ const ENTITIES = [
   providers: [
     N8nAuthGuard,
     N8nWorkflowDispatchService,
+    ConversationsService,
     NextBestActionsService,
     SalesMeetingsService,
     QuotesService,
     WorkflowExecutionClaimsService,
   ],
   exports: [
+    ConversationsService,
     NextBestActionsService,
     SalesMeetingsService,
     QuotesService,
