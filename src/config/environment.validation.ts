@@ -71,7 +71,7 @@ const PRODUCTION_N8N_URL_KEYS = [
   'N8N_WEBHOOK_BASE_URL',
 ] as const;
 
-function assertPrivateN8nServiceUrl(value: string, configKey: string): void {
+export function assertPrivateN8nServiceUrl(value: string, configKey: string): void {
   let parsed: URL;
   try {
     parsed = new URL(value.trim());
