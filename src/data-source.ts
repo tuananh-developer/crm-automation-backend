@@ -14,7 +14,7 @@ import { AddT12WorkflowDomains1793476800000 } from './database/migrations/179347
 const isProduction = process.env.NODE_ENV === 'production';
 const useLocalDb = process.env.USE_LOCAL_DB === 'true';
 const dbUrl = process.env.DATABASE_URL?.trim();
-const sslCa = process.env.DB_SSL_CA?.split(String.raw`\\n`).join('\\n');
+const sslCa = process.env.DB_SSL_CA?.split(String.raw`\n`).join('\n');
 
 if (isProduction) {
   validateEnvironmentConfiguration(process.env);
