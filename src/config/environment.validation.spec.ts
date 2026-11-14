@@ -30,6 +30,10 @@ describe('validateEnvironmentConfiguration', () => {
     LOCAL_RABBITMQ_PORT: '5672',
     LOCAL_RABBITMQ_USER: 'crm_broker',
     LOCAL_RABBITMQ_PASSWORD: 'rabbit-secret-' + 'b'.repeat(40),
+    JWT_SECRET: 'jwt-secret-' + 'c'.repeat(40),
+    N8N_API_KEY: 'n8n-api-secret-' + 'd'.repeat(40),
+    N8N_WEBHOOK_SECRET: 'n8n-webhook-secret-' + 'e'.repeat(40),
+    N8N_ENCRYPTION_KEY: 'n8n-encryption-secret-' + 'f'.repeat(40),
     N8N_BASE_URL: 'https://n8n.example.test',
     N8N_WEBHOOK_BASE_URL: 'https://n8n.example.test/webhook',
   });
@@ -81,6 +85,20 @@ describe('validateEnvironmentConfiguration', () => {
     expect(() =>
       validateEnvironmentConfiguration(defaultRabbitUser),
     ).toThrow('must not use the default guest account');
+  });
+
+  it('rejects placeholder or reused machine-to-machine production secrets', () => {
+    const placeholder = privateComposeProductionEnvironment();
+    placeholder.JWT_SECRET = 'REPLACE_WITH_OPENSSL_RANDOM_32_BYTE_HEX';
+    expect(() =>
+      validateEnvironmentConfiguration(placeholder),
+    ).toThrow('JWT_SECRET must be a unique, non-placeholder secret');
+
+    const reused = privateComposeProductionEnvironment();
+    reused.N8N_API_KEY = reused.JWT_SECRET;
+    expect(() =>
+      validateEnvironmentConfiguration(reused),
+    ).toThrow('must all be different secrets');
   });
 
   it('does not allow mixed local and managed production broker modes', () => {
