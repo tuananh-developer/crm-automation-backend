@@ -75,6 +75,7 @@ docker compose --env-file deploy/.env.production -f deploy/compose.production.ym
 Set these repository variables in both backend and frontend repositories:
 
 - `DOCKERHUB_USERNAME=tanhisme`
+- `ENABLE_EC2_DEPLOY=true` only after the EC2 is Online in Systems Manager and `deploy/.env.production` is configured; leave it unset or false during initial preparation.
 - `AWS_REGION=ap-southeast-2`
 - `AWS_EC2_INSTANCE_ID=i-05f96c4993945b4e9`
 
