@@ -1,4 +1,8 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { SegmentsService } from './segments.service.js';
 import { In } from 'typeorm';
 import type { DeepPartial, Repository } from 'typeorm';
@@ -9,8 +13,11 @@ import type { LeadScore } from '../lead-intelligence/entities/lead-score.entity.
 import { ScoreLabel } from '../lead-intelligence/enums/lead-intelligence.enum.js';
 import { Lead } from '../leads/entities/lead.entity.js';
 import type { User } from '../users/entities/user.entity.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { SegmentAssignmentType } from './enums/customer.enum.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
+import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
+import type { SegmentWorkflowCallbackDto } from './dto/segment-workflow-callback.dto.js';
 import type { CreateSegmentDto } from './dto/create-segment.dto.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
@@ -22,6 +29,7 @@ describe('SegmentsService', () => {
     Partial<Repository<CustomerSegment>>
   >;
   let usersRepository: jest.Mocked<Partial<Repository<User>>>;
+  let workflowRunRepository: jest.Mocked<Partial<Repository<WorkflowRun>>>;
 
   const mockUser: User = {
     id: 'user-1',
@@ -151,11 +159,17 @@ describe('SegmentsService', () => {
       remove: jest
         .fn()
         .mockImplementation((item: CustomerSegment) => Promise.resolve(item)),
+      delete: jest.fn(),
       count: jest.fn().mockResolvedValue(5),
       createQueryBuilder: jest.fn().mockReturnValue(countQb),
     };
     usersRepository = {
       findOne: jest.fn(),
+    };
+    workflowRunRepository = {
+      create: jest.fn(),
+      findOne: jest.fn(),
+      save: jest.fn(),
     };
 
     service = new SegmentsService(
@@ -163,6 +177,7 @@ describe('SegmentsService', () => {
       segmentsRepository as Repository<Segment>,
       customerSegmentsRepository as Repository<CustomerSegment>,
       usersRepository as Repository<User>,
+      workflowRunRepository as Repository<WorkflowRun>,
     );
   });
 
@@ -295,7 +310,11 @@ describe('SegmentsService', () => {
         Promise.resolve(value),
       );
 
-      await service.update('segment-1', { isActive: false }, salesActor);
+      const result = await service.update(
+        'segment-1',
+        { isActive: false },
+        salesActor,
+      );
 
       expect(usersRepository.findOne).toHaveBeenCalledWith({
         where: { id: salesActor.id },
@@ -306,6 +325,7 @@ describe('SegmentsService', () => {
           isActive: false,
         }),
       );
+      expect(result.updater?.id).toBe(salesActor.id);
     });
 
     it('does not allow Sales to delete workspace-wide segment memberships', async () => {
@@ -314,6 +334,22 @@ describe('SegmentsService', () => {
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(segmentsRepository.findOne).not.toHaveBeenCalled();
       expect(customerSegmentsRepository.remove).not.toHaveBeenCalled();
+    });
+
+    it('allows ADMIN to delete a segment and its membership rows', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customerSegmentsRepository.delete as jest.Mock).mockResolvedValue({
+        affected: 1,
+      });
+      (segmentsRepository.remove as jest.Mock).mockResolvedValue(mockSegment);
+
+      const result = await service.remove('segment-1', adminActor);
+
+      expect(customerSegmentsRepository.delete).toHaveBeenCalledWith({
+        segmentId: 'segment-1',
+      });
+      expect(segmentsRepository.remove).toHaveBeenCalledWith(mockSegment);
+      expect(result.id).toBe('segment-1');
     });
   });
 
@@ -333,6 +369,76 @@ describe('SegmentsService', () => {
   });
 
   describe('evaluateCustomer', () => {
+    it('rejects evaluation when the segment does not exist', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.evaluateCustomer(
+          'missing-segment',
+          {
+            customerId: 'customer-1',
+            assignmentType: SegmentAssignmentType.RULE,
+          },
+          adminActor,
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejects evaluation when the customer does not exist', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.evaluateCustomer(
+          'segment-1',
+          {
+            customerId: 'missing-customer',
+            assignmentType: SegmentAssignmentType.RULE,
+          },
+          adminActor,
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('returns unmatched when the customer field is null', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        industry: null,
+      });
+      (customerSegmentsRepository.findOne as jest.Mock).mockResolvedValue(null);
+
+      const result = await service.evaluateCustomer(
+        'segment-1',
+        {
+          customerId: 'customer-1',
+          assignmentType: SegmentAssignmentType.RULE,
+        },
+        adminActor,
+      );
+
+      expect(result.matched).toBe(false);
+      expect(customerSegmentsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects AI evaluation when AI segmentation is not configured', async () => {
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+
+      await expect(
+        service.evaluateCustomer(
+          'segment-1',
+          {
+            customerId: 'customer-1',
+            assignmentType: SegmentAssignmentType.AI,
+          },
+          adminActor,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
     it('matches customer matching the criteria and assigns segment', async () => {
       (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
       (customersRepository.findOne as jest.Mock).mockResolvedValue(
@@ -637,6 +743,109 @@ describe('SegmentsService', () => {
         },
       });
       expect(customerSegmentsRepository.save).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('workflow callbacks', () => {
+    it('creates one run for an idempotency key', async () => {
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (segmentsRepository.findOne as jest.Mock).mockResolvedValue(mockSegment);
+      (workflowRunRepository.create as jest.Mock).mockImplementation(
+        (value) => ({ ...value, id: 'workflow-run-1' }),
+      );
+      (workflowRunRepository.save as jest.Mock).mockImplementation((value) =>
+        Promise.resolve(value),
+      );
+
+      const result = await service.createWorkflowRun(
+        'segment-1',
+        'wf07-execution-1',
+      );
+
+      expect(workflowRunRepository.findOne).toHaveBeenCalledWith({
+        where: { idempotencyKey: 'wf07-execution-1' },
+      });
+      expect(workflowRunRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowName: 'WF07_CUSTOMER_SEGMENTATION',
+          idempotencyKey: 'wf07-execution-1',
+          status: WorkflowStatus.RUNNING,
+        }),
+      );
+      expect(result.workflowRunId).toBe('workflow-run-1');
+    });
+
+    it('rejects a callback whose run belongs to another segment', async () => {
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValue({
+        id: 'workflow-run-1',
+        workflowName: 'WF07_CUSTOMER_SEGMENTATION',
+        inputPayload: { segmentId: 'another-segment' },
+        status: WorkflowStatus.RUNNING,
+      });
+
+      await expect(
+        service.handleWorkflowCallback({
+          workflowRunId: 'workflow-run-1',
+          segmentId: 'segment-1',
+          segmentName: 'Enterprise Tech',
+          status: 'SUCCESS',
+          statistics: {
+            total: 0,
+            processed: 0,
+            matched: 0,
+            unmatched: 0,
+            matchRate: '0%',
+          },
+          aiInsights: [],
+          rejectedInsights: 0,
+        } satisfies SegmentWorkflowCallbackDto),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(workflowRunRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('persists a successful callback and ignores duplicate terminal callbacks', async () => {
+      const run = Object.assign(new WorkflowRun(), {
+        id: 'workflow-run-1',
+        workflowName: 'WF07_CUSTOMER_SEGMENTATION',
+        inputPayload: { segmentId: 'segment-1' },
+        outputPayload: null,
+        status: WorkflowStatus.RUNNING,
+        finishedAt: null,
+        errorMessage: null,
+      });
+      (workflowRunRepository.findOne as jest.Mock).mockResolvedValue(run);
+      (workflowRunRepository.save as jest.Mock).mockImplementation((value) =>
+        Promise.resolve(value),
+      );
+      const callback: SegmentWorkflowCallbackDto = {
+        workflowRunId: run.id,
+        segmentId: 'segment-1',
+        segmentName: 'Enterprise Tech',
+        status: 'SUCCESS',
+        statistics: {
+          total: 1,
+          processed: 1,
+          matched: 1,
+          unmatched: 0,
+          matchRate: '100%',
+        },
+        aiInsights: [],
+        rejectedInsights: 0,
+      };
+
+      const result = await service.handleWorkflowCallback(callback);
+      const duplicate = await service.handleWorkflowCallback(callback);
+
+      expect(result.status).toBe(WorkflowStatus.SUCCESS);
+      expect(duplicate).toEqual(result);
+      expect(workflowRunRepository.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an empty run idempotency key', async () => {
+      await expect(
+        service.createWorkflowRun('segment-1', ' '),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(workflowRunRepository.save).not.toHaveBeenCalled();
     });
   });
 });

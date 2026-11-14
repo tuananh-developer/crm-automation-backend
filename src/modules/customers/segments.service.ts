@@ -1,3 +1,4 @@
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   BadRequestException,
   ConflictException,
@@ -27,7 +28,9 @@ import { CustomerMapper } from './mappers/customer.mapper.js';
 import { SegmentMapper } from './mappers/segment.mapper.js';
 import { PaginatedResponseDto } from '../../common/index.js';
 import { SegmentAssignmentType } from './enums/customer.enum.js';
-import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
+import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
+import { SegmentWorkflowCallbackDto } from './dto/segment-workflow-callback.dto.js';
 import { UserRole } from '../users/enums/user.enum.js';
 
 @Injectable()
@@ -44,6 +47,9 @@ export class SegmentsService {
 
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+
+    @InjectRepository(WorkflowRun)
+    private readonly workflowRunRepository: Repository<WorkflowRun>,
   ) {}
 
   async create(
@@ -711,5 +717,143 @@ export class SegmentsService {
       default:
         return false;
     }
+  }
+
+  async createWorkflowRun(
+    segmentId: string,
+    idempotencyKey: string,
+  ): Promise<{ workflowRunId: string; status: string }> {
+    if (!idempotencyKey.trim()) {
+      throw new BadRequestException('Idempotency-Key header is required');
+    }
+
+    const existingRun = await this.workflowRunRepository.findOne({
+      where: { idempotencyKey },
+    });
+    if (existingRun) {
+      if (existingRun.inputPayload?.segmentId !== segmentId) {
+        throw new ConflictException(
+          'Idempotency key is already associated with another segment',
+        );
+      }
+      return {
+        workflowRunId: existingRun.id,
+        status: existingRun.status,
+      };
+    }
+
+    const segment = await this.segmentsRepository.findOne({
+      where: { id: segmentId },
+    });
+    if (!segment) {
+      throw new NotFoundException(`Segment '${segmentId}' not found`);
+    }
+
+    const workflowRun = this.workflowRunRepository.create({
+      workflowName: 'WF07_CUSTOMER_SEGMENTATION',
+      status: WorkflowStatus.RUNNING,
+      idempotencyKey,
+      inputPayload: {
+        segmentId,
+        segmentName: segment.name,
+        requestedAt: new Date().toISOString(),
+      } as Record<string, any>,
+      outputPayload: null,
+      startedAt: new Date(),
+    });
+
+    let savedRun: WorkflowRun;
+    try {
+      savedRun = await this.workflowRunRepository.save(workflowRun);
+    } catch (error) {
+      const concurrentRun = await this.workflowRunRepository.findOne({
+        where: { idempotencyKey },
+      });
+      if (!concurrentRun) {
+        throw error;
+      }
+      if (concurrentRun.inputPayload?.segmentId !== segmentId) {
+        throw new ConflictException(
+          'Idempotency key is already associated with another segment',
+        );
+      }
+      savedRun = concurrentRun;
+    }
+
+    return {
+      workflowRunId: savedRun.id,
+      status: savedRun.status,
+    };
+  }
+
+  async handleWorkflowCallback(dto: SegmentWorkflowCallbackDto): Promise<{
+    success: boolean;
+    workflowRunId: string;
+    status: string;
+  }> {
+    const workflowRun = await this.workflowRunRepository.findOne({
+      where: { id: dto.workflowRunId },
+    });
+    if (!workflowRun) {
+      throw new NotFoundException(
+        `WorkflowRun '${dto.workflowRunId}' not found`,
+      );
+    }
+
+    if (
+      workflowRun.workflowName !== 'WF07_CUSTOMER_SEGMENTATION' ||
+      workflowRun.inputPayload?.segmentId !== dto.segmentId
+    ) {
+      throw new NotFoundException(
+        `WorkflowRun '${dto.workflowRunId}' not found`,
+      );
+    }
+
+    if (
+      [
+        WorkflowStatus.SUCCESS,
+        WorkflowStatus.PARTIAL,
+        WorkflowStatus.FAILED,
+      ].includes(workflowRun.status)
+    ) {
+      return {
+        success: true,
+        workflowRunId: workflowRun.id,
+        status: workflowRun.status,
+      };
+    }
+
+    workflowRun.status =
+      dto.status === 'SUCCESS'
+        ? WorkflowStatus.SUCCESS
+        : dto.status === 'PARTIAL'
+          ? WorkflowStatus.PARTIAL
+          : WorkflowStatus.FAILED;
+
+    const existingOutput =
+      (workflowRun.outputPayload as Record<string, any>) || {};
+
+    const updatedOutput = {
+      ...existingOutput,
+      segmentId: dto.segmentId,
+      segmentName: dto.segmentName,
+      statistics: dto.statistics,
+      aiInsights: dto.aiInsights,
+      rejectedInsights: dto.rejectedInsights,
+      anomalyDetected: dto.anomalyDetected ?? false,
+      receivedAt: new Date().toISOString(),
+    };
+
+    workflowRun.outputPayload = updatedOutput;
+    workflowRun.finishedAt = new Date();
+    workflowRun.errorMessage = dto.errorMessage || null;
+
+    await this.workflowRunRepository.save(workflowRun);
+
+    return {
+      success: true,
+      workflowRunId: workflowRun.id,
+      status: workflowRun.status,
+    };
   }
 }
