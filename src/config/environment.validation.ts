@@ -27,9 +27,13 @@ function assertRequiredSecret(
   minimumLength = 32,
 ): void {
   const value = readString(environment, key);
-  if (value.length < minimumLength) {
+  if (
+    value.length < minimumLength ||
+    value.startsWith('REPLACE_WITH_') ||
+    ['password', 'postgres', 'guest', 'changeme'].includes(value.toLowerCase())
+  ) {
     throw new Error(
-      key + ' must be configured with at least ' + minimumLength + ' characters',
+      key + ' must be a unique, non-placeholder secret with at least ' + minimumLength + ' characters',
     );
   }
 }
@@ -135,6 +139,25 @@ export function validateEnvironmentConfiguration(
       );
     }
     assertRequiredSecret(environment, 'LOCAL_RABBITMQ_PASSWORD');
+
+    // These are the application-to-application trust roots used by JWT auth,
+    // n8n callbacks, and encryption of n8n's persisted credentials.
+    assertRequiredSecret(environment, 'JWT_SECRET');
+    assertRequiredSecret(environment, 'N8N_API_KEY');
+    assertRequiredSecret(environment, 'N8N_WEBHOOK_SECRET');
+    assertRequiredSecret(environment, 'N8N_ENCRYPTION_KEY');
+
+    const machineSecrets = [
+      readString(environment, 'JWT_SECRET'),
+      readString(environment, 'N8N_API_KEY'),
+      readString(environment, 'N8N_WEBHOOK_SECRET'),
+      readString(environment, 'N8N_ENCRYPTION_KEY'),
+    ];
+    if (new Set(machineSecrets).size !== machineSecrets.length) {
+      throw new Error(
+        'JWT_SECRET, N8N_API_KEY, N8N_WEBHOOK_SECRET, and N8N_ENCRYPTION_KEY must all be different secrets',
+      );
+    }
   } else {
     if (useLocalDb) {
       throw new Error(
