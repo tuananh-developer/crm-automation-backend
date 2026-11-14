@@ -15,6 +15,25 @@ describe('validateEnvironmentConfiguration', () => {
     N8N_WF12_WEBHOOK_URL: '',
   });
 
+  const privateComposeProductionEnvironment = () => ({
+    NODE_ENV: 'production',
+    ALLOW_LOCAL_INFRA_IN_PRODUCTION: 'true',
+    USE_LOCAL_DB: 'true',
+    USE_LOCAL_AMQP: 'true',
+    USE_CLOUD_AMQP: 'false',
+    LOCAL_DB_HOST: 'postgres',
+    LOCAL_DB_PORT: '5432',
+    LOCAL_DB_NAME: 'crm_backend',
+    LOCAL_DB_USER: 'crm_app',
+    LOCAL_DB_PASSWORD: 'db-secret-' + 'a'.repeat(40),
+    LOCAL_RABBITMQ_HOST: 'rabbitmq',
+    LOCAL_RABBITMQ_PORT: '5672',
+    LOCAL_RABBITMQ_USER: 'crm_broker',
+    LOCAL_RABBITMQ_PASSWORD: 'rabbit-secret-' + 'b'.repeat(40),
+    N8N_BASE_URL: 'https://n8n.example.test',
+    N8N_WEBHOOK_BASE_URL: 'https://n8n.example.test/webhook',
+  });
+
   it('keeps development configuration compatible with local Docker services', () => {
     const environment = {
       NODE_ENV: 'development',
@@ -25,7 +44,7 @@ describe('validateEnvironmentConfiguration', () => {
     expect(validateEnvironmentConfiguration(environment)).toBe(environment);
   });
 
-  it('requires a remote database and disallows the local database fallback in production', () => {
+  it('requires managed production database and broker unless private Compose mode is explicit', () => {
     const missingDatabase = productionEnvironment();
     missingDatabase.DATABASE_URL = '';
     expect(() =>
@@ -36,10 +55,43 @@ describe('validateEnvironmentConfiguration', () => {
     localDatabase.USE_LOCAL_DB = 'true';
     expect(() =>
       validateEnvironmentConfiguration(localDatabase),
-    ).toThrow('USE_LOCAL_DB must not be true');
+    ).toThrow('ALLOW_LOCAL_INFRA_IN_PRODUCTION=true');
   });
 
-  it('requires AMQPS for the production RabbitMQ URL', () => {
+  it('accepts private Docker Compose PostgreSQL and RabbitMQ with dedicated strong credentials', () => {
+    const environment = privateComposeProductionEnvironment();
+    expect(validateEnvironmentConfiguration(environment)).toBe(environment);
+  });
+
+  it('requires the private Compose service DNS names and non-default credentials', () => {
+    const wrongDatabaseHost = privateComposeProductionEnvironment();
+    wrongDatabaseHost.LOCAL_DB_HOST = 'localhost';
+    expect(() =>
+      validateEnvironmentConfiguration(wrongDatabaseHost),
+    ).toThrow('LOCAL_DB_HOST must be the private Compose service name');
+
+    const weakDatabasePassword = privateComposeProductionEnvironment();
+    weakDatabasePassword.LOCAL_DB_PASSWORD = 'postgres';
+    expect(() =>
+      validateEnvironmentConfiguration(weakDatabasePassword),
+    ).toThrow('LOCAL_DB_PASSWORD must be configured with at least 32 characters');
+
+    const defaultRabbitUser = privateComposeProductionEnvironment();
+    defaultRabbitUser.LOCAL_RABBITMQ_USER = 'guest';
+    expect(() =>
+      validateEnvironmentConfiguration(defaultRabbitUser),
+    ).toThrow('must not use the default guest account');
+  });
+
+  it('does not allow mixed local and managed production broker modes', () => {
+    const environment = privateComposeProductionEnvironment();
+    environment.USE_CLOUD_AMQP = 'true';
+    expect(() =>
+      validateEnvironmentConfiguration(environment),
+    ).toThrow('USE_CLOUD_AMQP must not be true');
+  });
+
+  it('requires AMQPS for the managed production RabbitMQ URL', () => {
     const environment = productionEnvironment();
     environment.RABBITMQ_URL = 'amqp://broker.example.test/vhost';
 
