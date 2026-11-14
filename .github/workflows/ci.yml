@@ -105,3 +105,50 @@ jobs:
           path: coverage/
           if-no-files-found: ignore
           retention-days: 14
+
+  deployment-config:
+    name: Validate and build EC2 Docker deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout backend
+        uses: actions/checkout@v4
+
+      - name: Checkout frontend
+        uses: actions/checkout@v4
+        with:
+          repository: tuananh-developer/crm-automation-frontend
+          ref: main
+          path: crm-automation-frontend
+
+      - name: Prepare ephemeral CI environment
+        run: |
+          cp deploy/.env.production.example deploy/.env.production
+          for key in POSTGRES_ADMIN_PASSWORD LOCAL_DB_PASSWORD N8N_DB_PASSWORD LOCAL_RABBITMQ_PASSWORD JWT_SECRET N8N_API_KEY N8N_WEBHOOK_SECRET N8N_ENCRYPTION_KEY; do
+            value="$(openssl rand -hex 32)"
+            sed -i "s/^\${key}=.*/\${key}=\${value}/" deploy/.env.production
+          done
+          sed -i \
+            -e 's#crm.example.com#crm.ci.example.test#g' \
+            -e 's#n8n.example.com#n8n.ci.example.test#g' \
+            -e 's#ops@example.com#ci@example.test#g' \
+            deploy/.env.production
+          chmod 600 deploy/.env.production
+
+      - name: Validate deployment configuration
+        env:
+          FRONTEND_BUILD_CONTEXT: \${{ github.workspace }}/crm-automation-frontend
+        run: |
+          bash -n deploy/check-env.sh
+          bash -n deploy/postgres-init/01-create-app-databases.sh
+          node --check deploy/run-migrations.cjs
+          bash deploy/check-env.sh
+          docker compose --env-file deploy/.env.production -f deploy/compose.production.yml config --quiet
+
+      - name: Build backend Docker image
+        run: docker compose --env-file deploy/.env.production -f deploy/compose.production.yml build backend
+
+      - name: Build frontend Docker image
+        env:
+          FRONTEND_BUILD_CONTEXT: \${{ github.workspace }}/crm-automation-frontend
+        run: docker compose --env-file deploy/.env.production -f deploy/compose.production.yml build frontend
