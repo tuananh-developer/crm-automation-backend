@@ -9,6 +9,8 @@ import { OutboxEvent } from '../../infrastructure/rabbitmq/entities/outbox-event
 import { FeedbackService } from './feedback.service.js';
 import { FeedbackController } from './feedback.controller.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { FeedbackReadAuthGuard } from './guards/feedback-read-auth.guard.js';
 import { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispatch.service.js';
 
 @Module({
@@ -23,7 +25,13 @@ import { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispat
     ]),
   ],
   controllers: [FeedbackController],
-  providers: [FeedbackService, N8nAuthGuard, N8nWorkflowDispatchService],
+  providers: [
+    FeedbackService,
+    JwtAuthGuard,
+    N8nAuthGuard,
+    FeedbackReadAuthGuard,
+    N8nWorkflowDispatchService,
+  ],
   exports: [FeedbackService],
 })
 export class FeedbackModule {}

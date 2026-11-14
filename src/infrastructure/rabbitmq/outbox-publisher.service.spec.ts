@@ -187,6 +187,102 @@ describe('OutboxPublisher', () => {
     fetchSpy.mockRestore();
   });
 
+  it('dispatches over the private Compose network only when the explicit production flag is enabled', async () => {
+    const workflowRunId = '11111111-1111-1111-1111-111111111111';
+    const httpEvent = {
+      ...event,
+      transport: OutboxTransport.HTTP,
+      destination: 'N8N_WF10_WEBHOOK_URL',
+      destinationPath: 'internal/t12-wf10-next-best-action',
+      payload: { workflowRunId, entityType: 'Lead', entityId: 'lead-1' },
+    };
+    manager.query.mockResolvedValueOnce([httpEvent]);
+    const workflowRepository = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    manager.getRepository.mockImplementation((entity: unknown) =>
+      entity === WorkflowRun ? workflowRepository : repository,
+    );
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'NODE_ENV') return 'production';
+        if (key === 'ALLOW_LOCAL_INFRA_IN_PRODUCTION') return 'true';
+        if (key === 'N8N_BASE_URL') return 'http://n8n:5678';
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        return undefined;
+      }),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      config as unknown as ConfigService,
+    );
+
+    await publisher.publishPendingEvents();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://n8n:5678/webhook/internal/t12-wf10-next-best-action',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'X-N8N-API-KEY': 'test-n8n-secret',
+          'Idempotency-Key': workflowRunId,
+        }),
+        body: JSON.stringify(httpEvent.payload),
+      }),
+    );
+    expect(workflowRepository.update).toHaveBeenCalledWith(
+      { id: workflowRunId, status: WorkflowStatus.PENDING },
+      { status: WorkflowStatus.RUNNING },
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it('does not allow the private Compose exception for arbitrary HTTP hosts', async () => {
+    const httpEvent = {
+      ...event,
+      transport: OutboxTransport.HTTP,
+      destination: 'N8N_WF10_WEBHOOK_URL',
+      destinationPath: 'internal/t12-wf10-next-best-action',
+      payload: { workflowRunId: 'workflow-1', entityType: 'Lead', entityId: 'lead-1' },
+    };
+    manager.query.mockResolvedValueOnce([httpEvent]);
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'NODE_ENV') return 'production';
+        if (key === 'ALLOW_LOCAL_INFRA_IN_PRODUCTION') return 'true';
+        if (key === 'N8N_BASE_URL') return 'http://n8n.example.test:5678';
+        if (key === 'N8N_API_KEY') return 'test-n8n-secret';
+        return undefined;
+      }),
+    };
+    publisher = new OutboxPublisher(
+      dataSource as DataSource,
+      rabbitmq as RabbitMQService,
+      config as unknown as ConfigService,
+    );
+
+    await publisher.publishPendingEvents();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repository.update).toHaveBeenCalledWith(
+      { id: httpEvent.id, lockToken: httpEvent.lockToken },
+      expect.objectContaining({
+        status: OutboxEventStatus.FAILED,
+        lastError: expect.stringContaining('private Docker service URL'),
+      }),
+    );
+    fetchSpy.mockRestore();
+  });
+
   it('blocks production transcript dispatch until external processing is explicitly enabled', async () => {
     const workflowRunId = '11111111-1111-1111-1111-111111111111';
     const httpEvent = {

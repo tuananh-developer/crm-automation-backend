@@ -32,6 +32,14 @@ export class CreateFeedbackAndCustomerTasksTables1728600000000 implements Migrat
     `);
 
     await queryRunner.query(`
+      ALTER TABLE "customer_feedback"
+        ADD COLUMN IF NOT EXISTS "channel" character varying(50),
+        ADD COLUMN IF NOT EXISTS "content_redacted" text,
+        ADD COLUMN IF NOT EXISTS "error_message" text,
+        ADD COLUMN IF NOT EXISTS "resolved_at" TIMESTAMP WITH TIME ZONE;
+    `);
+
+    await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "idx_feedback_customer_id" ON "customer_feedback" ("customer_id");
     `);
 

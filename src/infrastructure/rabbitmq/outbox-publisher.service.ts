@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { assertUrlUsesScheme } from '../../config/environment.validation.js';
+import {
+  assertPrivateN8nServiceUrl,
+  assertUrlUsesScheme,
+} from '../../config/environment.validation.js';
 import { Interval } from '@nestjs/schedule';
 import { DataSource } from 'typeorm';
 import { WorkflowRun } from '../../modules/workflow/entities/workflow-run.entity.js';
@@ -128,7 +131,9 @@ export class OutboxPublisher {
       const terminal =
         error instanceof PermanentOutboxError || event.attempts >= 4;
       const retryDelayMs =
-        retryDelaysMs[Math.min(Math.max(event.attempts - 1, 0), retryDelaysMs.length - 1)];
+        retryDelaysMs[
+          Math.min(Math.max(event.attempts - 1, 0), retryDelaysMs.length - 1)
+        ];
       await this.dataSource.transaction(async (manager) => {
         const updated = await manager.getRepository(OutboxEvent).update(
           { id: event.id, lockToken: event.lockToken },
@@ -137,7 +142,9 @@ export class OutboxPublisher {
               ? OutboxEventStatus.FAILED
               : OutboxEventStatus.PENDING,
             lastError: message.slice(0, 4000),
-            nextAttemptAt: terminal ? null : new Date(Date.now() + retryDelayMs),
+            nextAttemptAt: terminal
+              ? null
+              : new Date(Date.now() + retryDelayMs),
             lockedUntil: null,
             lockToken: null,
           },
@@ -232,13 +239,21 @@ export class OutboxPublisher {
     }
 
     const nodeEnv = (
-      this.config.get<string>('NODE_ENV') || process.env.NODE_ENV || ''
+      this.config.get<string>('NODE_ENV') ||
+      process.env.NODE_ENV ||
+      ''
     )
       .trim()
       .toLowerCase();
     if (nodeEnv === 'production') {
       try {
-        assertUrlUsesScheme(url, 'https:', event.destination);
+        const allowLocalInfra =
+          this.config.get<string>('ALLOW_LOCAL_INFRA_IN_PRODUCTION') === 'true';
+        if (allowLocalInfra && url.startsWith('http://')) {
+          assertPrivateN8nServiceUrl(url, event.destination);
+        } else {
+          assertUrlUsesScheme(url, 'https:', event.destination);
+        }
       } catch (error) {
         throw new PermanentOutboxError(
           error instanceof Error ? error.message : String(error),
@@ -247,7 +262,10 @@ export class OutboxPublisher {
 
       if (
         typeof event.payload.transcript === 'string' &&
-        (this.config.get<string>('TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED') || '')
+        (
+          this.config.get<string>('TRANSCRIPT_EXTERNAL_PROCESSING_ENABLED') ||
+          ''
+        )
           .trim()
           .toLowerCase() !== 'true'
       ) {

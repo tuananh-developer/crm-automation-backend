@@ -52,25 +52,20 @@ jobs:
       LOCAL_RABBITMQ_PASSWORD: guest
       JWT_SECRET: ci-only-test-secret
       N8N_API_KEY: ci-only-test-api-key
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
-
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: latest
-
       - name: Get pnpm store directory
         id: pnpm-cache
         run: echo "store=$(pnpm store path)" >> $GITHUB_OUTPUT
-
       - name: Cache pnpm store
         uses: actions/cache@v4
         with:
@@ -78,25 +73,18 @@ jobs:
           key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
       - name: Lint
         run: pnpm lint
-
       - name: Build
         run: pnpm build
-
       - name: Unit tests with coverage
         run: pnpm test:cov --coverageReporters=text-summary --coverageReporters=lcov
-
       - name: Run database migrations
         run: pnpm migration:run
-
       - name: End-to-end tests
         run: pnpm test:e2e
-
       - name: Upload Jest coverage report
         if: always()
         uses: actions/upload-artifact@v4
@@ -105,3 +93,37 @@ jobs:
           path: coverage/
           if-no-files-found: ignore
           retention-days: 14
+
+  deployment-config:
+    name: Validate production Compose and Backend Dockerfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout backend
+        uses: actions/checkout@v4
+      - name: Prepare ephemeral CI environment
+        run: |
+          cp deploy/.env.production.example deploy/.env.production
+          for key in LOCAL_RABBITMQ_PASSWORD N8N_DB_PASSWORD JWT_SECRET N8N_API_KEY N8N_WEBHOOK_SECRET N8N_ENCRYPTION_KEY; do
+            value="$(openssl rand -hex 32)"
+            sed -i "s|^${key}=.*|${key}=${value}|" deploy/.env.production
+          done
+          sed -i \
+            -e 's#api.203.0.113.10.nip.io#api.127.0.0.1.nip.io#g' \
+            -e 's#n8n.203.0.113.10.nip.io#n8n.127.0.0.1.nip.io#g' \
+            -e 's#you@example.com#ci@example.test#g' \
+            -e 's#ep-example.region.aws.neon.tech#db.ci.example.test#g' \
+            -e 's#crm_role#ci_crm#g' \
+            -e 's#n8n_role#ci_n8n#g' \
+            -e 's#REPLACE_WITH_DATABASE_PASSWORD#ci-database-password#g' \
+            deploy/.env.production
+          chmod 600 deploy/.env.production
+      - name: Validate deployment configuration
+        run: |
+          bash -n deploy/check-env.sh
+          bash -n deploy/ssm-deploy-image.sh
+          node --check deploy/run-migrations.cjs
+          bash deploy/check-env.sh
+          docker compose --env-file deploy/.env.production -f deploy/compose.production.yml config --quiet
+      - name: Build backend Docker image
+        run: docker build --platform linux/amd64 -f Dockerfile -t crm-automation-backend:ci .

@@ -1423,4 +1423,40 @@ describe('FeedbackService', () => {
       expect(validFalseOutput[0].json.escalationRequired).toBe(false);
     });
   });
+
+  describe('getCustomerFeedback & getInternalCustomerFeedback (WF05 & Browser Auth)', () => {
+    it('enforces validateCustomerAccess when called with an authenticated JWT user', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'cust-1',
+        createdBy: mockSalesUser1.id,
+      });
+      feedbackRepository.find.mockResolvedValue([
+        { id: 'fb-1', customerId: 'cust-1' },
+      ]);
+
+      const allowed = await service.getCustomerFeedback(
+        'cust-1',
+        mockSalesUser1,
+      );
+      expect(allowed).toEqual([{ id: 'fb-1', customerId: 'cust-1' }]);
+
+      await expect(
+        service.getCustomerFeedback('cust-1', mockSalesUser2),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('allows internal service reads without a JWT user and returns 404 when customer does not exist', async () => {
+      customersRepository.findOne.mockResolvedValueOnce(null);
+      await expect(
+        service.getInternalCustomerFeedback('missing-cust'),
+      ).rejects.toThrow(NotFoundException);
+
+      customersRepository.findOne.mockResolvedValueOnce({ id: 'cust-1' });
+      feedbackRepository.find.mockResolvedValueOnce([
+        { id: 'fb-1', customerId: 'cust-1' },
+      ]);
+      const rows = await service.getCustomerFeedback('cust-1');
+      expect(rows).toEqual([{ id: 'fb-1', customerId: 'cust-1' }]);
+    });
+  });
 });

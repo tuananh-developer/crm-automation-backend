@@ -147,6 +147,18 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private getLocalRabbitmqUrl(): string {
+    const host =
+      this.configService.get<string>('LOCAL_RABBITMQ_HOST') || 'localhost';
+    const port = this.configService.get<number>('LOCAL_RABBITMQ_PORT') || 5672;
+    const user =
+      this.configService.get<string>('LOCAL_RABBITMQ_USER') || 'guest';
+    const password =
+      this.configService.get<string>('LOCAL_RABBITMQ_PASSWORD') || 'guest';
+
+    return `amqp://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}`;
+  }
+
   getRabbitmqUrl(): string {
     const nodeEnv = (
       this.configService.get<string>('NODE_ENV') ||
@@ -157,13 +169,40 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
     const useCloudAmqp =
       (this.configService.get<string>('USE_CLOUD_AMQP') ||
         process.env.USE_CLOUD_AMQP) === 'true';
+    const useLocalAmqp =
+      (this.configService.get<string>('USE_LOCAL_AMQP') ||
+        process.env.USE_LOCAL_AMQP) === 'true';
+    const allowLocalInfra =
+      (this.configService.get<string>('ALLOW_LOCAL_INFRA_IN_PRODUCTION') ||
+        process.env.ALLOW_LOCAL_INFRA_IN_PRODUCTION) === 'true';
     const fullUrl =
       this.configService.get<string>('RABBITMQ_URL') ||
       process.env.RABBITMQ_URL;
 
+    if (useCloudAmqp && useLocalAmqp) {
+      throw new Error('USE_CLOUD_AMQP and USE_LOCAL_AMQP cannot both be true');
+    }
+
+    if (isProd && useLocalAmqp) {
+      if (!allowLocalInfra) {
+        throw new Error(
+          'USE_LOCAL_AMQP must not be true in production unless ALLOW_LOCAL_INFRA_IN_PRODUCTION=true',
+        );
+      }
+      if (fullUrl) {
+        throw new Error(
+          'RABBITMQ_URL must be empty when using private local RabbitMQ in production',
+        );
+      }
+      this.logger.log(
+        'Targeting private Docker Compose RabbitMQ broker (production local infrastructure mode)',
+      );
+      return this.getLocalRabbitmqUrl();
+    }
+
     if (isProd && !fullUrl) {
       throw new Error(
-        'FATAL: RABBITMQ_URL is required in production; local guest credentials are not allowed',
+        'FATAL: RABBITMQ_URL is required in production',
       );
     }
     if (isProd && fullUrl) {
@@ -181,28 +220,42 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       return fullUrl;
     }
 
-    // Development mode: prioritize local Docker RabbitMQ broker
-    const host =
-      this.configService.get<string>('LOCAL_RABBITMQ_HOST') || 'localhost';
-    const port = this.configService.get<number>('LOCAL_RABBITMQ_PORT') || 5672;
-    const user =
-      this.configService.get<string>('LOCAL_RABBITMQ_USER') || 'guest';
-    const password =
-      this.configService.get<string>('LOCAL_RABBITMQ_PASSWORD') || 'guest';
-
+    // Development mode: prioritize local Docker RabbitMQ broker.
     this.logger.log(
-      `Targeting Local RabbitMQ broker at ${host}:${port} (Development mode)`,
+      `Targeting Local RabbitMQ broker at ${this.configService.get<string>('LOCAL_RABBITMQ_HOST') || 'localhost'}:${this.configService.get<number>('LOCAL_RABBITMQ_PORT') || 5672} (Development mode)`,
     );
-    return `amqp://${user}:${password}@${host}:${port}`;
+    return this.getLocalRabbitmqUrl();
   }
 
   isReady(): boolean {
     return this.isConnected;
   }
 
-  async enqueueEvent<T = Record<string, unknown>>(manager: EntityManager, eventType: string, data: T): Promise<OutboxEvent> {
-    const event: CrmEvent<T> = { eventId: randomUUID(), eventType, version: 1, occurredAt: new Date().toISOString(), data };
-    const record = manager.create(OutboxEvent, { eventType, exchange: CRM_EXCHANGE, routingKey: eventType, payload: event as unknown as Record<string, any>, status: OutboxEventStatus.PENDING, attempts: 0, lastError: null, nextAttemptAt: null, publishedAt: null, lockedUntil: null, lockToken: null });
+  async enqueueEvent<T = Record<string, unknown>>(
+    manager: EntityManager,
+    eventType: string,
+    data: T,
+  ): Promise<OutboxEvent> {
+    const event: CrmEvent<T> = {
+      eventId: randomUUID(),
+      eventType,
+      version: 1,
+      occurredAt: new Date().toISOString(),
+      data,
+    };
+    const record = manager.create(OutboxEvent, {
+      eventType,
+      exchange: CRM_EXCHANGE,
+      routingKey: eventType,
+      payload: event as unknown as Record<string, any>,
+      status: OutboxEventStatus.PENDING,
+      attempts: 0,
+      lastError: null,
+      nextAttemptAt: null,
+      publishedAt: null,
+      lockedUntil: null,
+      lockToken: null,
+    });
     return manager.save(OutboxEvent, record);
   }
 
@@ -223,6 +276,7 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       { persistent: true, contentType: 'application/json' },
     );
   }
+
   async publishEvent<T = Record<string, any>>(
     eventType: string,
     data: T,

@@ -1,0 +1,166 @@
+name: crm-automation-prod
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  rabbitmq:
+    logging: *default-logging
+    image: rabbitmq:4.3.6-management-alpine
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${LOCAL_RABBITMQ_USER:?Set LOCAL_RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${LOCAL_RABBITMQ_PASSWORD:?Set LOCAL_RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    mem_limit: 512m
+    pids_limit: 256
+
+  n8n:
+    logging: *default-logging
+    image: docker.n8n.io/n8nio/n8n:2.47.5
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
+      TZ: Asia/Ho_Chi_Minh
+      N8N_HOST: ${N8N_DOMAIN:?Set N8N_DOMAIN}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      N8N_EDITOR_BASE_URL: https://${N8N_DOMAIN:?Set N8N_DOMAIN}/
+      N8N_WEBHOOK_URL: https://${N8N_DOMAIN:?Set N8N_DOMAIN}/
+      N8N_PROXY_HOPS: 1
+      N8N_SECURE_COOKIE: "true"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY}
+      N8N_RUNNERS_MODE: internal
+      N8N_RUNNERS_MAX_CONCURRENCY: 1
+      N8N_RUNNERS_MAX_OLD_SPACE_SIZE: 256
+      NODE_OPTIONS: --max-old-space-size=768
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: 24
+      EXECUTIONS_DATA_PRUNE_MAX_COUNT: 500
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: ${N8N_DB_HOST:?Set N8N_DB_HOST}
+      DB_POSTGRESDB_PORT: ${N8N_DB_PORT:-5432}
+      DB_POSTGRESDB_DATABASE: ${N8N_DB_NAME:?Set N8N_DB_NAME}
+      DB_POSTGRESDB_USER: ${N8N_DB_USER:?Set N8N_DB_USER}
+      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD:?Set N8N_DB_PASSWORD}
+      DB_POSTGRESDB_SSL_ENABLED: ${N8N_DB_SSL_ENABLED:-true}
+      DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: ${N8N_DB_SSL_REJECT_UNAUTHORIZED:-true}
+      DB_POSTGRESDB_POOL_SIZE: 3
+      BACKEND_INTERNAL_URL: http://backend:3000
+      N8N_API_KEY: ${N8N_API_KEY:?Set N8N_API_KEY}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:?Set N8N_WEBHOOK_SECRET}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-pro}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    mem_limit: 2g
+    pids_limit: 512
+
+  backend-migrate:
+    logging: *default-logging
+    image: tanhisme/crm-automation-backend:${BACKEND_IMAGE_TAG:-latest}
+    restart: "no"
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      ALLOW_LOCAL_INFRA_IN_PRODUCTION: "true"
+      USE_LOCAL_DB: "false"
+      USE_LOCAL_AMQP: "true"
+      USE_CLOUD_AMQP: "false"
+      DB_SSL: "true"
+    command: ["node", "deploy/run-migrations.cjs"]
+    mem_limit: 512m
+    pids_limit: 128
+
+  backend:
+    logging: *default-logging
+    image: tanhisme/crm-automation-backend:${BACKEND_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      NODE_OPTIONS: --max-old-space-size=768
+      ALLOW_LOCAL_INFRA_IN_PRODUCTION: "true"
+      USE_LOCAL_DB: "false"
+      USE_LOCAL_AMQP: "true"
+      USE_CLOUD_AMQP: "false"
+      DB_SSL: "true"
+      FRONTEND_URL: ${FRONTEND_URL:?Set FRONTEND_URL to the Vercel production URL}
+      BACKEND_INTERNAL_URL: http://backend:3000
+      N8N_BASE_URL: http://n8n:5678
+      N8N_WEBHOOK_BASE_URL: http://n8n:5678/webhook
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      backend-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    mem_limit: 1280m
+    pids_limit: 256
+
+  caddy:
+    logging: *default-logging
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN}
+      N8N_DOMAIN: ${N8N_DOMAIN:?Set N8N_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+      n8n:
+        condition: service_started
+    mem_limit: 128m
+    pids_limit: 128
+
+volumes:
+  rabbitmq_data:
+  n8n_data:
+  caddy_data:
+  caddy_config:

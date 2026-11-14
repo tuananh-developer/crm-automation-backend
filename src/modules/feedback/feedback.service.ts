@@ -284,12 +284,26 @@ export class FeedbackService {
     return feedback;
   }
 
-  async getCustomerFeedback(customerId: string, user: AuthenticatedUser) {
-    await this.validateCustomerAccess(user, customerId);
+  async getCustomerFeedback(customerId: string, user?: AuthenticatedUser) {
+    if (user) {
+      await this.validateCustomerAccess(user, customerId);
+    } else {
+      const customer = await this.customersRepository.findOne({
+        where: { id: customerId },
+      });
+      if (!customer) {
+        throw new NotFoundException(`Customer ${customerId} not found`);
+      }
+    }
+
     return this.feedbackRepository.find({
       where: { customerId },
       order: { receivedAt: 'DESC' },
     });
+  }
+
+  async getInternalCustomerFeedback(customerId: string) {
+    return this.getCustomerFeedback(customerId);
   }
 
   async handleCallback(dto: FeedbackCallbackDto) {

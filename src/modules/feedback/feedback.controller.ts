@@ -26,7 +26,9 @@ import {
 } from './dto/index.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { FeedbackReadAuthGuard } from './guards/feedback-read-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Customer Feedback & Tasks')
@@ -82,18 +84,32 @@ export class FeedbackController {
 
   /**
    * Canonical route for retrieving customer feedback history.
-   * FeedbackController is the authoritative domain owner of customer feedback records.
+   * Accepts both browser JWT callers (scoped by tenant/owner) and internal n8n
+   * workflow calls (such as WF05 Customer 360) authenticated via X-N8N-API-KEY.
    */
   @Get('customers/:customerId/feedback')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(FeedbackReadAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List all feedback for a specific customer' })
   @ApiParam({ name: 'customerId', format: 'uuid' })
   async getCustomerFeedback(
     @Param('customerId', ParseUUIDPipe) customerId: string,
-    @CurrentUser() user: AuthenticatedUser,
+    @CurrentUser() user?: AuthenticatedUser,
   ) {
     return this.feedbackService.getCustomerFeedback(customerId, user);
+  }
+
+  @Get('customers/:customerId/feedback/internal')
+  @Public()
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal list of customer feedback for n8n workflows (e.g. WF05)',
+  })
+  @ApiParam({ name: 'customerId', format: 'uuid' })
+  async getInternalCustomerFeedback(
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+  ) {
+    return this.feedbackService.getInternalCustomerFeedback(customerId);
   }
 
   @Post('feedback/:feedbackId/callback')
