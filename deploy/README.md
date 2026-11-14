@@ -59,7 +59,7 @@ The application and n8n share `N8N_API_KEY` / `N8N_WEBHOOK_SECRET` for machine-t
 Check the environment file:
 
 ```bash
-./deploy/check-env.sh
+bash deploy/check-env.sh
 ```
 
 The script validates required values, hostnames, secret length and uniqueness, then restricts the file permissions to owner read/write. It never prints secret values. Keep `deploy/.env.production` out of Git and backups must be access-controlled.
