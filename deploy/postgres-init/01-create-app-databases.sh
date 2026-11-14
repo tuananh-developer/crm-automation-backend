@@ -25,7 +25,7 @@ if [[ ${#LOCAL_DB_PASSWORD} -lt 32 || ${#N8N_DB_PASSWORD} -lt 32 ]]; then
   exit 1
 fi
 
-if [[ "$LOCAL_DB_USER" == "$N8N_DB_USER" || "$LOCAL_DB_USER" == "$POSTGRES_USER" || "$N8N_DB_USER" == "$POSTGRES_USER" ]]; then
+if [[ "$LOCAL_DB_USER" == "$N8N_DB_USER" || "$LOCAL_DB_USER" == "$POSTGRES_USER" || "$N8N_DB_USER" == "$POSTGRES_USER" || "$LOCAL_DB_USER" == "postgres" || "$N8N_DB_USER" == "postgres" ]]; then
   echo "PostgreSQL admin, CRM app, and n8n database roles must be distinct." >&2
   exit 1
 fi
