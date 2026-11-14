@@ -1,11 +1,11 @@
 /**
- * Fail-closed validation for production-only transport and persistence settings.
+ * Fail-closed validation for production persistence and transport settings.
  *
- * Production defaults to managed PostgreSQL + AMQPS. A single-EC2 Docker Compose
- * deployment may explicitly opt into private, self-hosted PostgreSQL/RabbitMQ by
- * setting ALLOW_LOCAL_INFRA_IN_PRODUCTION=true and both USE_LOCAL_DB/USE_LOCAL_AMQP.
- * That mode is deliberately pinned to Compose service DNS names and non-default
- * credentials; its services must not publish database/broker ports to the host.
+ * Production uses managed PostgreSQL by default. A single-EC2 deployment may
+ * explicitly opt into private local services independently (for example,
+ * Neon PostgreSQL + Docker-private RabbitMQ) with
+ * ALLOW_LOCAL_INFRA_IN_PRODUCTION=true. Local services must use Compose DNS
+ * names, strong credentials, and must never publish their ports to the host.
  */
 type Environment = Record<string, unknown>;
 
@@ -89,7 +89,7 @@ export function assertPrivateN8nServiceUrl(value: string, configKey: string): vo
   ) {
     throw new Error(
       configKey +
-        ' must use the private Docker service URL http://n8n:5678 in local production infrastructure mode',
+        ' must use the private Docker service URL http://n8n:5678 when local infrastructure is enabled',
     );
   }
 }
@@ -110,47 +110,62 @@ export function validateEnvironmentConfiguration(
   );
   const useLocalDb = isEnabled(environment.USE_LOCAL_DB);
   const useLocalAmqp = isEnabled(environment.USE_LOCAL_AMQP);
+  const useCloudAmqp = isEnabled(environment.USE_CLOUD_AMQP);
   const databaseUrl = readString(environment, 'DATABASE_URL');
   const rabbitmqUrl = readString(environment, 'RABBITMQ_URL');
 
-  if (allowLocalInfra) {
-    if (!useLocalDb || !useLocalAmqp) {
-      throw new Error(
-        'ALLOW_LOCAL_INFRA_IN_PRODUCTION requires USE_LOCAL_DB=true and USE_LOCAL_AMQP=true',
-      );
-    }
-    if (databaseUrl || rabbitmqUrl) {
-      throw new Error(
-        'Local production infrastructure mode must not also configure DATABASE_URL or RABBITMQ_URL',
-      );
-    }
-    if (isEnabled(environment.USE_CLOUD_AMQP)) {
-      throw new Error(
-        'USE_CLOUD_AMQP must not be true with ALLOW_LOCAL_INFRA_IN_PRODUCTION',
-      );
-    }
+  if (useLocalDb && !allowLocalInfra) {
+    throw new Error(
+      'USE_LOCAL_DB must not be true in production unless ALLOW_LOCAL_INFRA_IN_PRODUCTION=true',
+    );
+  }
+  if (useLocalAmqp && !allowLocalInfra) {
+    throw new Error(
+      'USE_LOCAL_AMQP must not be true in production unless ALLOW_LOCAL_INFRA_IN_PRODUCTION=true',
+    );
+  }
 
+  if (useLocalDb) {
+    if (databaseUrl) {
+      throw new Error(
+        'DATABASE_URL must be empty when USE_LOCAL_DB=true',
+      );
+    }
     if (readString(environment, 'LOCAL_DB_HOST') !== 'postgres') {
       throw new Error(
-        'LOCAL_DB_HOST must be the private Compose service name "postgres" in local production infrastructure mode',
+        'LOCAL_DB_HOST must be the private Compose service name "postgres" when USE_LOCAL_DB=true',
       );
     }
     if (!readString(environment, 'LOCAL_DB_NAME')) {
-      throw new Error('LOCAL_DB_NAME is required in local production infrastructure mode');
+      throw new Error('LOCAL_DB_NAME is required when USE_LOCAL_DB=true');
     }
     if (
       !readString(environment, 'LOCAL_DB_USER') ||
       readString(environment, 'LOCAL_DB_USER').toLowerCase() === 'postgres'
     ) {
       throw new Error(
-        'LOCAL_DB_USER must be a dedicated non-postgres application role in local production infrastructure mode',
+        'LOCAL_DB_USER must be a dedicated non-postgres application role when USE_LOCAL_DB=true',
       );
     }
     assertRequiredSecret(environment, 'LOCAL_DB_PASSWORD');
+  } else if (!databaseUrl) {
+    throw new Error('DATABASE_URL is required in production when USE_LOCAL_DB=false');
+  }
 
+  if (useLocalAmqp) {
+    if (rabbitmqUrl) {
+      throw new Error(
+        'RABBITMQ_URL must be empty when USE_LOCAL_AMQP=true',
+      );
+    }
+    if (useCloudAmqp) {
+      throw new Error(
+        'USE_CLOUD_AMQP must not be true with USE_LOCAL_AMQP=true',
+      );
+    }
     if (readString(environment, 'LOCAL_RABBITMQ_HOST') !== 'rabbitmq') {
       throw new Error(
-        'LOCAL_RABBITMQ_HOST must be the private Compose service name "rabbitmq" in local production infrastructure mode',
+        'LOCAL_RABBITMQ_HOST must be the private Compose service name "rabbitmq" when USE_LOCAL_AMQP=true',
       );
     }
     if (
@@ -158,55 +173,45 @@ export function validateEnvironmentConfiguration(
       readString(environment, 'LOCAL_RABBITMQ_USER').toLowerCase() === 'guest'
     ) {
       throw new Error(
-        'LOCAL_RABBITMQ_USER must not use the default guest account in local production infrastructure mode',
+        'LOCAL_RABBITMQ_USER must not use the default guest account',
       );
     }
     assertRequiredSecret(environment, 'LOCAL_RABBITMQ_PASSWORD');
-
-    // These are the application-to-application trust roots used by JWT auth,
-    // n8n callbacks, and encryption of n8n's persisted credentials.
-    assertRequiredSecret(environment, 'JWT_SECRET');
-    assertRequiredSecret(environment, 'N8N_API_KEY');
-    assertRequiredSecret(environment, 'N8N_WEBHOOK_SECRET');
-    assertRequiredSecret(environment, 'N8N_ENCRYPTION_KEY');
-
-    const machineSecrets = [
-      readString(environment, 'JWT_SECRET'),
-      readString(environment, 'N8N_API_KEY'),
-      readString(environment, 'N8N_WEBHOOK_SECRET'),
-      readString(environment, 'N8N_ENCRYPTION_KEY'),
-    ];
-    if (new Set(machineSecrets).size !== machineSecrets.length) {
-      throw new Error(
-        'JWT_SECRET, N8N_API_KEY, N8N_WEBHOOK_SECRET, and N8N_ENCRYPTION_KEY must all be different secrets',
-      );
-    }
   } else {
-    if (useLocalDb) {
-      throw new Error(
-        'USE_LOCAL_DB must not be true in production unless ALLOW_LOCAL_INFRA_IN_PRODUCTION=true',
-      );
-    }
-    if (useLocalAmqp) {
-      throw new Error(
-        'USE_LOCAL_AMQP must not be true in production unless ALLOW_LOCAL_INFRA_IN_PRODUCTION=true',
-      );
-    }
-    if (!databaseUrl) {
-      throw new Error('DATABASE_URL is required in production');
-    }
     if (!rabbitmqUrl) {
-      throw new Error('RABBITMQ_URL is required in production');
+      throw new Error('RABBITMQ_URL is required in production when USE_LOCAL_AMQP=false');
     }
     assertUrlUsesScheme(rabbitmqUrl, 'amqps:', 'RABBITMQ_URL');
+  }
+
+  // These are application-to-application trust roots. They are required in
+  // every production topology, not only when both local services are enabled.
+  for (const key of [
+    'JWT_SECRET',
+    'N8N_API_KEY',
+    'N8N_WEBHOOK_SECRET',
+    'N8N_ENCRYPTION_KEY',
+  ]) {
+    assertRequiredSecret(environment, key);
+  }
+
+  const machineSecrets = [
+    readString(environment, 'JWT_SECRET'),
+    readString(environment, 'N8N_API_KEY'),
+    readString(environment, 'N8N_WEBHOOK_SECRET'),
+    readString(environment, 'N8N_ENCRYPTION_KEY'),
+  ];
+  if (new Set(machineSecrets).size !== machineSecrets.length) {
+    throw new Error(
+      'JWT_SECRET, N8N_API_KEY, N8N_WEBHOOK_SECRET, and N8N_ENCRYPTION_KEY must all be different secrets',
+    );
   }
 
   for (const key of PRODUCTION_N8N_URL_KEYS) {
     const value = readString(environment, key);
     if (value) {
       if (allowLocalInfra && value.startsWith('http://')) {
-        // Backend-to-n8n traffic stays on the isolated Compose network. Public
-        // webhook URLs are still HTTPS and are configured inside the n8n service.
+        // Backend-to-n8n traffic stays on the isolated Compose network.
         assertPrivateN8nServiceUrl(value, key);
       } else {
         assertUrlUsesScheme(value, 'https:', key);

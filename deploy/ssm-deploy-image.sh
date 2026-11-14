@@ -7,8 +7,8 @@ APP_DIR="/opt/crm-automation-backend"
 ENV_FILE="${APP_DIR}/deploy/.env.production"
 COMPOSE_FILE="${APP_DIR}/deploy/compose.production.yml"
 
-if [[ "$SERVICE" != "backend" && "$SERVICE" != "frontend" ]]; then
-  echo "Usage: $0 <backend|frontend> <sha-xxxxxxx>" >&2
+if [[ "$SERVICE" != "backend" ]]; then
+  echo "Usage: $0 backend sha-xxxxxxx" >&2
   exit 2
 fi
 if [[ ! "$IMAGE_TAG" =~ ^sha-[0-9a-f]{7}$ ]]; then
@@ -29,7 +29,7 @@ set_env_value() {
   if grep -qE "^${key}=" "$ENV_FILE"; then
     sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
   else
-    printf '\\n%s=%s\\n' "$key" "$value" >> "$ENV_FILE"
+    printf '\n%s=%s\n' "$key" "$value" >> "$ENV_FILE"
   fi
 }
 
@@ -37,37 +37,22 @@ compose() {
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
 }
 
-if [[ "$SERVICE" == "backend" ]]; then
-  set_env_value BACKEND_IMAGE_TAG "$IMAGE_TAG"
-  compose pull backend backend-migrate
-  compose up -d --no-build backend
-  for attempt in $(seq 1 36); do
-    if compose exec -T backend node -e "fetch('http://127.0.0.1:3000/api/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"; then
-      echo "Backend health check passed."
-      break
-    fi
-    if [[ "$attempt" -eq 36 ]]; then
-      compose logs --tail=120 backend backend-migrate
-      exit 1
-    fi
-    sleep 5
-  done
-else
-  set_env_value FRONTEND_IMAGE_TAG "$IMAGE_TAG"
-  compose pull frontend
-  compose up -d --no-build frontend
-  for attempt in $(seq 1 36); do
-    if compose exec -T frontend node -e "fetch('http://127.0.0.1:3001').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"; then
-      echo "Frontend health check passed."
-      break
-    fi
-    if [[ "$attempt" -eq 36 ]]; then
-      compose logs --tail=120 frontend
-      exit 1
-    fi
-    sleep 5
-  done
-fi
+set_env_value BACKEND_IMAGE_TAG "$IMAGE_TAG"
+compose config --quiet
+compose pull backend backend-migrate
+compose up -d --no-build backend
 
-compose ps backend frontend
-echo "Deployment completed: $SERVICE=$IMAGE_TAG"
+for attempt in $(seq 1 36); do
+  if compose exec -T backend node -e "fetch('http://127.0.0.1:3000/api/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"; then
+    echo "Backend health check passed."
+    break
+  fi
+  if [[ "$attempt" -eq 36 ]]; then
+    compose logs --tail=120 backend backend-migrate
+    exit 1
+  fi
+  sleep 5
+done
+
+compose ps backend rabbitmq n8n caddy
+echo "Deployment completed: backend=$IMAGE_TAG"

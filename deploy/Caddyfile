@@ -3,7 +3,7 @@
   admin off
 }
 
-{$CRM_DOMAIN} {
+{$API_DOMAIN} {
   encode zstd gzip
 
   header {
@@ -12,14 +12,7 @@
     Referrer-Policy "strict-origin-when-cross-origin"
   }
 
-  @backend_api path /api/*
-  handle @backend_api {
-    reverse_proxy backend:3000
-  }
-
-  handle {
-    reverse_proxy frontend:3001
-  }
+  reverse_proxy backend:3000
 }
 
 {$N8N_DOMAIN} {
