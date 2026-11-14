@@ -95,40 +95,35 @@ jobs:
           retention-days: 14
 
   deployment-config:
-    name: Validate production Compose and Dockerfiles
+    name: Validate production Compose and Backend Dockerfile
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Checkout backend
         uses: actions/checkout@v4
-      - name: Checkout frontend
-        uses: actions/checkout@v4
-        with:
-          repository: tuananh-developer/crm-automation-frontend
-          ref: main
-          path: crm-automation-frontend
       - name: Prepare ephemeral CI environment
         run: |
           cp deploy/.env.production.example deploy/.env.production
-          for key in POSTGRES_ADMIN_PASSWORD LOCAL_DB_PASSWORD N8N_DB_PASSWORD LOCAL_RABBITMQ_PASSWORD JWT_SECRET N8N_API_KEY N8N_WEBHOOK_SECRET N8N_ENCRYPTION_KEY; do
+          for key in LOCAL_RABBITMQ_PASSWORD N8N_DB_PASSWORD JWT_SECRET N8N_API_KEY N8N_WEBHOOK_SECRET N8N_ENCRYPTION_KEY; do
             value="$(openssl rand -hex 32)"
-            sed -i "s/^${key}=.*/${key}=${value}/" deploy/.env.production
+            sed -i "s|^${key}=.*|${key}=${value}|" deploy/.env.production
           done
           sed -i \
-            -e 's#crm.example.com#crm.ci.example.test#g' \
-            -e 's#n8n.example.com#n8n.ci.example.test#g' \
-            -e 's#ops@example.com#ci@example.test#g' \
+            -e 's#api.203.0.113.10.nip.io#api.127.0.0.1.nip.io#g' \
+            -e 's#n8n.203.0.113.10.nip.io#n8n.127.0.0.1.nip.io#g' \
+            -e 's#you@example.com#ci@example.test#g' \
+            -e 's#ep-example.region.aws.neon.tech#db.ci.example.test#g' \
+            -e 's#crm_role#ci_crm#g' \
+            -e 's#n8n_role#ci_n8n#g' \
+            -e 's#REPLACE_WITH_DATABASE_PASSWORD#ci-database-password#g' \
             deploy/.env.production
           chmod 600 deploy/.env.production
       - name: Validate deployment configuration
         run: |
           bash -n deploy/check-env.sh
-          bash -n deploy/postgres-init/01-create-app-databases.sh
           bash -n deploy/ssm-deploy-image.sh
           node --check deploy/run-migrations.cjs
           bash deploy/check-env.sh
           docker compose --env-file deploy/.env.production -f deploy/compose.production.yml config --quiet
       - name: Build backend Docker image
         run: docker build --platform linux/amd64 -f Dockerfile -t crm-automation-backend:ci .
-      - name: Build frontend Docker image
-        run: docker build --platform linux/amd64 --build-arg NEXT_PUBLIC_API_BASE_URL=/api/v1 -f crm-automation-frontend/Dockerfile -t crm-automation-frontend:ci crm-automation-frontend
