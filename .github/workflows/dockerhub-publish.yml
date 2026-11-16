@@ -46,6 +46,7 @@ jobs:
         id: backend-meta
         uses: docker/metadata-action@v6
         with:
+          context: git
           images: ${{ vars.DOCKERHUB_USERNAME }}/crm-automation-backend
           tags: |
             type=raw,value=latest
@@ -67,6 +68,7 @@ jobs:
         id: config-meta
         uses: docker/metadata-action@v6
         with:
+          context: git
           images: ${{ vars.DOCKERHUB_USERNAME }}/crm-automation-backend
           tags: |
             type=raw,value=config-latest
