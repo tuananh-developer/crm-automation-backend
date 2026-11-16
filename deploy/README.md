@@ -3,123 +3,97 @@
 ## Architecture
 
 - Vercel hosts the Next.js frontend and deploys it from the frontend GitHub repository.
-- One Ubuntu EC2 instance runs only the NestJS backend, RabbitMQ, n8n, and Caddy as separate Docker Compose services.
-- Neon PostgreSQL stores the CRM database. n8n uses its default SQLite database on a persistent Docker volume.
-- Docker Hub stores the backend image.
-- GitHub Actions runs backend CI, publishes an immutable image tag, and deploys only the backend service through AWS Systems Manager Run Command.
+- One Ubuntu EC2 instance runs the NestJS backend, RabbitMQ, n8n, and Caddy as Docker Compose services.
+- Neon PostgreSQL stores CRM business data. n8n uses SQLite on a persistent Docker volume.
+- The existing Docker Hub repository `tanhisme/crm-automation-backend` stores both the backend runtime image and a deployment-config bundle image under separate tags.
+- GitHub Actions runs CI, publishes both images using the same commit-SHA suffix, and invokes AWS Systems Manager Run Command. EC2 pulls application and deployment files from Docker Hub; it does not clone or pull the GitHub repository.
 
-This is a cost-conscious single-instance deployment for the current demo/workload. EC2 remains a single point of failure; it is not a highly available architecture.
+This is a cost-conscious single-instance deployment. EC2 remains a single point of failure and this is not a highly available architecture.
 
 ## EC2 requirements
 
-- Existing EC2 instance with Docker Engine, Docker Compose v2, Git, and SSM Agent.
-- Instance profile includes `AmazonSSMManagedInstanceCore`; the instance must be Online in Systems Manager.
-- GitHub IAM user may call `ssm:SendCommand` only for this EC2 instance and `AWS-RunShellScript`, and read command results.
-- EC2 outbound HTTPS access to AWS Systems Manager, Docker Hub, Neon, and package/image registries.
+- Ubuntu 26.04 x86_64 with Docker Engine and Docker Compose v2 already installed.
+- At least 4 GiB RAM; 8 GiB is recommended for comfortable headroom.
+- At least 10 GiB free root disk.
+- SSM Agent online in Systems Manager and an instance profile with `AmazonSSMManagedInstanceCore`.
+- GitHub's AWS IAM identity can call `ssm:SendCommand` for this EC2 instance and read command results.
+- Outbound HTTPS access to AWS Systems Manager, Docker Hub, and Neon.
 - Security Group inbound TCP 80 and 443 only. Do not expose 3000, 5672, 15672, 5678, or 5432.
-- Use an EC2 Elastic IP or a DNS name pointing to the EC2 public IP. For a demo without a purchased domain, `nip.io` hostnames can be used, for example `api.<EC2_PUBLIC_IP>.nip.io` and `n8n.<EC2_PUBLIC_IP>.nip.io`.
+- Use an Elastic IP if using `nip.io` hostnames so public DNS does not change when the instance is stopped and started.
 
-## Neon database
+## One-time EC2 bootstrap (no GitHub checkout)
 
-Use the existing Neon PostgreSQL database for the CRM API. Set `DATABASE_URL` to its connection string and keep TLS enabled with `sslmode=require`. Prefer the direct Neon endpoint for the migration runner.
+The deployment-config image contains the production Compose file, Caddyfile, RabbitMQ definitions, environment checker, and bootstrap/deploy scripts. It is published into the existing Docker Hub repository using `config-*` tags; no second Docker Hub repository is required.
 
-No second Neon database is needed for n8n. Self-hosted n8n uses SQLite by default; its database file and encryption settings are persisted in the `n8n_data` Docker volume. Keep that volume intact across container updates.
-
-## Prepare the EC2 environment
-
-From AWS Systems Manager Session Manager:
+Create the deployment directory:
 
 ```bash
-sudo mkdir -p /opt
-sudo git clone --depth 1 --branch main \
-  https://github.com/tuananh-developer/crm-automation-backend.git \
-  /opt/crm-automation-backend
-cd /opt/crm-automation-backend
-sudo cp deploy/.env.production.example deploy/.env.production
-sudo chown root:root deploy/.env.production
-sudo chmod 600 deploy/.env.production
-sudo nano deploy/.env.production
+sudo mkdir -p /opt/crm-automation-backend
 ```
 
-Fill every placeholder:
-- `API_DOMAIN=api.<EC2_PUBLIC_IP>.nip.io`
-- `N8N_DOMAIN=n8n.<EC2_PUBLIC_IP>.nip.io`
-- `FRONTEND_URL`: exact production origin shown by the Vercel project.
-- `ACME_EMAIL`: an email address for Caddy/Let's Encrypt.
-- `DATABASE_URL`: Neon CRM database connection string with `sslmode=require`.
-- Generate unique secrets for RabbitMQ, JWT, n8n API, webhook, and encryption key. Keep `N8N_ENCRYPTION_KEY` stable after n8n has started. No n8n database credentials are needed.
-
-Generate a value without printing it to the terminal history:
+After the PR that introduces the deployment-config image has been merged and its CI workflow has published the images, run:
 
 ```bash
-openssl rand -hex 32
+sudo docker pull tanhisme/crm-automation-backend:config-latest
+sudo docker run --rm -v /opt/crm-automation-backend:/target tanhisme/crm-automation-backend:config-latest
+sudo bash /opt/crm-automation-backend/deploy/bootstrap-ec2.sh
 ```
 
-Set:
-- `NODE_ENV=production`
-- `ALLOW_LOCAL_INFRA_IN_PRODUCTION=true`
-- `USE_LOCAL_DB=false` (Neon)
-- `USE_LOCAL_AMQP=true` (private RabbitMQ container)
-- `USE_CLOUD_AMQP=false`
-- `RABBITMQ_URL=` (empty)
-- `LOCAL_RABBITMQ_HOST=rabbitmq`
-- `N8N_BASE_URL=http://n8n:5678`
-- `N8N_WEBHOOK_BASE_URL=http://n8n:5678/webhook`
+The bootstrap script:
+- Preserves an existing non-placeholder `.env.production`; otherwise backs up the template and prompts for public IP/domains, ACME email, frontend origin, and Neon `DATABASE_URL`.
+- Generates unique RabbitMQ, JWT, n8n API, webhook, and n8n encryption secrets locally on EC2.
+- Selects container memory limits based on detected instance RAM, then validates the production environment without printing secrets.
+- Pulls the prebuilt backend and supporting service images, runs migrations, starts Compose without building, and checks the backend health endpoint and public API HTTPS endpoint.
 
-Validate the file:
+For initial HTTPS issuance, configure the EC2 Security Group to allow inbound TCP 80 and 443 from the intended clients (for a public demo, `0.0.0.0/0`; restrict further when possible). DNS/nip.io must resolve both configured hostnames to the EC2 public IP. The frontend origin must be the exact Vercel production origin.
 
-```bash
-sudo bash deploy/check-env.sh deploy/.env.production
-sudo docker compose --env-file deploy/.env.production -f deploy/compose.production.yml config --quiet
-```
+Keep `/opt/crm-automation-backend/deploy/.env.production` root-only. Never paste its contents into chat or commit it. Preserve `N8N_ENCRYPTION_KEY` permanently after n8n has stored credentials; never run `docker compose down -v`.
 
-The compose stack runs RabbitMQ, n8n, the backend migration one-shot container, Backend API, and Caddy. Frontend and PostgreSQL are not run on EC2.
+## Vercel frontend configuration
 
-## First start
-
-After the backend image has been published to Docker Hub and the repository is readable from EC2:
-
-```bash
-sudo docker compose --env-file deploy/.env.production -f deploy/compose.production.yml pull
-sudo docker compose --env-file deploy/.env.production -f deploy/compose.production.yml up -d --no-build
-sudo docker compose --env-file deploy/.env.production -f deploy/compose.production.yml ps
-sudo docker compose --env-file deploy/.env.production -f deploy/compose.production.yml logs --tail=100 backend backend-migrate n8n rabbitmq caddy
-```
-
-The migration service runs before Backend starts. If migrations fail, Backend will not start.
-
-## Vercel configuration
-
-In the Vercel project for the frontend, set the Production environment variable:
+In the Vercel project for the frontend, set the production API base URL to the public API endpoint:
 
 ```dotenv
 NEXT_PUBLIC_API_BASE_URL=https://api.<EC2_PUBLIC_IP>.nip.io/api/v1
 ```
 
-Set the same value in Preview only if preview deployments should call the same demo backend. Redeploy the Vercel project after changing this build-time variable.
+Use the actual `API_DOMAIN` selected during EC2 bootstrap (or your custom API domain), then redeploy the frontend so the Next.js build picks up the new public environment variable. In the backend `.env.production`, `FRONTEND_URL` must be the exact frontend origin only, for example `https://crm-automation-frontend.vercel.app` (no path).
 
-The backend's `FRONTEND_URL` must contain the exact Vercel production origin, without a path. If using a custom Vercel domain, use that origin instead.
+## GitHub Actions configuration
 
-## GitHub Actions
+In the backend repository, configure:
 
-In the backend repository, retain:
-- Variables: `DOCKERHUB_USERNAME=tanhisme`, `AWS_REGION=ap-southeast-2`, `AWS_EC2_INSTANCE_ID=<existing-instance-id>`.
-- Secrets: `DOCKERHUB_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
+**Repository Variables**
+- `DOCKERHUB_USERNAME=tanhisme`
+- `AWS_REGION=ap-southeast-2`
+- `AWS_EC2_INSTANCE_ID=<your EC2 instance ID>`
+- `ENABLE_EC2_DEPLOY=false` until one-time bootstrap and public API health check succeed.
 
-Keep `ENABLE_EC2_DEPLOY` unset/false until the initial stack is healthy.
+**Repository Secrets**
+- `DOCKERHUB_TOKEN` (Docker Hub access token with read/write access to `tanhisme/crm-automation-backend`)
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
 
-After first start succeeds, set `ENABLE_EC2_DEPLOY=true` in the backend repository only. The backend workflow will build/push the exact commit's `sha-xxxxxxx` image, invoke SSM, pull that tag, run migrations, recreate only the Backend container, and wait for the health check.
+The EC2 instance role must include `AmazonSSMManagedInstanceCore`. The GitHub IAM identity needs least-privilege SSM permissions for the target instance and `AWS-RunShellScript`, plus read-command-invocation permissions.
 
-The frontend repository remains on Vercel. It does not need a Docker Hub publish or EC2 deploy job.
+## CI/CD release flow
 
-## Operations and safety
+1. A PR runs CI (lint, build, unit tests, migrations, E2E, deployment Compose validation, and deployment-bundle image validation).
+2. After merge to `main`, the successful main-branch CI run triggers the publish workflow.
+3. GitHub Actions builds and pushes two image variants into the same Docker Hub repository:
+   - Runtime: `tanhisme/crm-automation-backend:sha-xxxxxxx`
+   - Deployment config: `tanhisme/crm-automation-backend:config-sha-xxxxxxx`
+   Both variants also receive `latest` and `config-latest` respectively for one-time bootstrap convenience.
+4. When `ENABLE_EC2_DEPLOY=true`, GitHub Actions invokes SSM. EC2 pulls the matching config bundle from Docker Hub, installs deployment files while preserving `.env.production`, pulls the matching runtime image, runs migrations, recreates only the backend service, and waits for its health endpoint.
+5. Stale CI runs are skipped if their commit is no longer the current `main` head.
+
+EC2 does not need Git, GitHub credentials, or application source code. It only pulls versioned image tags from Docker Hub and receives deployment commands through SSM.
+
+## Operations
 
 ```bash
-cd /opt/crm-automation-backend
-sudo docker compose --env-file deploy/.env.production -f deploy/compose.production.yml ps
-sudo docker compose --env-file deploy/.env.production -f deploy/compose.production.yml logs --tail=150 backend n8n rabbitmq caddy
+sudo docker compose --env-file /opt/crm-automation-backend/deploy/.env.production -f /opt/crm-automation-backend/deploy/compose.production.yml ps
+sudo docker compose --env-file /opt/crm-automation-backend/deploy/.env.production -f /opt/crm-automation-backend/deploy/compose.production.yml logs --tail=150 backend backend-migrate n8n rabbitmq caddy
 ```
 
-Never run `docker compose down -v`; that deletes named volumes, including RabbitMQ and n8n persistent state.
-
-Back up Neon and preserve `N8N_ENCRYPTION_KEY`. Keep RabbitMQ and n8n ports private. Only Caddy publishes 80/443.
+Back up Neon and keep the EC2 Docker volumes (especially `n8n_data` and `rabbitmq_data`). Do not use `docker compose down -v`.

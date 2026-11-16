@@ -26,7 +26,7 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
-    mem_limit: 512m
+    mem_limit: ${RABBITMQ_MEM_LIMIT:-512m}
     pids_limit: 256
 
   n8n:
@@ -68,7 +68,7 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-pro}
     volumes:
       - n8n_data:/home/node/.n8n
-    mem_limit: 2g
+    mem_limit: ${N8N_MEM_LIMIT:-2g}
     pids_limit: 512
 
   backend-migrate:
@@ -126,7 +126,7 @@ services:
       timeout: 5s
       retries: 10
       start_period: 45s
-    mem_limit: 1280m
+    mem_limit: ${BACKEND_MEM_LIMIT:-1280m}
     pids_limit: 256
 
   caddy:
@@ -150,7 +150,7 @@ services:
         condition: service_healthy
       n8n:
         condition: service_started
-    mem_limit: 128m
+    mem_limit: ${CADDY_MEM_LIMIT:-128m}
     pids_limit: 128
 
 volumes:

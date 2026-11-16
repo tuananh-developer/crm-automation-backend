@@ -95,7 +95,7 @@ jobs:
           retention-days: 14
 
   deployment-config:
-    name: Validate production Compose and Backend Dockerfile
+    name: Validate production Compose and deployment bundle
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -116,12 +116,24 @@ jobs:
             -e 's#REPLACE_WITH_DATABASE_PASSWORD#ci-database-password#g' \
             deploy/.env.production
           chmod 600 deploy/.env.production
-      - name: Validate deployment configuration
+      - name: Validate shell scripts and production environment
         run: |
           bash -n deploy/check-env.sh
+          bash -n deploy/bootstrap-ec2.sh
           bash -n deploy/ssm-deploy-image.sh
+          sh -n deploy/install-config.sh
           node --check deploy/run-migrations.cjs
           bash deploy/check-env.sh
           docker compose --env-file deploy/.env.production -f deploy/compose.production.yml config --quiet
       - name: Build backend Docker image
         run: docker build --platform linux/amd64 -f Dockerfile -t crm-automation-backend:ci .
+      - name: Build Docker Hub deployment-config image
+        run: docker build --platform linux/amd64 -f deploy/Dockerfile.config -t crm-automation-deploy-config:ci .
+      - name: Verify deployment bundle installer
+        run: |
+          mkdir -p "$RUNNER_TEMP/deploy-target"
+          docker run --rm -v "$RUNNER_TEMP/deploy-target:/target" crm-automation-deploy-config:ci
+          test -s "$RUNNER_TEMP/deploy-target/deploy/compose.production.yml"
+          test -s "$RUNNER_TEMP/deploy-target/deploy/bootstrap-ec2.sh"
+          test -s "$RUNNER_TEMP/deploy-target/deploy/.env.production"
+          test -s "$RUNNER_TEMP/deploy-target/deploy/rabbitmq/definitions.json"
