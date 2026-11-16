@@ -13,7 +13,7 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-for command_name in docker curl openssl awk df; do
+for command_name in docker curl openssl awk df flock; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "Required command is missing: $command_name" >&2
     exit 1
@@ -180,6 +180,9 @@ EOF
   bash "$DEPLOY_DIR/check-env.sh" "$ENV_FILE"
 fi
 
+chown root:root "$ENV_FILE"
+chmod 0600 "$ENV_FILE"
+
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 
 echo "Pulling prebuilt backend and supporting service images..."
@@ -219,6 +222,23 @@ if [[ "$API_READY" != "true" ]]; then
   echo "Backend is healthy internally, but public HTTPS is not ready." >&2
   echo "Check Security Group inbound TCP 80/443 and DNS resolution for both hostnames." >&2
   "${COMPOSE[@]}" logs --tail=100 caddy >&2 || true
+  exit 1
+fi
+
+echo "Waiting for the public HTTPS n8n endpoint..."
+N8N_READY=false
+for attempt in $(seq 1 24); do
+  if curl -fsS --connect-timeout 5 --max-time 10 "https://$N8N_DOMAIN/" >/dev/null 2>&1; then
+    N8N_READY=true
+    break
+  fi
+  sleep 5
+done
+
+if [[ "$N8N_READY" != "true" ]]; then
+  echo "n8n is not reachable through public HTTPS." >&2
+  echo "Check the N8N_DOMAIN DNS record and Caddy/n8n logs." >&2
+  "${COMPOSE[@]}" logs --tail=100 caddy n8n >&2 || true
   exit 1
 fi
 
