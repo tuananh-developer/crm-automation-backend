@@ -49,6 +49,16 @@ For initial HTTPS issuance, configure the EC2 Security Group to allow inbound TC
 
 Keep `/opt/crm-automation-backend/deploy/.env.production` root-only. Never paste its contents into chat or commit it. Preserve `N8N_ENCRYPTION_KEY` permanently after n8n has stored credentials; never run `docker compose down -v`.
 
+## Vercel frontend configuration
+
+In the Vercel project for the frontend, set the production API base URL to the public API endpoint:
+
+```dotenv
+NEXT_PUBLIC_API_BASE_URL=https://api.<EC2_PUBLIC_IP>.nip.io/api/v1
+```
+
+Use the actual `API_DOMAIN` selected during EC2 bootstrap (or your custom API domain), then redeploy the frontend so the Next.js build picks up the new public environment variable. In the backend `.env.production`, `FRONTEND_URL` must be the exact frontend origin only, for example `https://crm-automation-frontend.vercel.app` (no path).
+
 ## GitHub Actions configuration
 
 In the backend repository, configure:
