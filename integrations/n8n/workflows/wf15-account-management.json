@@ -8,12 +8,7 @@
       "position": [0, 0],
       "parameters": {
         "rule": {
-          "interval": [
-            {
-              "field": "weeks",
-              "weeksInterval": 1
-            }
-          ]
+          "interval": [{"field": "weeks", "weeksInterval": 1}]
         }
       },
       "id": "n1"
@@ -25,9 +20,16 @@
       "position": [200, 0],
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/customers?isStrategic=true",
+        "url": "={{ ($env.CRM_BACKEND_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/internal/n8n/customers?isStrategic=true&limit=100\" }}",
         "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth"
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Accept", "value": "application/json"},
+            {"name": "x-n8n-api-key", "value": "={{ $env.N8N_API_KEY }}"}
+          ]
+        }
       },
       "id": "n2"
     },
@@ -37,7 +39,7 @@
       "typeVersion": 2,
       "position": [400, 0],
       "parameters": {
-        "jsCode": "const raw = $input.first()?.json || {};\nconst list = Array.isArray(raw.data) ? raw.data : (Array.isArray(raw) ? raw : [raw]);\nreturn list.filter(i => i && (i.isStrategic === true || i.isStrategic === 'true')).map(item => ({ json: item }));"
+        "jsCode": "const items = $input.all(); return items.filter(i => i.json.isStrategic === true);"
       },
       "id": "n3"
     },
@@ -59,9 +61,16 @@
       "position": [800, 0],
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/customers/{{ $json.id }}",
+        "url": "={{ ($env.CRM_BACKEND_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/internal/n8n/customers/\" + $json.id + \"\" }}",
         "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth"
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Accept", "value": "application/json"},
+            {"name": "x-n8n-api-key", "value": "={{ $env.N8N_API_KEY }}"}
+          ]
+        }
       },
       "id": "n5"
     },
@@ -72,9 +81,16 @@
       "position": [1000, 0],
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/customers/{{ $json.id }}/interactions",
+        "url": "={{ ($env.CRM_BACKEND_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/internal/n8n/customers/\" + $json.id + \"/interactions\" }}",
         "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth"
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Accept", "value": "application/json"},
+            {"name": "x-n8n-api-key", "value": "={{ $env.N8N_API_KEY }}"}
+          ]
+        }
       },
       "id": "n6"
     },
@@ -85,9 +101,16 @@
       "position": [1200, 0],
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/follow-up/enrollments?customerId={{ $json.id }}",
+        "url": "={{ ($env.CRM_BACKEND_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/internal/n8n/follow-up/enrollments?customerId=\" + $json.id + \"\" }}",
         "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth"
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Accept", "value": "application/json"},
+            {"name": "x-n8n-api-key", "value": "={{ $env.N8N_API_KEY }}"}
+          ]
+        }
       },
       "id": "n7"
     },
@@ -98,9 +121,16 @@
       "position": [1400, 0],
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/feedback?customerId={{ $json.id }}",
+        "url": "={{ ($env.CRM_BACKEND_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/internal/n8n/feedback?customerId=\" + $json.id + \"\" }}",
         "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth"
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Accept", "value": "application/json"},
+            {"name": "x-n8n-api-key", "value": "={{ $env.N8N_API_KEY }}"}
+          ]
+        }
       },
       "id": "n8"
     },
@@ -111,9 +141,16 @@
       "position": [1600, 0],
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/customers/{{ $json.id }}/issues-renewals",
+        "url": "={{ ($env.CRM_BACKEND_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/internal/n8n/customers/\" + $json.id + \"/issues-renewals\" }}",
         "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth"
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Accept", "value": "application/json"},
+            {"name": "x-n8n-api-key", "value": "={{ $env.N8N_API_KEY }}"}
+          ]
+        }
       },
       "id": "n9"
     },
@@ -123,17 +160,17 @@
       "typeVersion": 2,
       "position": [1800, 0],
       "parameters": {
-        "jsCode": "const customer = $('5. Fetch Customer Profile')?.first()?.json || $('4. Split Out Accounts')?.first()?.json || $json || {};\nconst customerId = customer.id;\n\n// 1. Engagement from actual interactions\nconst interactionsRaw = $('6. Fetch Customer Interactions')?.first()?.json;\nlet engagement = null;\nconst interactionItems = Array.isArray(interactionsRaw) ? interactionsRaw : (interactionsRaw?.items || interactionsRaw?.data || null);\nif (Array.isArray(interactionItems) && interactionItems.length > 0) {\n  engagement = Math.min(100, Math.round(30 + interactionItems.length * 15));\n} else if (typeof interactionsRaw?.score === 'number') {\n  engagement = Math.min(100, Math.max(0, interactionsRaw.score));\n}\n\n// 2. Feedback from actual feedback history\nconst feedbackRaw = $('8. Fetch Feedback History')?.first()?.json;\nlet feedback = null;\nconst feedbackItems = Array.isArray(feedbackRaw) ? feedbackRaw : (feedbackRaw?.items || feedbackRaw?.data || null);\nif (Array.isArray(feedbackItems) && feedbackItems.length > 0) {\n  let total = 0, count = 0;\n  for (const item of feedbackItems) {\n    if (typeof item.score === 'number') { total += item.score; count++; }\n    else if (typeof item.rating === 'number') { total += (item.rating / 5) * 100; count++; }\n    else if (typeof item.nps === 'number') { total += item.nps * 10; count++; }\n  }\n  if (count > 0) feedback = Math.min(100, Math.max(0, Math.round(total / count)));\n} else if (typeof feedbackRaw?.score === 'number') {\n  feedback = Math.min(100, Math.max(0, feedbackRaw.score));\n}\n\n// 3. Open Issues (inversely scored: more open issues reduces health score)\nconst issuesRaw = $('9. Fetch Open Issues and Renewals')?.first()?.json;\nlet openIssues = null;\nconst issueItems = Array.isArray(issuesRaw) ? issuesRaw : (issuesRaw?.issues || issuesRaw?.items || null);\nif (Array.isArray(issueItems)) {\n  const openCount = issueItems.filter(i => !i.resolvedAt && (i.status === 'OPEN' || i.status === 'PENDING' || i.status === 'IN_PROGRESS' || !i.status)).length;\n  openIssues = Math.max(0, 100 - openCount * 25);\n} else if (typeof issuesRaw?.openIssuesCount === 'number') {\n  openIssues = Math.max(0, 100 - issuesRaw.openIssuesCount * 25);\n} else if (typeof issuesRaw?.score === 'number') {\n  openIssues = Math.min(100, Math.max(0, issuesRaw.score));\n}\n\n// 4. Follow-up completion from actual enrollments\nconst followUpRaw = $('7. Fetch Follow-up History')?.first()?.json;\nlet followUpCompletion = null;\nconst enrollments = Array.isArray(followUpRaw) ? followUpRaw : (followUpRaw?.items || followUpRaw?.data || null);\nif (Array.isArray(enrollments) && enrollments.length > 0) {\n  const completed = enrollments.filter(e => e.status === 'COMPLETED').length;\n  const active = enrollments.filter(e => e.status === 'ACTIVE').length;\n  followUpCompletion = Math.min(100, Math.round(((completed + active * 0.5) / enrollments.length) * 100));\n} else if (typeof followUpRaw?.completionRate === 'number') {\n  followUpCompletion = Math.min(100, Math.max(0, Math.round(followUpRaw.completionRate)));\n} else if (typeof followUpRaw?.score === 'number') {\n  followUpCompletion = Math.min(100, Math.max(0, followUpRaw.score));\n}\n\nconst evidence = [];\nif (engagement !== null) evidence.push(`Interactions: ${interactionItems?.length || 1} records`);\nif (feedback !== null) evidence.push(`Feedback: ${feedbackItems?.length || 1} reviews`);\nif (openIssues !== null) evidence.push(`Issue metric: ${openIssues}/100`);\nif (followUpCompletion !== null) evidence.push(`Follow-up completion: ${followUpCompletion}%`);\n\nreturn [{\n  json: {\n    customerId,\n    engagement,\n    feedback,\n    openIssues,\n    followUpCompletion,\n    evidence\n  }\n}];"
+        "jsCode": "const d = $json;\nconst interactions = $('6. Fetch Customer Interactions').first().json;\nconst followups = $('7. Fetch Follow-up History').first().json;\nconst feedback = $('8. Fetch Feedback History').first().json;\nconst issuesRenewals = $('9. Fetch Open Issues and Renewals').first().json;\nconst interactionList = Array.isArray(interactions) ? interactions : (interactions?.data || []);\nconst followupList = Array.isArray(followups) ? followups : (followups?.data || []);\nconst feedbackList = Array.isArray(feedback) ? feedback : (feedback?.data || []);\nconst issuesList = Array.isArray(issuesRenewals) ? issuesRenewals : (issuesRenewals?.data || issuesRenewals?.issues || []);\nconst engagement = interactionList.length > 0 ? Math.min(100, Math.round(interactionList.length * 10)) : null;\nconst feedbackScore = feedbackList.length > 0 ? Math.min(100, Math.round(feedbackList.reduce((s, f) => s + (Number(f.rating || f.score || 0)), 0) / feedbackList.length)) : null;\nconst openIssues = Array.isArray(issuesList) ? issuesList.length : null;\nconst followUpCompletion = followupList.length > 0 ? Math.min(100, Math.round((followupList.filter(f => f.status === 'COMPLETED' || f.status === 'SUCCESS').length / followupList.length) * 100)) : null;\nreturn [{ json: { customerId: d.id, engagement, feedback: feedbackScore, openIssues, followUpCompletion, sources: { interactions: interactionList.length, followups: followupList.length, feedback: feedbackList.length, issues: Array.isArray(issuesList) ? issuesList.length : 0 } } }];"
       },
       "id": "n10"
     },
     {
-      "name": "11. Validate Data Coverage",
+      "name": "11. Validate Data Coverage & Call Health API",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [2000, 0],
       "parameters": {
-        "jsCode": "const d = $json;\nconst missing = [];\nif (d.engagement === null || d.engagement === undefined) missing.push('engagement');\nif (d.feedback === null || d.feedback === undefined) missing.push('feedback');\nif (d.openIssues === null || d.openIssues === undefined) missing.push('openIssues');\nif (d.followUpCompletion === null || d.followUpCompletion === undefined) missing.push('followUpCompletion');\nreturn [{\n  json: {\n    ...d,\n    missingData: missing,\n    hasSufficientData: missing.length === 0\n  }\n}];"
+        "jsCode": "const d = $json;\nconst missing = [];\nif (d.engagement === null) missing.push('engagement');\nif (d.feedback === null) missing.push('feedback');\nif (d.openIssues === null) missing.push('openIssues');\nif (d.followUpCompletion === null) missing.push('followUpCompletion');\nconst hasSufficientData = missing.length === 0;\nreturn [{ json: { ...d, missingData: missing, hasSufficientData } }];"
       },
       "id": "n11"
     },
@@ -144,12 +181,19 @@
       "position": [2200, 0],
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/account-health/calculate",
+        "url": "={{ ($env.CRM_BACKEND_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/internal/n8n/account-health/calculate\" }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Accept", "value": "application/json"},
+            {"name": "x-n8n-api-key", "value": "={{ $env.N8N_API_KEY }}"}
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ customerId: $json.customerId, engagement: $json.engagement, feedback: $json.feedback, openIssues: $json.openIssues, followUpCompletion: $json.followUpCompletion, evidence: $json.evidence }) }}"
+        "jsonBody": "={{ JSON.stringify({ customerId: $json.customerId, engagement: $json.engagement, feedback: $json.feedback, openIssues: $json.openIssues, followUpCompletion: $json.followUpCompletion, evidence: $json.sources, missingData: $json.missingData }) }}"
       },
       "id": "n12"
     },
@@ -160,22 +204,8 @@
       "position": [2400, 0],
       "parameters": {
         "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "c1",
-              "leftValue": "={{ $json.status }}",
-              "rightValue": "INSUFFICIENT_DATA",
-              "operator": {
-                "type": "string",
-                "operation": "notEquals"
-              }
-            }
-          ],
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [{"id": "c1", "leftValue": "={{ $json.status }}", "rightValue": "INSUFFICIENT_DATA", "operator": {"type": "string", "operation": "notEquals"}}],
           "combinator": "and"
         }
       },
@@ -187,16 +217,12 @@
       "typeVersion": 1.8,
       "position": [2600, 0],
       "parameters": {
-        "modelId": {
-          "__rl": true,
-          "value": "gpt-4o-mini",
-          "mode": "list"
-        },
+        "modelId": {"__rl": true, "value": "gpt-4o-mini", "mode": "list"},
         "messages": {
           "values": [
             {
-              "content": "Explain this account health result and suggest actions based on evidence",
-              "role": "user"
+              "role": "user",
+              "content": "={{ `Customer ${{ $json.customerId }} health assessment:\nScore: ${{ $json.score }}\nStatus: ${{ $json.status }}\nBreakdown: ${{ JSON.stringify($json.breakdown) }}\nEvidence: ${{ JSON.stringify($json.evidence) }}\n\nExplain the result and suggest 3-5 specific retention actions in JSON format: {\"recommendedActions\": [\"action1\", \"action2\", ...], \"hasRiskOrOpportunity\": true/false}` }}"
             }
           ]
         }
@@ -204,31 +230,32 @@
       "id": "n14"
     },
     {
-      "name": "15. Validate AI JSON",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "name": "15. Parse AI Output & Derive Flags",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [2800, 0],
       "parameters": {
-        "method": "POST",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/account-health/validate-ai-output",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ score: $('12. Call Backend Account Health API').item.json.score, aiOutput: $json }) }}"
+        "jsCode": "const ai = $json;\nlet recommendedActions = [];\nlet hasRiskOrOpportunity = false;\ntry {\n  const parsed = typeof ai === 'string' ? JSON.parse(ai) : ai;\n  recommendedActions = Array.isArray(parsed.recommendedActions) ? parsed.recommendedActions : [];\n  hasRiskOrOpportunity = Boolean(parsed.hasRiskOrOpportunity);\n} catch (e) {\n  console.warn('Failed to parse AI output:', e);\n}\nconst data = $('12. Call Backend Account Health API').first().json;\nconst customerId = $('10. Normalize Account Data').item.json.customerId;\nreturn [{ json: { customerId, ...data, recommendedActions, hasRiskOrOpportunity, aiOutput: ai } }];"
       },
       "id": "n15"
     },
     {
-      "name": "16. Validate Actions and Evidence",
+      "name": "16. Validate Actions & Evidence",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [3000, 0],
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/account-health/validate-actions",
+        "url": "={{ ($env.CRM_BACKEND_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/internal/n8n/account-health/validate-actions\" }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Accept", "value": "application/json"},
+            {"name": "x-n8n-api-key", "value": "={{ $env.N8N_API_KEY }}"}
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ customerId: $('10. Normalize Account Data').item.json.customerId, snapshotId: $('12. Call Backend Account Health API').item.json.id, actions: $json.recommendedActions || [] }) }}"
@@ -236,12 +263,12 @@
       "id": "n16"
     },
     {
-      "name": "17. Save Account Health Snapshot",
+      "name": "17. Save Snapshot & Check Risk",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [3200, 0],
       "parameters": {
-        "jsCode": "const snapshot = $('12. Call Backend Account Health API').item.json;\nconst customerId = $('10. Normalize Account Data').item.json.customerId;\nreturn [{\n  json: {\n    saved: Boolean(snapshot.id),\n    customerId,\n    snapshotId: snapshot.id,\n    score: snapshot.score,\n    status: snapshot.status,\n    hasRiskOrOpportunity: ['AT_RISK', 'CRITICAL'].includes(snapshot.status)\n  }\n}];"
+        "jsCode": "const data = $('12. Call Backend Account Health API').first().json;\nconst customerId = $('10. Normalize Account Data').item.json.customerId;\nconst hasRisk = $('15. Parse AI Output & Derive Flags').item.json.hasRiskOrOpportunity;\nreturn [{ json: { customerId, ...data, hasRiskOrOpportunity: hasRisk, savedAt: new Date().toISOString() } }];"
       },
       "id": "n17"
     },
@@ -252,34 +279,33 @@
       "position": [3400, 0],
       "parameters": {
         "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "c2",
-              "leftValue": "={{ $json.hasRiskOrOpportunity }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "true"
-              }
-            }
-          ],
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [{"id": "c2", "leftValue": "={{ $json.hasRiskOrOpportunity }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}],
           "combinator": "and"
         }
       },
       "id": "n18"
     },
     {
-      "name": "19. Prepare Operational Action",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "19. Create Retention Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [3600, 0],
       "parameters": {
-        "jsCode": "const customerId = $('10. Normalize Account Data').item.json.customerId;\nconst profile = $('5. Fetch Customer Profile')?.first()?.json || {};\nconst snapshot = $('12. Call Backend Account Health API').item.json;\nreturn [{\n  json: {\n    customerId,\n    ownerId: profile.createdBy,\n    customerName: profile.name || 'Strategic Account',\n    healthStatus: snapshot.status,\n    healthScore: snapshot.score,\n    taskType: 'RETENTION',\n    priority: snapshot.status === 'CRITICAL' ? 'URGENT' : 'HIGH',\n    idempotencyKey: customerId + ':account-health:alert:' + new Date().toISOString().slice(0, 10)\n  }\n}];"
+        "method": "POST",
+        "url": "={{ ($env.CRM_BACKEND_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/internal/n8n/customers/tasks\" }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Accept", "value": "application/json"},
+            {"name": "x-n8n-api-key", "value": "={{ $env.N8N_API_KEY }}"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ customerId: $('10. Normalize Account Data').item.json.customerId, taskType: 'RETENTION', priority: 'HIGH', idempotencyKey: $('10. Normalize Account Data').item.json.customerId + ':account-health:retention' }) }}"
       },
       "id": "n19"
     },
@@ -290,272 +316,97 @@
       "position": [3800, 0],
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CRM_BACKEND_URL }}/api/v1/notifications/internal/create",
+        "url": "={{ ($env.CRM_BACKEND_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/internal/n8n/notifications/internal/create\" }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Accept", "value": "application/json"},
+            {"name": "x-n8n-api-key", "value": "={{ $env.N8N_API_KEY }}"}
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ userId: $json.ownerId, type: 'FOLLOW_UP_FAILED', title: 'Account Health Alert: ' + $json.customerName, content: 'Account ' + $json.customerName + ' is ' + $json.healthStatus + ' (Score: ' + $json.healthScore + '). Action required.', customerId: $json.customerId, idempotencyKey: $json.idempotencyKey }) }}"
+        "jsonBody": "={{ JSON.stringify({ type: 'FOLLOW_UP_FAILED', severity: 'MEDIUM', title: 'Account action required', message: 'Action required for account ' + $('10. Normalize Account Data').item.json.customerId }) }}"
       },
       "id": "n20"
     },
     {
-      "name": "21. Handle Errors",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [2400, 200],
-      "parameters": {
-        "jsCode": "const customerId = $('10. Normalize Account Data')?.first()?.json?.customerId || $json?.customerId;\nconsole.log(`Account health evaluation skipped or insufficient data for customer ${customerId}`);\nreturn [{ json: { handled: true, customerId, status: 'INSUFFICIENT_DATA' } }];"
-      },
+      "name": "21. Loop Back",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [3600, 300],
+      "parameters": {},
       "id": "n21"
-    },
-    {
-      "name": "22. Log Workflow Execution",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [4000, 0],
-      "parameters": {
-        "jsCode": "const customerId = $('10. Normalize Account Data')?.first()?.json?.customerId || $json?.customerId;\nconsole.log(`WF15 execution completed for customer ${customerId}`);\nreturn [{ json: { logged: true, customerId, completedAt: new Date().toISOString() } }];"
-      },
-      "id": "n22"
     }
   ],
   "connections": {
     "1. Weekly Schedule": {
-      "main": [
-        [
-          {
-            "node": "2. Fetch Strategic Accounts",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["2. Fetch Strategic Accounts"]]
     },
     "2. Fetch Strategic Accounts": {
-      "main": [
-        [
-          {
-            "node": "3. Validate Strategic Accounts",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["3. Validate Strategic Accounts"]]
     },
     "3. Validate Strategic Accounts": {
-      "main": [
-        [
-          {
-            "node": "4. Split Out Accounts",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["4. Split Out Accounts"]]
     },
     "4. Split Out Accounts": {
-      "main": [
-        [
-          {
-            "node": "5. Fetch Customer Profile",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["5. Fetch Customer Profile"], ["21. Loop Back"]]
     },
     "5. Fetch Customer Profile": {
-      "main": [
-        [
-          {
-            "node": "6. Fetch Customer Interactions",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["6. Fetch Customer Interactions"]]
     },
     "6. Fetch Customer Interactions": {
-      "main": [
-        [
-          {
-            "node": "7. Fetch Follow-up History",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["7. Fetch Follow-up History"]]
     },
     "7. Fetch Follow-up History": {
-      "main": [
-        [
-          {
-            "node": "8. Fetch Feedback History",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["8. Fetch Feedback History"]]
     },
     "8. Fetch Feedback History": {
-      "main": [
-        [
-          {
-            "node": "9. Fetch Open Issues and Renewals",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["9. Fetch Open Issues and Renewals"]]
     },
     "9. Fetch Open Issues and Renewals": {
-      "main": [
-        [
-          {
-            "node": "10. Normalize Account Data",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["10. Normalize Account Data"]]
     },
     "10. Normalize Account Data": {
-      "main": [
-        [
-          {
-            "node": "11. Validate Data Coverage",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["11. Validate Data Coverage & Call Health API"]]
     },
-    "11. Validate Data Coverage": {
-      "main": [
-        [
-          {
-            "node": "12. Call Backend Account Health API",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "11. Validate Data Coverage & Call Health API": {
+      "main": [["12. Call Backend Account Health API"]]
     },
     "12. Call Backend Account Health API": {
-      "main": [
-        [
-          {
-            "node": "13. Check Account Health Result",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["13. Check Account Health Result"]]
     },
     "13. Check Account Health Result": {
-      "main": [
-        [
-          {
-            "node": "14. Call AI Explanation",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "21. Handle Errors",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["14. Call AI Explanation"], ["21. Loop Back"]]
     },
     "14. Call AI Explanation": {
-      "main": [
-        [
-          {
-            "node": "15. Validate AI JSON",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["15. Parse AI Output & Derive Flags"]]
     },
-    "15. Validate AI JSON": {
-      "main": [
-        [
-          {
-            "node": "16. Validate Actions and Evidence",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "15. Parse AI Output & Derive Flags": {
+      "main": [["16. Validate Actions & Evidence"]]
     },
-    "16. Validate Actions and Evidence": {
-      "main": [
-        [
-          {
-            "node": "17. Save Account Health Snapshot",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "16. Validate Actions & Evidence": {
+      "main": [["17. Save Snapshot & Check Risk"]]
     },
-    "17. Save Account Health Snapshot": {
-      "main": [
-        [
-          {
-            "node": "18. Check Risk or Opportunity",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "17. Save Snapshot & Check Risk": {
+      "main": [["18. Check Risk or Opportunity"]]
     },
     "18. Check Risk or Opportunity": {
-      "main": [
-        [
-          {
-            "node": "19. Prepare Operational Action",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "22. Log Workflow Execution",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["19. Create Retention Task"], ["21. Loop Back"]]
     },
-    "19. Prepare Operational Action": {
-      "main": [
-        [
-          {
-            "node": "20. Notify Account Owner",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "19. Create Retention Task": {
+      "main": [["20. Notify Account Owner"]]
     },
     "20. Notify Account Owner": {
-      "main": [
-        [
-          {
-            "node": "22. Log Workflow Execution",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [["21. Loop Back"]]
+    },
+    "21. Loop Back": {
+      "main": [["4. Split Out Accounts"]]
     }
   },
   "active": false,
-  "settings": {}
+  "settings": {},
+  "id": "wf15-account-management"
 }

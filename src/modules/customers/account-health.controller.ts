@@ -20,7 +20,11 @@ import {
   ValidateAiOutputDto,
 } from './dto/account-health.dto.js';
 
-@Controller('account-health')
+/**
+ * Canonical internal routes: /api/v1/internal/n8n/account-health/...
+ * Protected by N8nAuthGuard; browsers never call this directly.
+ */
+@Controller('internal/n8n/account-health')
 @UseGuards(N8nAuthGuard)
 export class AccountHealthController {
   constructor(
@@ -56,6 +60,21 @@ export class AccountHealthController {
       }
 
       // Idempotency: avoid duplicate snapshot on workflow retries within 5 minutes
+      // Use SHA256 hash of all input fields to detect actual changes
+      const crypto = await import('crypto');
+      const inputHash = crypto
+        .createHash('sha256')
+        .update(
+          JSON.stringify({
+            engagement: body.engagement,
+            feedback: body.feedback,
+            openIssues: body.openIssues,
+            followUpCompletion: body.followUpCompletion,
+            evidence: body.evidence,
+          }),
+        )
+        .digest('hex');
+
       const recentThreshold = new Date(Date.now() - 5 * 60 * 1000);
       const existing = await this.snapshotRepo.findOne({
         where: { customerId: body.customerId },
@@ -64,8 +83,7 @@ export class AccountHealthController {
 
       if (
         existing &&
-        existing.score === result.score &&
-        existing.status === result.status &&
+        existing.dataCoverage?.inputHash === inputHash &&
         existing.assessedAt >= recentThreshold
       ) {
         savedSnapshot = existing;
@@ -83,6 +101,7 @@ export class AccountHealthController {
           dataCoverage: {
             policyVersion: result.policyVersion,
             evaluatedAt: new Date().toISOString(),
+            inputHash,
           },
           assessedAt: new Date(),
         });
