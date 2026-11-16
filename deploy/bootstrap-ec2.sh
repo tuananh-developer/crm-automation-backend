@@ -41,14 +41,30 @@ FREE_DISK_GIB="$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')"
 echo "Detected RAM: ${TOTAL_RAM_MIB} MiB"
 echo "Available root disk: ${FREE_DISK_GIB} GiB"
 
-if (( TOTAL_RAM_MIB < 4096 )); then
-  echo "This Compose stack is not suitable for an EC2 instance with less than 4 GiB RAM." >&2
-  echo "Resize the instance to at least 4 GiB RAM (8 GiB is recommended) before continuing." >&2
+if (( TOTAL_RAM_MIB < 3584 )); then
+  echo "This CRM + n8n Compose stack needs an EC2 instance with about 4 GiB RAM minimum." >&2
+  echo "Resize the instance before continuing; 8 GiB is recommended for comfortable headroom." >&2
   exit 1
 fi
+
 if (( TOTAL_RAM_MIB < 6144 )); then
-  echo "WARNING: less than 6 GiB RAM detected. n8n and backend may compete for memory under load."
+  N8N_MEM_LIMIT="1280m"
+  BACKEND_MEM_LIMIT="1024m"
+  RABBITMQ_MEM_LIMIT="384m"
+  CADDY_MEM_LIMIT="128m"
+elif (( TOTAL_RAM_MIB < 8192 )); then
+  N8N_MEM_LIMIT="1536m"
+  BACKEND_MEM_LIMIT="1280m"
+  RABBITMQ_MEM_LIMIT="512m"
+  CADDY_MEM_LIMIT="128m"
+else
+  N8N_MEM_LIMIT="2g"
+  BACKEND_MEM_LIMIT="1280m"
+  RABBITMQ_MEM_LIMIT="512m"
+  CADDY_MEM_LIMIT="128m"
 fi
+echo "Container memory limits: n8n=$N8N_MEM_LIMIT, backend=$BACKEND_MEM_LIMIT, RabbitMQ=$RABBITMQ_MEM_LIMIT, Caddy=$CADDY_MEM_LIMIT"
+
 if (( FREE_DISK_GIB < 10 )); then
   echo "At least 10 GiB of free root disk is recommended before pulling production images." >&2
   exit 1
@@ -115,6 +131,10 @@ N8N_DOMAIN=$N8N_DOMAIN
 ACME_EMAIL=$ACME_EMAIL
 FRONTEND_URL=$FRONTEND_URL
 BACKEND_IMAGE_TAG=latest
+N8N_MEM_LIMIT=$N8N_MEM_LIMIT
+BACKEND_MEM_LIMIT=$BACKEND_MEM_LIMIT
+RABBITMQ_MEM_LIMIT=$RABBITMQ_MEM_LIMIT
+CADDY_MEM_LIMIT=$CADDY_MEM_LIMIT
 
 DATABASE_URL=$DATABASE_URL
 NODE_ENV=production
@@ -162,14 +182,14 @@ fi
 
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 
-echo "Pulling the prebuilt backend image and production service images..."
+echo "Pulling prebuilt backend and supporting service images..."
 docker pull "$IMAGE"
 "${COMPOSE[@]}" pull
 
-echo "Starting production services (no local image build)..."
+echo "Starting production stack without building images..."
 "${COMPOSE[@]}" up -d --no-build
 
-echo "Waiting for backend health endpoint..."
+echo "Waiting for the backend health endpoint..."
 HEALTHY=false
 for attempt in $(seq 1 60); do
   if "${COMPOSE[@]}" exec -T backend node -e "fetch('http://127.0.0.1:3000/api/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" >/dev/null 2>&1; then
@@ -185,7 +205,7 @@ if [[ "$HEALTHY" != "true" ]]; then
   exit 1
 fi
 
-echo "Waiting for public HTTPS API endpoint..."
+echo "Waiting for the public HTTPS API endpoint..."
 API_READY=false
 for attempt in $(seq 1 24); do
   if curl -fsS --connect-timeout 5 --max-time 10 "https://$API_DOMAIN/api/v1/health" >/dev/null 2>&1; then
@@ -196,8 +216,8 @@ for attempt in $(seq 1 24); do
 done
 
 if [[ "$API_READY" != "true" ]]; then
-  echo "The backend is healthy internally, but public HTTPS is not ready." >&2
-  echo "Check DNS/nip.io resolution and EC2 Security Group inbound TCP 80/443." >&2
+  echo "Backend is healthy internally, but public HTTPS is not ready." >&2
+  echo "Check Security Group inbound TCP 80/443 and DNS resolution for both hostnames." >&2
   "${COMPOSE[@]}" logs --tail=100 caddy >&2 || true
   exit 1
 fi
@@ -209,5 +229,5 @@ echo
 echo "Bootstrap completed."
 echo "API: https://$API_DOMAIN/api/v1/health"
 echo "n8n: https://$N8N_DOMAIN"
-echo "Keep N8N_ENCRYPTION_KEY safe and never delete the n8n_data volume."
-echo "Do not enable ENABLE_EC2_DEPLOY until this stack has been verified."
+echo "Preserve N8N_ENCRYPTION_KEY and Docker volume n8n_data."
+echo "Do not enable ENABLE_EC2_DEPLOY until production checks are complete."
