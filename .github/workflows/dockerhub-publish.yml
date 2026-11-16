@@ -136,9 +136,9 @@ jobs:
           sudo mkdir -p "\$APP_DIR"
           sudo docker pull "$CONFIG_IMAGE"
           sudo docker run --rm -v "\$APP_DIR:/target" "$CONFIG_IMAGE"
-          sudo test -s "$APP_DIR/deploy/.env.production"
+          sudo test -s "\$APP_DIR/deploy/.env.production"
           sudo docker pull "$APP_IMAGE"
-          sudo bash "$APP_DIR/deploy/ssm-deploy-image.sh" backend "$IMAGE_TAG"
+          sudo bash "\$APP_DIR/deploy/ssm-deploy-image.sh" backend "$IMAGE_TAG"
           EOF
           )
           PARAMETERS=$(jq -cn --arg command "$SCRIPT" '{commands: [$command]}')
