@@ -133,9 +133,9 @@ jobs:
           SCRIPT=$(cat <<EOF
           set -Eeuo pipefail
           APP_DIR="/opt/crm-automation-backend"
-          sudo mkdir -p "$APP_DIR"
+          sudo mkdir -p "\$APP_DIR"
           sudo docker pull "$CONFIG_IMAGE"
-          sudo docker run --rm -v "$APP_DIR:/target" "$CONFIG_IMAGE"
+          sudo docker run --rm -v "\$APP_DIR:/target" "$CONFIG_IMAGE"
           sudo test -s "$APP_DIR/deploy/.env.production"
           sudo docker pull "$APP_IMAGE"
           sudo bash "$APP_DIR/deploy/ssm-deploy-image.sh" backend "$IMAGE_TAG"
