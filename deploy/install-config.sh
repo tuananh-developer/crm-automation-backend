@@ -11,18 +11,22 @@ fi
 
 mkdir -p "$DEPLOY_DIR/rabbitmq"
 
-install -m 0644 /bundle/compose.production.yml "$DEPLOY_DIR/compose.production.yml"
-install -m 0644 /bundle/Caddyfile "$DEPLOY_DIR/Caddyfile"
-install -m 0644 /bundle/rabbitmq/rabbitmq.conf "$DEPLOY_DIR/rabbitmq/rabbitmq.conf"
-install -m 0644 /bundle/rabbitmq/definitions.json "$DEPLOY_DIR/rabbitmq/definitions.json"
-install -m 0755 /bundle/check-env.sh "$DEPLOY_DIR/check-env.sh"
-install -m 0755 /bundle/ssm-deploy-image.sh "$DEPLOY_DIR/ssm-deploy-image.sh"
-install -m 0755 /bundle/bootstrap-ec2.sh "$DEPLOY_DIR/bootstrap-ec2.sh"
-install -m 0644 /bundle/.env.production.example "$DEPLOY_DIR/.env.production.example"
+cp /bundle/compose.production.yml "$DEPLOY_DIR/compose.production.yml"
+cp /bundle/Caddyfile "$DEPLOY_DIR/Caddyfile"
+cp /bundle/rabbitmq/rabbitmq.conf "$DEPLOY_DIR/rabbitmq/rabbitmq.conf"
+cp /bundle/rabbitmq/definitions.json "$DEPLOY_DIR/rabbitmq/definitions.json"
+cp /bundle/check-env.sh "$DEPLOY_DIR/check-env.sh"
+cp /bundle/ssm-deploy-image.sh "$DEPLOY_DIR/ssm-deploy-image.sh"
+cp /bundle/bootstrap-ec2.sh "$DEPLOY_DIR/bootstrap-ec2.sh"
+cp /bundle/.env.production.example "$DEPLOY_DIR/.env.production.example"
+
+chmod 0644 "$DEPLOY_DIR/compose.production.yml" "$DEPLOY_DIR/Caddyfile" "$DEPLOY_DIR/rabbitmq/rabbitmq.conf" "$DEPLOY_DIR/rabbitmq/definitions.json" "$DEPLOY_DIR/.env.production.example"
+chmod 0755 "$DEPLOY_DIR/check-env.sh" "$DEPLOY_DIR/ssm-deploy-image.sh" "$DEPLOY_DIR/bootstrap-ec2.sh"
 
 # Never replace live production secrets or service configuration.
 if [ ! -f "$DEPLOY_DIR/.env.production" ]; then
-  install -m 0600 /bundle/.env.production.example "$DEPLOY_DIR/.env.production"
+  cp /bundle/.env.production.example "$DEPLOY_DIR/.env.production"
+  chmod 0600 "$DEPLOY_DIR/.env.production"
 fi
 
 echo "Deployment bundle installed into $DEPLOY_DIR"
