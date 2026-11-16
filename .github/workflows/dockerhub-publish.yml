@@ -67,10 +67,10 @@ jobs:
         id: config-meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ vars.DOCKERHUB_USERNAME }}/crm-automation-deploy-config
+          images: ${{ vars.DOCKERHUB_USERNAME }}/crm-automation-backend
           tags: |
-            type=raw,value=latest
-            type=sha,format=short,prefix=sha-
+            type=raw,value=config-latest
+            type=sha,format=short,prefix=config-sha-
 
       - name: Build and push deployment bundle image
         uses: docker/build-push-action@v7
@@ -128,7 +128,7 @@ jobs:
           IMAGE_TAG: ${{ needs.publish.outputs.image_tag }}
         run: |
           set -Eeuo pipefail
-          CONFIG_IMAGE="$DOCKERHUB_USERNAME/crm-automation-deploy-config:$IMAGE_TAG"
+          CONFIG_IMAGE="$DOCKERHUB_USERNAME/crm-automation-backend:config-$IMAGE_TAG"
           APP_IMAGE="$DOCKERHUB_USERNAME/crm-automation-backend:$IMAGE_TAG"
           SCRIPT=$(cat <<EOF
           set -Eeuo pipefail
