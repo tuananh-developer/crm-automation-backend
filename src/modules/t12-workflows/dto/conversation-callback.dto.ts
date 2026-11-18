@@ -171,3 +171,10 @@ export class UpdateInternalRedactedContentDto {
   @IsString()
   redactedContent!: string;
 }
+
+export class NotifyTranscriptDto {
+  @ApiProperty({ description: 'WorkflowRun UUID correlated to this execution' })
+  @IsNotEmpty()
+  @IsUUID('4')
+  workflowRunId!: string;
+}

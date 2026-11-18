@@ -22,6 +22,7 @@ import { ConversationsService } from './conversations.service.js';
 import {
   ConversationCallbackDto,
   CreateTranscriptDto,
+  NotifyTranscriptDto,
   SaveInternalActionItemsDto,
   UpdateActionItemDto,
   UpdateInternalRedactedContentDto,
@@ -29,6 +30,7 @@ import {
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Conversations & Meetings (T12-WF09)')
@@ -83,6 +85,7 @@ export class ConversationsController {
     'conversation-transcripts/:transcriptId/internal/redact',
     'internal/n8n/conversation-transcripts/:transcriptId/redact',
   ])
+  @Public()
   @UseGuards(N8nAuthGuard)
   @ApiOperation({
     summary:
@@ -103,6 +106,7 @@ export class ConversationsController {
     'conversation-transcripts/:transcriptId/callback',
     'internal/n8n/conversation-transcripts/:transcriptId/callback',
   ])
+  @Public()
   @UseGuards(N8nAuthGuard)
   @ApiOperation({ summary: 'Internal n8n callback for T12-WF09' })
   @ApiParam({ name: 'transcriptId', format: 'uuid' })
@@ -119,10 +123,8 @@ export class ConversationsController {
     return this.conversationsService.handleCallback(dto);
   }
 
-  @Post([
-    'conversation-summaries/:summaryId/internal/action-items',
-    'internal/n8n/conversation-summaries/:summaryId/action-items',
-  ])
+  @Post('conversation-summaries/:summaryId/internal/action-items')
+  @Public()
   @UseGuards(N8nAuthGuard)
   @ApiOperation({
     summary: 'Internal endpoint for workflow to persist pending action items',
@@ -133,6 +135,44 @@ export class ConversationsController {
     @Body() dto: SaveInternalActionItemsDto,
   ) {
     return this.conversationsService.saveInternalActionItems(summaryId, dto);
+  }
+
+  @Post('internal/n8n/conversation-transcripts/:transcriptId/action-items')
+  @Public()
+  @UseGuards(N8nAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Internal WF09 endpoint to persist pending action items for a completed transcript',
+  })
+  @ApiParam({ name: 'transcriptId', format: 'uuid' })
+  async saveTranscriptActionItems(
+    @Param('transcriptId', ParseUUIDPipe) transcriptId: string,
+    @Body() dto: SaveInternalActionItemsDto,
+  ) {
+    return this.conversationsService.saveTranscriptActionItems(
+      transcriptId,
+      dto,
+    );
+  }
+
+  @Post('internal/n8n/conversation-transcripts/:transcriptId/notify')
+  @Public()
+  @UseGuards(N8nAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Idempotent internal WF09 endpoint to ensure owner notification only on SUCCESS runs',
+  })
+  @ApiParam({ name: 'transcriptId', format: 'uuid' })
+  async notifyOwnerInternal(
+    @Param('transcriptId', ParseUUIDPipe) transcriptId: string,
+    @Body() dto: NotifyTranscriptDto,
+  ) {
+    return this.conversationsService.notifyOwnerInternal(
+      transcriptId,
+      dto.workflowRunId,
+    );
   }
 
   @Get('conversation-summaries/:summaryId/action-items')

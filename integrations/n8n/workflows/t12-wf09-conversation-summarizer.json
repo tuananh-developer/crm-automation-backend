@@ -29,7 +29,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 2. Code: Validate Transcript — validate source ID, type and maximum input length\nconst item = $input.first().json;\nconst payload = item.body || item;\n\nconst transcriptId = payload.transcriptId;\nconst workflowRunId = payload.workflowRunId;\nconst sourceType = payload.sourceType || 'CALL';\nconst rawContent = payload.redactedContent || payload.content || '';\nconst createdBy = payload.createdBy || null;\n\nif (!transcriptId) {\n  throw new Error('Validation Error: Missing transcriptId');\n}\n\nconst MAX_LENGTH = 100000;\nif (rawContent.length > MAX_LENGTH) {\n  throw new Error(`Validation Error: Transcript exceeds maximum length (${MAX_LENGTH})`);\n}\n\nreturn [{\n  json: {\n    transcriptId,\n    workflowRunId,\n    customerId: payload.customerId || null,\n    leadId: payload.leadId || null,\n    sourceType,\n    rawContent,\n    createdBy,\n    receivedAt: payload.timestamp || new Date().toISOString()\n  }\n}];"
+        "jsCode": "// 2. Code: Validate Transcript — validate source ID, type and maximum input length\nconst item = $input.first().json;\nconst payload = item.body || item;\n\nconst transcriptId = payload.transcriptId;\nconst workflowRunId = payload.workflowRunId;\nconst sourceType = payload.sourceType || 'CALL';\nconst rawContent = payload.redactedContent || payload.content || '';\nconst createdBy = payload.createdBy || null;\n\nif (!transcriptId) {\n  throw new Error('Validation Error: Missing transcriptId');\n}\nif (!workflowRunId) {\n  throw new Error('Validation Error: Missing workflowRunId');\n}\n\nconst MAX_LENGTH = 100000;\nif (rawContent.length > MAX_LENGTH) {\n  throw new Error(`Validation Error: Transcript exceeds maximum length (${MAX_LENGTH})`);\n}\n\nreturn [{\n  json: {\n    transcriptId,\n    workflowRunId,\n    customerId: payload.customerId || null,\n    leadId: payload.leadId || null,\n    sourceType,\n    rawContent,\n    createdBy,\n    receivedAt: payload.timestamp || new Date().toISOString()\n  }\n}];"
       },
       "id": "node-2-validate-transcript",
       "name": "Code: Validate Transcript",
@@ -77,7 +77,9 @@
           "timeout": 10000
         }
       },
-      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-4-save-redacted-transcript",
       "name": "HTTP Request: Save Redacted Transcript",
       "type": "n8n-nodes-base.httpRequest",
@@ -109,6 +111,9 @@
         }
       },
       "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-5-get-crm-context",
       "name": "HTTP Request: Get CRM Context",
       "type": "n8n-nodes-base.httpRequest",
@@ -120,7 +125,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 6. Code: Build Summary Context — prepare concise context and source provenance\nconst prep = $('Code: Normalize/Redact').first().json;\nconst crmContext = $('HTTP Request: Get CRM Context').first().json || {};\n\nconst transcriptId = prep.transcriptId;\nconst workflowRunId = prep.workflowRunId;\nconst sourceType = prep.sourceType;\nconst text = prep.normalizedRedactedContent;\n\nconst entityName = crmContext.name || `${crmContext.firstName || ''} ${crmContext.lastName || ''}`.trim() || 'Unknown Entity';\nconst companyName = crmContext.companyName || 'Unknown Company';\nconst industry = crmContext.industry || crmContext.companyIndustry || 'General';\n\nconst prompt = `\nYou are an expert CRM Conversation Intelligence Assistant.\nAnalyze this redacted sales/support conversation transcript and extract actionable business intelligence.\n\n=== CONVERSATION SOURCE & CONTEXT ===\n- Channel: ${sourceType}\n- Contact / Stakeholder: ${entityName}\n- Company: ${companyName} (${industry})\n\n=== CONVERSATION TRANSCRIPT ===\n\"\"\"\n${text.slice(0, 8000)}\n\"\"\"\n\nRespond STRICTLY in valid JSON matching this schema:\n{\n  \"summaryText\": \"Concise 2-4 sentence executive overview of the conversation discussion and outcome.\",\n  \"sentiment\": \"POSITIVE\" | \"NEUTRAL\" | \"NEGATIVE\",\n  \"intent\": \"High-level primary topic or objective (e.g. Plan Upgrade Discussion, Contract Renewal, Feature Request)\",\n  \"keyPoints\": [\n    \"Key point 1\",\n    \"Key point 2\",\n    \"Key point 3\"\n  ],\n  \"actionItems\": [\n    {\n      \"title\": \"Specific actionable task for sales or customer success team\",\n      \"dueInDays\": 3\n    }\n  ]\n}\n`;\n\nreturn [{\n  json: {\n    transcriptId,\n    workflowRunId,\n    sourceType,\n    text,\n    crmContext,\n    prompt\n  }\n}];"
+        "jsCode": "// 6. Code: Build Summary Context — prepare concise context and source provenance\nconst prep = $('Code: Normalize/Redact').first().json;\nconst crmContext = $('HTTP Request: Get CRM Context').first().json || {};\n\nconst transcriptId = prep.transcriptId;\nconst workflowRunId = prep.workflowRunId;\nconst sourceType = prep.sourceType;\nconst text = prep.normalizedRedactedContent;\n\nconst companyName = crmContext.companyName || 'Unknown Company';\nconst industry = crmContext.industry || crmContext.companyIndustry || 'General';\nconst status = crmContext.status || 'ACTIVE';\n\nconst prompt = `\nYou are an expert CRM Conversation Intelligence Assistant.\nAnalyze this redacted sales/support conversation transcript and extract actionable business intelligence.\n\n=== CONVERSATION SOURCE & CONTEXT ===\n- Channel: ${sourceType}\n- Company: ${companyName} (${industry})\n- Account Status: ${status}\n\n=== CONVERSATION TRANSCRIPT ===\n\"\"\"\n${text.slice(0, 8000)}\n\"\"\"\n\nRespond STRICTLY in valid JSON matching this schema:\n{\n  \"summaryText\": \"Concise 2-4 sentence executive overview of the conversation discussion and outcome.\",\n  \"sentiment\": \"POSITIVE\" | \"NEUTRAL\" | \"NEGATIVE\",\n  \"intent\": \"High-level primary topic or objective (e.g. Plan Upgrade Discussion, Contract Renewal, Feature Request)\",\n  \"keyPoints\": [\n    \"Key point 1\",\n    \"Key point 2\",\n    \"Key point 3\"\n  ],\n  \"actionItems\": [\n    {\n      \"title\": \"Specific actionable task for sales or customer success team\",\n      \"dueInDays\": 3\n    }\n  ]\n}\n`;\n\nreturn [{\n  json: {\n    transcriptId,\n    workflowRunId,\n    sourceType,\n    text,\n    crmContext,\n    prompt\n  }\n}];"
       },
       "id": "node-6-build-summary-context",
       "name": "Code: Build Summary Context",
@@ -156,6 +161,9 @@
         }
       },
       "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-7-gemini-summarizer",
       "name": "HTTP Request: Gemini Summarizer",
       "type": "n8n-nodes-base.httpRequest",
@@ -202,7 +210,9 @@
           "timeout": 15000
         }
       },
-      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-9-save-conversation-summary",
       "name": "HTTP Request: Save Conversation Summary",
       "type": "n8n-nodes-base.httpRequest",
@@ -214,7 +224,7 @@
     },
     {
       "parameters": {
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/conversation-summaries/' + $('HTTP Request: Save Conversation Summary').first().json.summaryId + '/internal/action-items' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/internal/n8n/conversation-transcripts/' + $('Code: Parse and Validate Summary/Actions').first().json.transcriptId + '/action-items' }}",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
@@ -236,7 +246,9 @@
           "timeout": 10000
         }
       },
-      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-10-save-pending-action-items",
       "name": "HTTP Request: Save Pending Action Items",
       "type": "n8n-nodes-base.httpRequest",
@@ -248,6 +260,43 @@
     },
     {
       "parameters": {
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000') + '/api/v1/internal/n8n/conversation-transcripts/' + $('Code: Parse and Validate Summary/Actions').first().json.transcriptId + '/notify' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { workflowRunId: $('Code: Parse and Validate Summary/Actions').first().json.workflowRunId } }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "node-11-notify-owner",
+      "name": "HTTP Request: Notify Owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2300,
+        300
+      ],
+      "notes": "Idempotently verifies or ensures the owner notification only when the WorkflowRun finished in SUCCESS."
+    },
+    {
+      "parameters": {
         "jsCode": "// 12. Code: Build Final Summary — return result IDs and final status\nconst parsed = $('Code: Parse and Validate Summary/Actions').first().json;\nconst callbackRes = $('HTTP Request: Save Conversation Summary').first().json;\n\nreturn [{\n  json: {\n    status: parsed.status,\n    transcriptId: parsed.transcriptId,\n    workflowRunId: parsed.workflowRunId,\n    summaryId: callbackRes.summaryId || null,\n    actionItemCount: parsed.actionItems ? parsed.actionItems.length : 0,\n    sentiment: parsed.sentiment,\n    intent: parsed.intent,\n    completedAt: new Date().toISOString()\n  }\n}];"
       },
       "id": "node-12-build-final-summary",
@@ -255,7 +304,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2300,
+        2520,
         300
       ]
     }
@@ -364,6 +413,17 @@
       "main": [
         [
           {
+            "node": "HTTP Request: Notify Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Notify Owner": {
+      "main": [
+        [
+          {
             "node": "Code: Build Final Summary",
             "type": "main",
             "index": 0
@@ -373,6 +433,8 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "errorWorkflow": "T12 Shared Error Handler"
   }
 }

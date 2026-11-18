@@ -67,13 +67,14 @@ export class NotificationsService {
     return result.affected ?? 0;
   }
 
-  /** Used by other modules (UC06, UC07, WF09) to raise an in-app notification. */
+  /** Used by other modules (UC06, UC07, WF09, WF14) to raise an in-app notification. */
   async create(input: CreateNotificationInput): Promise<Notification> {
     const payload = {
       userId: input.userId,
       type: input.type,
       title: input.title,
       content: input.content ?? input.message ?? null,
+      severity: input.severity ?? 'INFO',
       leadId: input.leadId ?? null,
       customerId: input.customerId ?? null,
       reviewTaskId: input.reviewTaskId ?? null,
@@ -89,6 +90,7 @@ export class NotificationsService {
         type: existing.type,
         title: existing.title,
         content: existing.content,
+        severity: existing.severity ?? 'INFO',
         leadId: existing.leadId,
         customerId: existing.customerId,
         reviewTaskId: existing.reviewTaskId,

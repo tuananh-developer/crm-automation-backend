@@ -89,6 +89,7 @@ const ENTITIES = [
   ],
   exports: [
     ConversationsService,
+    N8nWorkflowDispatchService,
     NextBestActionsService,
     SalesMeetingsService,
     QuotesService,

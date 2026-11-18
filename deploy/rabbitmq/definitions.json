@@ -1,0 +1,120 @@
+{
+  "rabbit_version": "4.3.6",
+  "vhosts": [
+    {
+      "name": "/"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "crm.events",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "crm_events_queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "crm.audit.lead-created.q",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "n8n.lead-qualification.q",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "n8n.lead-enrichment.q",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "n8n.lead-scoring.q",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "n8n.data-cleaning.q",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "n8n.follow-up-execution.q",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    }
+  ],
+  "bindings": [
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "crm.audit.lead-created.q",
+      "destination_type": "queue",
+      "routing_key": "lead.created",
+      "arguments": {}
+    },
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "n8n.lead-qualification.q",
+      "destination_type": "queue",
+      "routing_key": "lead.qualification.requested",
+      "arguments": {}
+    },
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "n8n.lead-enrichment.q",
+      "destination_type": "queue",
+      "routing_key": "lead.enrichment.requested",
+      "arguments": {}
+    },
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "n8n.lead-scoring.q",
+      "destination_type": "queue",
+      "routing_key": "lead.scoring.requested",
+      "arguments": {}
+    },
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "n8n.data-cleaning.q",
+      "destination_type": "queue",
+      "routing_key": "data.cleaning.requested",
+      "arguments": {}
+    },
+    {
+      "source": "crm.events",
+      "vhost": "/",
+      "destination": "n8n.follow-up-execution.q",
+      "destination_type": "queue",
+      "routing_key": "lead.follow_up.triggered",
+      "arguments": {}
+    }
+  ]
+}

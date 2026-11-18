@@ -79,7 +79,7 @@ export class NotificationsController {
   }
 
   /**
-   * Internal endpoint used by n8n workflows (WF01/WF08/WF09/WF10/WF11/WF12) to
+   * Internal endpoint used by n8n workflows (WF01/WF08/WF09/WF10/WF11/WF12/WF14) to
    * raise an in-app notification after the caller has been authorized and
    * correlated through the backend. Browsers never call this directly.
    */
@@ -114,7 +114,7 @@ export class NotificationsController {
       type: dto.type,
       title: dto.title,
       content: dto.content ?? dto.message ?? null,
-      severity: dto.severity ?? null,
+      severity: dto.severity ?? 'INFO',
       leadId: dto.leadId ?? null,
       customerId: dto.customerId ?? null,
       reviewTaskId: dto.reviewTaskId ?? null,

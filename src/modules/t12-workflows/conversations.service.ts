@@ -215,10 +215,19 @@ export class ConversationsService {
       .update(safeTranscript)
       .digest('hex');
 
-    // Deterministic client key: prefer explicitly passed key; fallback to meeting-scoped content hash (<= 159 chars, within varchar(180)) so repeated submissions without key are replay-safe without colliding across distinct meetings
-    const scopeKey = dto.meetingId
-      ? `meeting:${dto.meetingId}:content:${contentHash}`
-      : `content:${contentHash}`;
+    // Deterministic client key: prefer explicitly passed key; fallback hashes all scoped dimensions (meetingId, customerId, leadId, sourceType, contentHash) within varchar(180) so distinct entities/channels never collide with 409
+    const scopeDigest = createHash('sha256')
+      .update(
+        JSON.stringify({
+          meetingId: dto.meetingId || null,
+          customerId: dto.customerId || null,
+          leadId: dto.leadId || null,
+          sourceType: dto.sourceType || 'CALL',
+          contentHash,
+        }),
+      )
+      .digest('hex');
+    const scopeKey = `scope:${scopeDigest}`;
     const clientKey = dto.idempotencyKey?.trim() || scopeKey;
     const idempotencyKey = `wf09:${user.id}:${clientKey}`;
 
@@ -801,6 +810,135 @@ export class ConversationsService {
       createdCount: savedItems.length,
       actionItems: savedItems,
     };
+  }
+
+  async saveTranscriptActionItems(
+    transcriptId: string,
+    dto: SaveInternalActionItemsDto,
+  ) {
+    const transcript = await this.transcriptsRepository.findOne({
+      where: { id: transcriptId },
+    });
+    if (!transcript) {
+      throw new NotFoundException(`Transcript ${transcriptId} not found`);
+    }
+
+    const workflowRun = await this.workflowRunsRepository.findOne({
+      where: { id: transcript.workflowRunId, workflowName: WF09_NAME },
+    });
+    if (!workflowRun) {
+      throw new NotFoundException(
+        `WorkflowRun ${transcript.workflowRunId} not found for transcript ${transcriptId}`,
+      );
+    }
+
+    if (workflowRun.status !== WorkflowStatus.SUCCESS) {
+      return {
+        success: false,
+        skipped: true,
+        count: 0,
+        createdCount: 0,
+        actionItems: [],
+      };
+    }
+
+    const summary = await this.summariesRepository.findOne({
+      where: { transcriptId },
+    });
+    if (!summary) {
+      throw new NotFoundException(
+        `Summary not found for transcript ${transcriptId}`,
+      );
+    }
+
+    return this.saveInternalActionItems(summary.id, dto);
+  }
+
+  async notifyOwnerInternal(transcriptId: string, workflowRunId: string) {
+    const transcript = await this.transcriptsRepository.findOne({
+      where: { id: transcriptId },
+    });
+    if (!transcript) {
+      throw new NotFoundException(`Transcript ${transcriptId} not found`);
+    }
+
+    const workflowRun = await this.workflowRunsRepository.findOne({
+      where: { id: workflowRunId },
+    });
+    if (!workflowRun) {
+      throw new NotFoundException(`WorkflowRun ${workflowRunId} not found`);
+    }
+
+    if (
+      (transcript.workflowRunId &&
+        transcript.workflowRunId !== workflowRun.id) ||
+      workflowRun.workflowName !== WF09_NAME
+    ) {
+      throw new BadRequestException(
+        'WorkflowRun ID does not match transcript correlation',
+      );
+    }
+
+    if (
+      workflowRun.status !== WorkflowStatus.SUCCESS ||
+      !workflowRun.triggeredByUserId
+    ) {
+      return {
+        notified: false,
+        reason:
+          workflowRun.status !== WorkflowStatus.SUCCESS
+            ? 'RUN_NOT_SUCCESS'
+            : 'MISSING_RECIPIENT',
+      };
+    }
+
+    const idempotencyKey = `notif:wf09:${workflowRun.id}:completed`;
+    const existing =
+      typeof this.notificationsRepository.findOne === 'function'
+        ? await this.notificationsRepository.findOne({
+            where: { idempotencyKey },
+          })
+        : null;
+    if (existing) {
+      return {
+        notified: true,
+        notificationId: existing.id,
+        deduplicated: true,
+      };
+    }
+
+    try {
+      const notif = this.notificationsRepository.create({
+        userId: workflowRun.triggeredByUserId,
+        type: NotificationType.CONVERSATION_SUMMARY_READY,
+        title: 'Conversation Summary Ready',
+        content: 'AI summary has been generated for your conversation.',
+        leadId: workflowRun.leadId || null,
+        customerId: workflowRun.customerId || null,
+        idempotencyKey,
+      });
+      const saved = await this.notificationsRepository.save(notif);
+      return {
+        notified: true,
+        notificationId: saved.id,
+        deduplicated: false,
+      };
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) {
+        const concurrent =
+          typeof this.notificationsRepository.findOne === 'function'
+            ? await this.notificationsRepository.findOne({
+                where: { idempotencyKey },
+              })
+            : null;
+        return {
+          notified: true,
+          notificationId: concurrent?.id ?? null,
+          deduplicated: true,
+        };
+      }
+      throw error;
+    }
   }
 
   async getActionItems(summaryId: string, user: AuthenticatedUser) {

@@ -16,6 +16,20 @@ describe('T12-WF09 Workflow & Contract Verification', () => {
     workflowJson = JSON.parse(raw);
   });
 
+  it('conforms to the 12-functional-node T12 blueprint with shared error workflow and no hardcoded secrets', () => {
+    const functionalNodes = workflowJson.nodes.filter(
+      (n: any) => n.type !== 'n8n-nodes-base.stickyNote',
+    );
+    expect(functionalNodes).toHaveLength(12);
+    expect(workflowJson.settings?.errorWorkflow).toBe(
+      'T12 Shared Error Handler',
+    );
+
+    const raw = JSON.stringify(workflowJson);
+    expect(raw).not.toContain('secret-token');
+    expect(raw).not.toContain('crm-automation-n8n');
+  });
+
   describe('Issue 1: Webhook Header Authentication', () => {
     it('configures Header Auth on Webhook Trigger without hardcoded credentials in exported JSON', () => {
       const webhookNode = workflowJson.nodes.find(
@@ -29,9 +43,6 @@ describe('T12-WF09 Workflow & Contract Verification', () => {
           name: 'CRM Internal Webhook Header',
         },
       });
-      // Ensure no raw secret is stored
-      expect(JSON.stringify(webhookNode)).not.toContain('secret-token');
-      expect(JSON.stringify(webhookNode)).not.toContain('crm-automation-n8n');
     });
 
     it('rejects ingress requests with 401 UnauthorizedException when API key is missing or invalid (negative auth test)', () => {
@@ -52,24 +63,17 @@ describe('T12-WF09 Workflow & Contract Verification', () => {
           }),
         }) as unknown as ExecutionContext;
 
-      // 1. Missing header
       expect(() => guard.canActivate(createMockContext({}))).toThrow(
         UnauthorizedException,
       );
-
-      // 2. Invalid header
       expect(() =>
         guard.canActivate(
           createMockContext({ 'x-n8n-api-key': 'invalid-secret-key-attacker' }),
         ),
       ).toThrow(UnauthorizedException);
-
-      // 3. Empty header
       expect(() =>
         guard.canActivate(createMockContext({ 'x-n8n-api-key': '' })),
       ).toThrow(UnauthorizedException);
-
-      // 4. Valid header
       expect(
         guard.canActivate(
           createMockContext({ 'x-n8n-api-key': 'valid-crm-n8n-secret-12345' }),
@@ -88,7 +92,6 @@ describe('T12-WF09 Workflow & Contract Verification', () => {
       const expectedPath = 'internal/t12-wf09-conversation-summarizer';
       expect(webhookNode.parameters.path).toBe(expectedPath);
 
-      // Verify that N8nWorkflowDispatchService allowlist maps N8N_WF09_WEBHOOK_URL to this path
       const allowedPaths: Record<string, string> = {
         N8N_WF09_WEBHOOK_URL: 'internal/t12-wf09-conversation-summarizer',
       };
@@ -111,25 +114,43 @@ describe('T12-WF09 Workflow & Contract Verification', () => {
     });
   });
 
-  describe('Issue 3: Deduplication of Completion Notifications', () => {
-    it('removes duplicate un-idempotent HTTP Request: Notify Owner from n8n nodes and connections', () => {
+  describe('Issue 3: Idempotent Notification Gating & Callback Error Propagation', () => {
+    it('routes HTTP Request: Notify Owner through the SUCCESS-gated idempotent backend endpoint', () => {
       const notifyNode = workflowJson.nodes.find(
         (n: any) => n.name === 'HTTP Request: Notify Owner',
       );
-      expect(notifyNode).toBeUndefined();
+      expect(notifyNode).toBeDefined();
+      expect(notifyNode.parameters.url).toContain(
+        '/api/v1/internal/n8n/conversation-transcripts/',
+      );
+      expect(notifyNode.parameters.url).toContain('/notify');
+      expect(notifyNode.parameters.jsonBody).toContain('workflowRunId');
 
-      // Ensure HTTP Request: Save Pending Action Items routes directly to Code: Build Final Summary
       const actionItemsConnections =
         workflowJson.connections['HTTP Request: Save Pending Action Items'];
-      expect(actionItemsConnections).toBeDefined();
       expect(actionItemsConnections.main[0][0].node).toBe(
+        'HTTP Request: Notify Owner',
+      );
+      const notifyConnections =
+        workflowJson.connections['HTTP Request: Notify Owner'];
+      expect(notifyConnections.main[0][0].node).toBe(
         'Code: Build Final Summary',
       );
+    });
 
-      // Ensure no dangling Notify Owner in connections
-      expect(
-        workflowJson.connections['HTTP Request: Notify Owner'],
-      ).toBeUndefined();
+    it('configures retryOnFail without swallowing persistence or callback errors', () => {
+      for (const nodeName of [
+        'HTTP Request: Save Redacted Transcript',
+        'HTTP Request: Save Conversation Summary',
+        'HTTP Request: Save Pending Action Items',
+        'HTTP Request: Notify Owner',
+      ]) {
+        const node = workflowJson.nodes.find((n: any) => n.name === nodeName);
+        expect(node).toBeDefined();
+        expect(node.onError).toBeUndefined();
+        expect(node.retryOnFail).toBe(true);
+        expect(node.maxTries).toBeGreaterThanOrEqual(3);
+      }
     });
   });
 });

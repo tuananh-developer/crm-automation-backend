@@ -1431,5 +1431,132 @@ describe('ConversationsService', () => {
       expect(workflowRunsRepository.save).toHaveBeenCalledTimes(2);
       expect(transcriptsRepository.save).toHaveBeenCalledTimes(2);
     });
+
+    it('creates distinct fallback idempotency keys for different customers, leads, or sourceTypes when meetingId and idempotencyKey are omitted', async () => {
+      customersRepository.findOne.mockImplementation(({ where }: any) =>
+        Promise.resolve({ id: where.id, createdBy: mockSalesUser1.id }),
+      );
+      leadsRepository.findOne.mockImplementation(({ where }: any) =>
+        Promise.resolve({ id: where.id, ownerId: mockSalesUser1.id }),
+      );
+
+      workflowRunsRepository.findOne.mockResolvedValue(null);
+      let runCounter = 0;
+      workflowRunsRepository.create.mockImplementation((payload: any) => ({
+        id: `run-scope-${++runCounter}`,
+        status: WorkflowStatus.PENDING,
+        ...payload,
+      }));
+      workflowRunsRepository.save.mockImplementation((r: any) =>
+        Promise.resolve(r),
+      );
+
+      let txCounter = 0;
+      transcriptsRepository.create.mockImplementation((payload: any) => ({
+        id: `transcript-scope-${++txCounter}`,
+        createdAt: new Date(),
+        ...payload,
+      }));
+      transcriptsRepository.save.mockImplementation((t: any) =>
+        Promise.resolve(t),
+      );
+
+      const text = 'Identical transcript content without meetingId.';
+
+      await service.createTranscript(
+        { customerId: 'customer-1', sourceType: 'CALL', content: text },
+        mockSalesUser1,
+      );
+      await service.createTranscript(
+        { customerId: 'customer-2', sourceType: 'CALL', content: text },
+        mockSalesUser1,
+      );
+      await service.createTranscript(
+        { customerId: 'customer-1', sourceType: 'EMAIL', content: text },
+        mockSalesUser1,
+      );
+      await service.createTranscript(
+        { leadId: 'lead-1', sourceType: 'CALL', content: text },
+        mockSalesUser1,
+      );
+
+      const keys = workflowRunsRepository.create.mock.calls.map(
+        (call: any[]) => call[0].idempotencyKey as string,
+      );
+      expect(new Set(keys).size).toBe(4);
+      for (const k of keys) {
+        expect(k.length).toBeLessThanOrEqual(180);
+      }
+    });
+  });
+
+  describe('notifyOwnerInternal & saveTranscriptActionItems', () => {
+    it('does not create a notification when WorkflowRun is FAILED', async () => {
+      transcriptsRepository.findOne.mockResolvedValue({
+        id: 't-1',
+        workflowRunId: 'run-failed',
+      });
+      workflowRunsRepository.findOne.mockResolvedValue({
+        id: 'run-failed',
+        workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.FAILED,
+        triggeredByUserId: mockSalesUser1.id,
+      });
+
+      const res = await service.notifyOwnerInternal('t-1', 'run-failed');
+
+      expect(res).toEqual({ notified: false, reason: 'RUN_NOT_SUCCESS' });
+      expect(notificationsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('returns existing notification idempotently when already created by callback', async () => {
+      transcriptsRepository.findOne.mockResolvedValue({
+        id: 't-1',
+        workflowRunId: 'run-ok',
+      });
+      workflowRunsRepository.findOne.mockResolvedValue({
+        id: 'run-ok',
+        workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.SUCCESS,
+        triggeredByUserId: mockSalesUser1.id,
+      });
+      notificationsRepository.findOne = jest.fn().mockResolvedValue({
+        id: 'notif-existing',
+      });
+
+      const res = await service.notifyOwnerInternal('t-1', 'run-ok');
+
+      expect(res).toEqual({
+        notified: true,
+        notificationId: 'notif-existing',
+        deduplicated: true,
+      });
+      expect(notificationsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('skips saveTranscriptActionItems cleanly when WorkflowRun is FAILED', async () => {
+      transcriptsRepository.findOne.mockResolvedValue({
+        id: 't-1',
+        workflowRunId: 'run-failed',
+      });
+      workflowRunsRepository.findOne.mockResolvedValue({
+        id: 'run-failed',
+        workflowName: 't12-wf09-conversation-summarizer',
+        status: WorkflowStatus.FAILED,
+      });
+
+      const res = await service.saveTranscriptActionItems('t-1', {
+        actionItems: [{ title: 'Should be skipped' }],
+      });
+
+      expect(res).toEqual({
+        success: false,
+        skipped: true,
+        count: 0,
+        createdCount: 0,
+        actionItems: [],
+      });
+      expect(actionItemsRepository.save).not.toHaveBeenCalled();
+    });
   });
 });

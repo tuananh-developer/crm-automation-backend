@@ -20,7 +20,7 @@ export class CreateInternalNotificationDto {
   @ApiProperty({
     description: 'Notification category type',
     enum: NotificationType,
-    example: NotificationType.WORKFLOW_COMPLETED,
+    example: NotificationType.CUSTOMER_FEEDBACK_PROCESSED,
   })
   @IsNotEmpty()
   @IsEnum(NotificationType)

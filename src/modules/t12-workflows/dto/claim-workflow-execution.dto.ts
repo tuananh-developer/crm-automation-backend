@@ -20,6 +20,7 @@ export type ClaimableT12Workflow = (typeof CLAIMABLE_T12_WORKFLOWS)[number];
 export const FAILABLE_WORKFLOW_NAMES = [
   'lead-qualification',
   'UC10_DATA_CLEANING',
+  't12-wf09-conversation-summarizer',
   ...CLAIMABLE_T12_WORKFLOWS,
 ] as const;
 
