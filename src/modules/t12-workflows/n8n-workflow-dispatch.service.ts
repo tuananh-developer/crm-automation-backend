@@ -10,7 +10,8 @@ export type N8nWebhookKey =
   | 'N8N_WF05_WEBHOOK_URL'
   | 'N8N_WF10_WEBHOOK_URL'
   | 'N8N_WF11_WEBHOOK_URL'
-  | 'N8N_WF12_WEBHOOK_URL';
+  | 'N8N_WF12_WEBHOOK_URL'
+  | 'N8N_WF14_WEBHOOK_URL';
 
 @Injectable()
 export class N8nWorkflowDispatchService {
@@ -29,6 +30,7 @@ export class N8nWorkflowDispatchService {
       N8N_WF10_WEBHOOK_URL: 'internal/t12-wf10-next-best-action',
       N8N_WF11_WEBHOOK_URL: 'internal/t12-wf11-sales-meeting',
       N8N_WF12_WEBHOOK_URL: 'internal/t12-wf12-quote-proposal',
+      N8N_WF14_WEBHOOK_URL: 't12-wf14-customer-feedback',
     };
     if (allowedPaths[workflowUrlKey] !== workflowPath) {
       throw new InternalServerErrorException(

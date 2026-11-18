@@ -85,6 +85,10 @@ describe('Customer 360 Service-Key Authentication (E2E)', () => {
       getCustomerSegments: jest.fn().mockResolvedValue([]),
       findAll: jest.fn().mockResolvedValue({ data: [], total: 0 }),
       findOne: jest.fn().mockResolvedValue({ id: VALID_CUSTOMER_ID }),
+      findOneInternal: jest.fn().mockResolvedValue({ id: VALID_CUSTOMER_ID }),
+      claimAndGetCustomerProfile: jest
+        .fn()
+        .mockResolvedValue({ id: VALID_CUSTOMER_ID }),
       triggerCustomer360: jest.fn().mockResolvedValue({
         message: 'Triggered',
         workflowRunId: 'run-1',
@@ -288,10 +292,31 @@ describe('Customer 360 Service-Key Authentication (E2E)', () => {
         .set('x-n8n-api-key', N8N_KEY);
 
       expect(res.status).toBe(200);
-      expect(customersServiceMock.findOne).toHaveBeenCalledWith(
+      expect(customersServiceMock.findOneInternal).toHaveBeenCalledWith(
         VALID_CUSTOMER_ID,
-        null,
       );
+    });
+
+    it('POST /customers/:id/360/claim-and-profile succeeds with X-N8N-API-KEY and rejects missing key', async () => {
+      const payload = {
+        workflowRunId: 'a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d',
+        n8nExecutionId: 'exec-n8n-wf05-001',
+      };
+
+      const unauthRes = await request(app.getHttpServer())
+        .post(`/customers/${VALID_CUSTOMER_ID}/360/claim-and-profile`)
+        .send(payload);
+      expect(unauthRes.status).toBe(401);
+
+      const res = await request(app.getHttpServer())
+        .post(`/customers/${VALID_CUSTOMER_ID}/360/claim-and-profile`)
+        .set('x-n8n-api-key', N8N_KEY)
+        .send(payload);
+
+      expect(res.status).toBe(200);
+      expect(
+        customersServiceMock.claimAndGetCustomerProfile,
+      ).toHaveBeenCalledWith(VALID_CUSTOMER_ID, payload);
     });
 
     it.each([

@@ -23,6 +23,8 @@ import type { LeadScore } from '../lead-intelligence/entities/lead-score.entity.
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import type { LeadFollowUpEnrollment } from '../follow-up/entities/lead-follow-up-enrollment.entity.js';
 import type { FollowUpExecution } from '../follow-up/entities/follow-up-execution.entity.js';
+import type { CustomerFeedback } from '../feedback/entities/customer-feedback.entity.js';
+import type { WorkflowExecutionClaimsService } from '../t12-workflows/workflow-execution-claims.service.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 describe('CustomersService', () => {
@@ -1101,6 +1103,152 @@ describe('CustomersService', () => {
       ).rejects.toBeInstanceOf(ConflictException);
       expect(mockFailedRun.status).toBe(WorkflowStatus.FAILED);
       expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('claimAndGetCustomerProfile & lease renewal', () => {
+    let executionClaimsMock: jest.Mocked<
+      Pick<WorkflowExecutionClaimsService, 'claim' | 'heartbeat'>
+    >;
+    let feedbackRepoMock: jest.Mocked<Partial<Repository<CustomerFeedback>>>;
+    let serviceWithClaims: CustomersService;
+
+    beforeEach(() => {
+      executionClaimsMock = {
+        claim: jest.fn(),
+        heartbeat: jest.fn(),
+      };
+      feedbackRepoMock = {
+        count: jest.fn().mockResolvedValue(0),
+      };
+      serviceWithClaims = new CustomersService(
+        customersRepository as Repository<Customer>,
+        customerSegmentsRepository as Repository<CustomerSegment>,
+        segmentsRepository as Repository<Segment>,
+        leadsRepository as Repository<Lead>,
+        interactionsRepository as Repository<Interaction>,
+        qualificationsRepository as Repository<LeadQualification>,
+        enrichmentsRepository as Repository<LeadEnrichment>,
+        scoresRepository as Repository<LeadScore>,
+        workflowRunsRepository as Repository<WorkflowRun>,
+        enrollmentsRepository as Repository<LeadFollowUpEnrollment>,
+        executionsRepository as Repository<FollowUpExecution>,
+        configService as ConfigService,
+        dataSourceMock as DataSource,
+        dispatcherMock,
+        executionClaimsMock as unknown as WorkflowExecutionClaimsService,
+        feedbackRepoMock as Repository<CustomerFeedback>,
+      );
+    });
+
+    it('claims the WF05 WorkflowRun and returns the customer profile', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        convertedLeads: [],
+        customerSegments: [],
+      });
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue({
+        id: 'run-1',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+      });
+      executionClaimsMock.claim.mockResolvedValue({
+        claimed: true,
+        duplicate: false,
+        recovered: false,
+        status: WorkflowStatus.RUNNING,
+        leaseExpiresAt: new Date().toISOString(),
+      });
+
+      const result = await serviceWithClaims.claimAndGetCustomerProfile(
+        'customer-1',
+        { workflowRunId: 'run-1', n8nExecutionId: 'exec-1' },
+      );
+
+      expect(result.id).toBe('customer-1');
+      expect(executionClaimsMock.claim).toHaveBeenCalledWith({
+        workflowRunId: 'run-1',
+        workflowName: 't12-wf05-customer-360',
+        n8nExecutionId: 'exec-1',
+      });
+    });
+
+    it('throws ConflictException when another execution already owns the WorkflowRun', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue({
+        id: 'run-1',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+      });
+      executionClaimsMock.claim.mockResolvedValue({
+        claimed: false,
+        duplicate: false,
+        reason: 'ALREADY_CLAIMED',
+        status: WorkflowStatus.RUNNING,
+        leaseExpiresAt: new Date().toISOString(),
+      });
+
+      await expect(
+        serviceWithClaims.claimAndGetCustomerProfile('customer-1', {
+          workflowRunId: 'run-1',
+          n8nExecutionId: 'exec-duplicate',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('renews execution lease in getCustomerSegments for internal service calls', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        customerSegments: [{ segmentId: 'seg-1', segment: { name: 'VIP' } }],
+      });
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue({
+        id: 'run-1',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+      });
+      executionClaimsMock.heartbeat.mockResolvedValue({
+        renewed: true,
+        workflowRunId: 'run-1',
+        leaseExpiresAt: new Date().toISOString(),
+      });
+
+      const segments = await serviceWithClaims.getCustomerSegments(
+        'customer-1',
+        undefined,
+        'run-1',
+        'exec-1',
+      );
+
+      expect(segments).toHaveLength(1);
+      expect(executionClaimsMock.heartbeat).toHaveBeenCalledWith({
+        workflowRunId: 'run-1',
+        workflowName: 't12-wf05-customer-360',
+        n8nExecutionId: 'exec-1',
+      });
+    });
+
+    it('reports truthful customerFeedback sourceCoverage when CustomerFeedback repository is available', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        convertedLeads: [],
+        customerSegments: [],
+      });
+      (feedbackRepoMock.count as jest.Mock).mockResolvedValueOnce(2);
+
+      const withFeedback = await serviceWithClaims.getCustomer360(
+        'customer-1',
+        mockAdminUser,
+      );
+      expect(withFeedback.sourceCoverage.customerFeedback).toBe('AVAILABLE');
+
+      (feedbackRepoMock.count as jest.Mock).mockResolvedValueOnce(0);
+      const withoutFeedback = await serviceWithClaims.getCustomer360(
+        'customer-1',
+        mockAdminUser,
+      );
+      expect(withoutFeedback.sourceCoverage.customerFeedback).toBe('EMPTY');
     });
   });
 });

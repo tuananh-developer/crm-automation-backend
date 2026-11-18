@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { assertUrlUsesScheme } from '../../config/environment.validation.js';
+import {
+  assertPrivateN8nServiceUrl,
+  assertUrlUsesScheme,
+} from '../../config/environment.validation.js';
 import { Interval } from '@nestjs/schedule';
 import { DataSource } from 'typeorm';
 import { WorkflowRun } from '../../modules/workflow/entities/workflow-run.entity.js';
@@ -174,6 +177,21 @@ export class OutboxPublisher {
                 [workflowRunId],
               );
             }
+
+            if (
+              (failedRun.affected ?? 0) === 1 &&
+              event.destination === 'N8N_WF14_WEBHOOK_URL'
+            ) {
+              await manager.query(
+                `UPDATE customer_feedback
+                 SET status = 'FAILED', error_message = $2, updated_at = NOW()
+                 WHERE workflow_run_id = $1 AND status = 'NEW'`,
+                [
+                  workflowRunId,
+                  `n8n dispatch failed: ${message}`.slice(0, 1000),
+                ],
+              );
+            }
           }
         }
       });
@@ -189,6 +207,7 @@ export class OutboxPublisher {
       'N8N_WF10_WEBHOOK_URL',
       'N8N_WF11_WEBHOOK_URL',
       'N8N_WF12_WEBHOOK_URL',
+      'N8N_WF14_WEBHOOK_URL',
     ] as const;
     if (
       !event.destination ||
@@ -229,7 +248,13 @@ export class OutboxPublisher {
       .toLowerCase();
     if (nodeEnv === 'production') {
       try {
-        assertUrlUsesScheme(url, 'https:', event.destination);
+        const allowLocalInfra =
+          this.config.get<string>('ALLOW_LOCAL_INFRA_IN_PRODUCTION') === 'true';
+        if (allowLocalInfra && url.startsWith('http://')) {
+          assertPrivateN8nServiceUrl(url, event.destination);
+        } else {
+          assertUrlUsesScheme(url, 'https:', event.destination);
+        }
       } catch (error) {
         throw new PermanentOutboxError(
           error instanceof Error ? error.message : String(error),

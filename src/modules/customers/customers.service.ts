@@ -39,6 +39,9 @@ import {
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
 import { CustomerMapper } from './mappers/customer.mapper.js';
 import { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispatch.service.js';
+import { WorkflowExecutionClaimsService } from '../t12-workflows/workflow-execution-claims.service.js';
+import { CustomerFeedback } from '../feedback/entities/customer-feedback.entity.js';
+import type { ClaimCustomer360ProfileDto } from './dto/claim-customer-360-profile.dto.js';
 
 @Injectable()
 export class CustomersService {
@@ -85,6 +88,13 @@ export class CustomersService {
 
     @Optional()
     private readonly dispatcher?: N8nWorkflowDispatchService,
+
+    @Optional()
+    private readonly executionClaims?: WorkflowExecutionClaimsService,
+
+    @Optional()
+    @InjectRepository(CustomerFeedback)
+    private readonly feedbackRepository?: Repository<CustomerFeedback>,
   ) {}
 
   async findAll(
@@ -154,6 +164,75 @@ export class CustomersService {
         customer.createdBy !== actor.id)
     ) {
       throw new NotFoundException(`Customer with ID '${id}' not found`);
+    }
+
+    return CustomerMapper.toResponseDto(
+      Object.assign(customer, {
+        segmentCount: customer.customerSegments?.length ?? 0,
+      }),
+    );
+  }
+
+  async findOneInternal(id: string): Promise<CustomerResponseDto> {
+    return this.findOne(id);
+  }
+
+  /**
+   * Atomically claims a Customer 360 WorkflowRun and returns the customer CRM profile (T12-WF05).
+   * Prevents duplicate/replayed n8n executions from reading downstream sources or calling Gemini.
+   */
+  async claimAndGetCustomerProfile(
+    customerId: string,
+    dto: ClaimCustomer360ProfileDto,
+  ): Promise<CustomerResponseDto> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: {
+        creator: true,
+        convertedLeads: true,
+        customerSegments: {
+          segment: true,
+          assignedByUser: true,
+        },
+      },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+
+    const run = await this.workflowRunsRepository.findOne({
+      where: {
+        id: dto.workflowRunId,
+        customerId,
+        workflowName: 't12-wf05-customer-360',
+      },
+    });
+    if (!run) {
+      throw new NotFoundException(
+        `WorkflowRun '${dto.workflowRunId}' not found for Customer '${customerId}'`,
+      );
+    }
+
+    const claimsService =
+      this.executionClaims ??
+      (this.dataSource
+        ? new WorkflowExecutionClaimsService(this.dataSource)
+        : null);
+    if (!claimsService) {
+      throw new InternalServerErrorException(
+        'WorkflowExecutionClaimsService is unavailable',
+      );
+    }
+
+    const claim = await claimsService.claim({
+      workflowRunId: dto.workflowRunId,
+      workflowName: 't12-wf05-customer-360',
+      n8nExecutionId: dto.n8nExecutionId,
+    });
+    if (!claim.claimed) {
+      throw new ConflictException(
+        `WorkflowRun '${dto.workflowRunId}' is already claimed by another execution or is no longer active`,
+      );
     }
 
     return CustomerMapper.toResponseDto(
@@ -320,6 +399,12 @@ export class CustomersService {
       }),
     );
 
+    const feedbackCoverage = this.feedbackRepository
+      ? (await this.feedbackRepository.count({ where: { customerId } })) > 0
+        ? 'AVAILABLE'
+        : 'EMPTY'
+      : 'NOT_CONNECTED';
+
     return {
       customer: customerDto,
       convertedLeads: convertedLeads.map((l) => ({
@@ -412,7 +497,7 @@ export class CustomersService {
         segments:
           (customer.customerSegments || []).length > 0 ? 'AVAILABLE' : 'EMPTY',
         customerIssues: 'NOT_CONNECTED',
-        customerFeedback: 'NOT_CONNECTED',
+        customerFeedback: feedbackCoverage,
       },
       aiSummary,
       latestWorkflowRun: latestRun
@@ -534,10 +619,13 @@ export class CustomersService {
 
   /**
    * Retrieves segment memberships for a customer (for n8n Node 7).
+   * When called internally with workflowRunId and n8nExecutionId, renews the WF05 execution claim lease.
    */
   async getCustomerSegments(
     customerId: string,
     user?: AuthenticatedUser,
+    workflowRunId?: string,
+    n8nExecutionId?: string,
   ): Promise<any[]> {
     const customer = await this.customersRepository.findOne({
       where: { id: customerId },
@@ -550,6 +638,33 @@ export class CustomersService {
       throw new NotFoundException(`Customer with ID '${customerId}' not found`);
     }
     this.checkCustomerAccess(customer, user);
+
+    if (!user && workflowRunId && n8nExecutionId) {
+      const run = await this.workflowRunsRepository.findOne({
+        where: {
+          id: workflowRunId,
+          customerId,
+          workflowName: 't12-wf05-customer-360',
+        },
+      });
+      if (!run) {
+        throw new NotFoundException(
+          `WorkflowRun '${workflowRunId}' not found for Customer '${customerId}'`,
+        );
+      }
+      const claimsService =
+        this.executionClaims ??
+        (this.dataSource
+          ? new WorkflowExecutionClaimsService(this.dataSource)
+          : null);
+      if (claimsService) {
+        await claimsService.heartbeat({
+          workflowRunId,
+          workflowName: 't12-wf05-customer-360',
+          n8nExecutionId,
+        });
+      }
+    }
 
     return (customer.customerSegments || []).map((cs) => ({
       segmentId: cs.segmentId,

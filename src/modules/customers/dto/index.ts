@@ -8,3 +8,4 @@ export * from './customer-response.dto.js';
 export * from './customer-360-response.dto.js';
 export * from './trigger-customer-360.dto.js';
 export * from './customer-360-callback.dto.js';
+export * from './claim-customer-360-profile.dto.js';

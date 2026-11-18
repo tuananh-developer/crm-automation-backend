@@ -21,6 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { CustomersService } from './customers.service.js';
 import {
+  ClaimCustomer360ProfileDto,
   Customer360CallbackDto,
   Customer360CallbackResponseDto,
   Customer360ResponseDto,
@@ -34,6 +35,7 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 
 @ApiTags('Customers')
@@ -56,7 +58,26 @@ export class CustomersController {
     return this.customersService.findAll(query, actor);
   }
 
-  @Get([':id', ':id/internal'])
+  @Get(':id/internal')
+  @Public()
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal service read of customer details for n8n workflows',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the customer' })
+  @ApiResponse({ status: 200, type: CustomerResponseDto })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized internal service request.',
+  })
+  @ApiResponse({ status: 404, description: 'Customer not found.' })
+  findOneInternal(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<CustomerResponseDto> {
+    return this.customersService.findOneInternal(id);
+  }
+
+  @Get(':id')
   @UseGuards(JwtOrN8nAuthGuard)
   @ApiOperation({ summary: 'Get customer details by ID' })
   @ApiParam({ name: 'id', description: 'UUID of the customer' })
@@ -67,6 +88,32 @@ export class CustomersController {
     @CurrentUser() actor?: AuthenticatedUser,
   ): Promise<CustomerResponseDto> {
     return this.customersService.findOne(id, actor);
+  }
+
+  @Post(':id/360/claim-and-profile')
+  @Public()
+  @UseGuards(N8nAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Atomically claim a Customer 360 WorkflowRun and return CRM profile for n8n (T12-WF05)',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the customer' })
+  @ApiResponse({ status: 200, type: CustomerResponseDto })
+  @ApiResponse({ status: 401, description: 'Unauthorized n8n request.' })
+  @ApiResponse({
+    status: 404,
+    description: 'Customer or WorkflowRun not found.',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'WorkflowRun is already claimed or not active.',
+  })
+  claimAndGetCustomerProfile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ClaimCustomer360ProfileDto,
+  ): Promise<CustomerResponseDto> {
+    return this.customersService.claimAndGetCustomerProfile(id, dto);
   }
 
   @Get(':id/360')
@@ -137,10 +184,22 @@ export class CustomersController {
   @UseGuards(JwtOrN8nAuthGuard)
   @ApiOperation({ summary: 'Get segment memberships for Customer 360' })
   @ApiParam({ name: 'id', description: 'UUID of the customer' })
+  @ApiQuery({ name: 'workflowRunId', required: false, type: String })
+  @ApiQuery({ name: 'n8nExecutionId', required: false, type: String })
   getCustomerSegments(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user?: AuthenticatedUser,
+    @Query('workflowRunId') workflowRunId?: string,
+    @Query('n8nExecutionId') n8nExecutionId?: string,
   ) {
+    if (workflowRunId || n8nExecutionId) {
+      return this.customersService.getCustomerSegments(
+        id,
+        user,
+        workflowRunId,
+        n8nExecutionId,
+      );
+    }
     return this.customersService.getCustomerSegments(id, user);
   }
 

@@ -20,13 +20,19 @@ describe('T12-WF05 Customer 360 Workflow Contract', () => {
     workflow = JSON.parse(rawContent);
   });
 
-  it('contains valid workflow definition without hardcoded secret credentials', () => {
+  it('conforms to the 12-functional-node T12 blueprint with one trigger and no leaked secrets', () => {
     expect(workflow.name).toBe('T12-WF05 — AI Customer 360 Agent');
-    expect(Array.isArray(workflow.nodes)).toBe(true);
-    expect(workflow.nodes.length).toBeGreaterThan(0);
+    const functionalNodes = workflow.nodes.filter(
+      (n) => n.type !== 'n8n-nodes-base.stickyNote',
+    );
+    expect(functionalNodes).toHaveLength(12);
+
+    const triggers = functionalNodes.filter((node) =>
+      /(?:webhook|Trigger)$/i.test(String(node.type).split('.').at(-1) ?? ''),
+    );
+    expect(triggers).toHaveLength(1);
 
     const jsonString = JSON.stringify(workflow);
-    // Ensure no static secret keys or tokens are leaked into the exported JSON
     expect(jsonString).not.toMatch(/n8n_sec_[a-zA-Z0-9_-]{10,}/);
     expect(jsonString).not.toMatch(/Bearer\s+[a-zA-Z0-9_.-]{20,}/);
     expect(jsonString).not.toContain('test-n8n-secret');
@@ -41,103 +47,91 @@ describe('T12-WF05 Customer 360 Workflow Contract', () => {
       expect(webhookNode?.parameters?.path).toBe('t12-wf05-customer-360');
       expect(webhookNode?.parameters?.httpMethod).toBe('POST');
       expect(webhookNode?.parameters?.authentication).toBe('headerAuth');
+      expect(webhookNode?.credentials?.httpHeaderAuth?.id).toBe(
+        'CONFIGURE_AFTER_IMPORT',
+      );
       expect(webhookNode?.credentials?.httpHeaderAuth?.name).toBe(
         'CRM Internal Webhook Header',
       );
     });
   });
 
-  describe('Deduplication & Execution Claiming (P2: Lost-Ack Deduplication)', () => {
-    it('has an atomic claim node calling internal claim endpoint before customer data read and Gemini AI call', () => {
-      const claimNode = workflow.nodes.find(
-        (n) => n.name === 'HTTP Request: Claim Workflow Execution',
-      );
-      expect(claimNode).toBeDefined();
-      expect(claimNode?.parameters?.method).toBe('POST');
-      expect(claimNode?.parameters?.url).toContain(
-        '/api/v1/internal/n8n/workflow-executions/claim',
-      );
-      expect(claimNode?.parameters?.headerParameters?.parameters).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ name: 'X-N8N-API-KEY' }),
-        ]),
-      );
-
-      const jsonBody = claimNode?.parameters?.jsonBody || '';
-      expect(jsonBody).toContain("workflowName: 't12-wf05-customer-360'");
-      expect(jsonBody).toContain('workflowRunId:');
-      expect(jsonBody).toContain('n8nExecutionId:');
-    });
-
-    it('has a Stop Duplicate node that halts replayed or duplicate executions', () => {
-      const stopNode = workflow.nodes.find(
-        (n) => n.name === 'Code: Stop Duplicate Execution',
-      );
-      expect(stopNode).toBeDefined();
-      const code = stopNode?.parameters?.jsCode || '';
-      expect(code).toContain('claim.claimed !== true');
-      expect(code).toContain('return [];'); // Emits empty array to halt execution branch
-    });
-
-    it('wires Webhook Trigger directly to Claim and Stop Duplicate before processing payload', () => {
-      const webhookConnections =
-        workflow.connections['Webhook Trigger']?.main?.[0];
-      expect(webhookConnections).toBeDefined();
-      expect(
-        webhookConnections?.some(
-          (c: { node: string }) =>
-            c.node === 'HTTP Request: Claim Workflow Execution',
-        ),
-      ).toBe(true);
-
-      const claimConnections =
-        workflow.connections['HTTP Request: Claim Workflow Execution']
-          ?.main?.[0];
-      expect(claimConnections).toBeDefined();
-      expect(
-        claimConnections?.some(
-          (c: { node: string }) => c.node === 'Code: Stop Duplicate Execution',
-        ),
-      ).toBe(true);
-    });
-  });
-
-  describe('Customer Profile Read & Fail-Fast Integrity (P1: Profile 401 & Fail-Fast)', () => {
-    it('targets internal profile endpoint with X-N8N-API-KEY and does not silently proceed on failure', () => {
+  describe('Atomic Execution Claiming & Deduplication (P2: Lost-Ack Deduplication)', () => {
+    it('claims the WorkflowRun atomically in CRM Profile node before downstream reads or Gemini AI calls', () => {
       const profileNode = workflow.nodes.find(
         (n) => n.name === 'HTTP Request: CRM Profile',
       );
       expect(profileNode).toBeDefined();
-      expect(profileNode?.parameters?.url).toContain('/api/v1/customers/');
-      expect(profileNode?.parameters?.url).toContain('/internal');
+      expect(profileNode?.parameters?.method).toBe('POST');
+      expect(profileNode?.parameters?.url).toContain('/360/claim-and-profile');
+      expect(profileNode?.parameters?.headerParameters?.parameters).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'X-N8N-API-KEY' }),
+        ]),
+      );
+      expect(profileNode?.parameters?.jsonBody).toContain('workflowRunId:');
+      expect(profileNode?.parameters?.jsonBody).toContain('n8nExecutionId:');
 
-      // Crucial: continueRegularOutput must NOT be enabled, so HTTP 4xx/5xx errors halt the flow
+      // Must fail fast (no continueRegularOutput) so 401/404/409 aborts before downstream work
       expect(profileNode?.onError).toBeUndefined();
-      expect(profileNode?.continueRegularOutput).toBeFalsy();
+      expect(profileNode?.retryOnFail).toBe(true);
+      expect(profileNode?.maxTries).toBeGreaterThanOrEqual(3);
     });
 
-    it('merges customer timeline with fail-fast check when customer profile is absent', () => {
+    it('wires Webhook Trigger -> Validate Customer Request -> CRM Profile claim-and-profile', () => {
+      const webhookConnections =
+        workflow.connections['Webhook Trigger']?.main?.[0];
+      expect(webhookConnections).toContainEqual(
+        expect.objectContaining({ node: 'Code: Validate Customer Request' }),
+      );
+
+      const validateConnections =
+        workflow.connections['Code: Validate Customer Request']?.main?.[0];
+      expect(validateConnections).toContainEqual(
+        expect.objectContaining({ node: 'HTTP Request: CRM Profile' }),
+      );
+    });
+  });
+
+  describe('Customer Sources, Fail-Fast Integrity & Feedback Auth', () => {
+    it('requests customer feedback history with X-N8N-API-KEY from the canonical route', () => {
+      const feedbackNode = workflow.nodes.find(
+        (n) => n.name === 'HTTP Request: Get Issue/Feedback History',
+      );
+      expect(feedbackNode).toBeDefined();
+      expect(feedbackNode?.parameters?.method).toBe('GET');
+      expect(feedbackNode?.parameters?.url).toContain('/feedback');
+      expect(feedbackNode?.parameters?.headerParameters?.parameters).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'X-N8N-API-KEY' }),
+        ]),
+      );
+    });
+
+    it('merges customer timeline with fail-fast check on missing profile or lost claim lease', () => {
       const mergeNode = workflow.nodes.find(
         (n) => n.name === 'Code: Merge Customer Timeline',
       );
       expect(mergeNode).toBeDefined();
       const jsCode = mergeNode?.parameters?.jsCode || '';
       expect(jsCode).toContain('if (profileError || !profileRes?.id)');
+      expect(jsCode).toContain('getErrorStatus(segmentsRes) === 409');
       expect(jsCode).toContain('throw new Error');
+      expect(jsCode).toContain('feedbackList');
     });
   });
 
-  describe('Lease Heartbeat, Fencing & Error Handler Recovery', () => {
-    it('renews execution lease before Gemini AI synthesis and passes n8nExecutionId in callback', () => {
-      const heartbeatNode = workflow.nodes.find(
-        (n) => n.name === 'HTTP Request: Renew Execution Lease',
+  describe('Lease Renewal, Fencing & Terminal Callback Error Handling', () => {
+    it('renews execution lease in Get Segment Memberships before Gemini AI synthesis', () => {
+      const segmentsNode = workflow.nodes.find(
+        (n) => n.name === 'HTTP Request: Get Segment Memberships',
       );
-      expect(heartbeatNode).toBeDefined();
-      expect(heartbeatNode?.parameters?.url).toContain(
-        '/api/v1/internal/n8n/workflow-executions/heartbeat',
-      );
-      expect(heartbeatNode?.parameters?.jsonBody).toContain('n8nExecutionId:');
+      expect(segmentsNode).toBeDefined();
+      expect(segmentsNode?.parameters?.url).toContain('workflowRunId=');
+      expect(segmentsNode?.parameters?.url).toContain('&n8nExecutionId=');
+    });
 
+    it('passes n8nExecutionId in Save Snapshot callback and does not swallow callback errors', () => {
       const saveSnapshotNode = workflow.nodes.find(
         (n) => n.name === 'HTTP Request: Save Snapshot',
       );
@@ -145,6 +139,12 @@ describe('T12-WF05 Customer 360 Workflow Contract', () => {
       expect(saveSnapshotNode?.parameters?.jsonBody).toContain(
         'n8nExecutionId:',
       );
+      // Terminal callback must NOT use continueRegularOutput so 401/409/500/timeouts enter Error Handler
+      expect(saveSnapshotNode?.onError).toBeUndefined();
+      expect(saveSnapshotNode?.continueRegularOutput).toBeFalsy();
+      expect(saveSnapshotNode?.retryOnFail).toBe(true);
+      expect(saveSnapshotNode?.maxTries).toBeGreaterThanOrEqual(3);
+      expect(saveSnapshotNode?.parameters?.options?.timeout).toBeGreaterThan(0);
     });
 
     it('configures T12 Shared Error Handler for workflow failure recovery', () => {

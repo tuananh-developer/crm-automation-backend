@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Customer } from './entities/customer.entity.js';
+import { CustomerTask } from './entities/customer-task.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
+import { CustomerFeedback } from '../feedback/entities/customer-feedback.entity.js';
 import { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import { LeadQualification } from '../lead-intelligence/entities/lead-qualification.entity.js';
 import { LeadEnrichment } from '../lead-intelligence/entities/lead-enrichment.entity.js';
@@ -20,11 +22,14 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js';
 import { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispatch.service.js';
+import { WorkflowExecutionClaimsService } from '../t12-workflows/workflow-execution-claims.service.js';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Customer,
+      CustomerTask,
+      CustomerFeedback,
       Segment,
       CustomerSegment,
       Lead,
@@ -44,6 +49,7 @@ import { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispat
     SegmentsService,
     CustomersService,
     N8nWorkflowDispatchService,
+    WorkflowExecutionClaimsService,
     N8nAuthGuard,
     JwtOrN8nAuthGuard,
   ],

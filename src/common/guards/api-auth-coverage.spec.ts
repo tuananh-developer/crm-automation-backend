@@ -86,6 +86,20 @@ describe('API authentication guard coverage', () => {
     )?.value as object;
     const callbackGuards = Reflect.getMetadata('__guards__', callbackHandler);
     expect(callbackGuards).toContain(N8nAuthGuard);
+
+    for (const internalMethod of [
+      'findOneInternal',
+      'claimAndGetCustomerProfile',
+    ] as const) {
+      const handler = Object.getOwnPropertyDescriptor(
+        CustomersController.prototype,
+        internalMethod,
+      )?.value as object;
+      expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBe(true);
+      expect(Reflect.getMetadata('__guards__', handler)).toContain(
+        N8nAuthGuard,
+      );
+    }
   });
 
   it.each([
