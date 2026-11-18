@@ -15,7 +15,7 @@
       "position": [100, 300],
       "credentials": {
         "rabbitmq": {
-          "id": "EJyxO5a1fpGmbLj0",
+          "id": "CONFIGURE_AFTER_IMPORT",
           "name": "RabbitMQ account"
         }
       }
@@ -52,6 +52,9 @@
         }
       },
       "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-3-get-lead",
       "name": "HTTP Request: Get Lead",
       "type": "n8n-nodes-base.httpRequest",
@@ -86,14 +89,13 @@
           ]
         },
         "options": {
-          "timeout": 15000,
-          "retry": {
-            "maxTries": 3,
-            "waitBetweenTries": 2000
-          }
+          "timeout": 15000
         }
       },
       "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
       "id": "node-5-mock-enrichment-adapter",
       "name": "HTTP Request: Mock Enrichment Adapter",
       "type": "n8n-nodes-base.httpRequest",
@@ -141,13 +143,12 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json) }}",
         "options": {
-          "timeout": 15000,
-          "retry": {
-            "maxTries": 3,
-            "waitBetweenTries": 2000
-          }
+          "timeout": 15000
         }
       },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
       "id": "node-8-enrichment-callback",
       "name": "HTTP Request: Enrichment Callback",
       "type": "n8n-nodes-base.httpRequest",
@@ -201,12 +202,15 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"type\": \"WORKFLOW_COMPLETED\",\n  \"title\": \"Lead Enrichment Incomplete\",\n  \"message\": \"Lead enrichment ended with status: {{ $('Code: Validate Completeness').item.json.status }}. {{ $('Code: Validate Completeness').item.json.errorMessage || '' }}\",\n  \"severity\": \"{{ $('Code: Validate Completeness').item.json.status === 'FAILED' ? 'HIGH' : 'MEDIUM' }}\",\n  \"leadId\": \"{{ $('Code: Validate Completeness').item.json.leadId }}\"{{ ($('HTTP Request: Get Lead').item.json.ownerId || $('HTTP Request: Get Lead').item.json.createdBy) ? ',\n  \"userId\": \"' + ($('HTTP Request: Get Lead').item.json.ownerId || $('HTTP Request: Get Lead').item.json.createdBy) + '\"' : '' }}\n}",
+        "jsonBody": "={{ (() => { const val = $('Code: Validate Completeness').item.json; const leadHttp = $('HTTP Request: Get Lead').item.json || {}; const extractedLead = $('Code: Extract Domain').item.json.lead || {}; const recipientUserId = leadHttp.ownerId || leadHttp.createdBy || extractedLead.ownerId || extractedLead.createdBy || null; return JSON.stringify({ type: 'WORKFLOW_COMPLETED', title: 'Lead Enrichment Incomplete', message: 'Lead enrichment ended with status: ' + val.status + (val.errorMessage ? '. ' + val.errorMessage : ''), severity: val.status === 'FAILED' ? 'HIGH' : 'MEDIUM', leadId: val.leadId, idempotencyKey: 'notif:wf02:' + val.workflowRunId, ...(recipientUserId ? { userId: recipientUserId } : {}) }); })() }}",
         "options": {
           "timeout": 10000
         }
       },
       "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-10-backend-notification",
       "name": "HTTP Request: Backend Notification",
       "type": "n8n-nodes-base.httpRequest",

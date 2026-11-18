@@ -81,7 +81,7 @@ export class NotificationsService {
     return result.affected ?? 0;
   }
 
-  /** Used by other modules (UC06, UC07) to raise an in-app notification. */
+  /** Used by other modules (UC06, UC07, WF14) to raise an in-app notification. */
   async create(input: CreateNotificationInput): Promise<Notification> {
     let targetUserId = input.userId;
 
@@ -105,10 +105,10 @@ export class NotificationsService {
       type: input.type,
       title: input.title,
       content: input.content ?? input.message ?? null,
+      severity: input.severity ?? NotificationSeverity.INFO,
       leadId: input.leadId ?? null,
       customerId: input.customerId ?? null,
       reviewTaskId: input.reviewTaskId ?? null,
-      severity: input.severity ?? NotificationSeverity.INFO,
     };
 
     const idempotencyKey = input.idempotencyKey?.trim() || null;
@@ -116,17 +116,16 @@ export class NotificationsService {
       idempotencyKey
         ? this.notificationRepository.findOne({ where: { idempotencyKey } })
         : Promise.resolve(null);
-
     const reuseExisting = (existing: Notification) => {
       const existingPayload = {
         userId: existing.userId,
         type: existing.type,
         title: existing.title,
         content: existing.content,
+        severity: existing.severity ?? NotificationSeverity.INFO,
         leadId: existing.leadId,
         customerId: existing.customerId,
         reviewTaskId: existing.reviewTaskId,
-        severity: existing.severity ?? NotificationSeverity.INFO,
       };
       if (!hasSamePayload(existingPayload, payload)) {
         throw new ConflictException(

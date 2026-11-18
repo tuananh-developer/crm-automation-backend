@@ -1936,9 +1936,12 @@ describe('LeadIntelligenceService', () => {
       name: string;
       type: string;
       onError?: string;
+      retryOnFail?: boolean;
+      credentials?: Record<string, { id?: string; name?: string }>;
       parameters: {
         queue?: string;
         jsCode?: string;
+        jsonBody?: string;
       };
     }
 
@@ -1962,6 +1965,76 @@ describe('LeadIntelligenceService', () => {
       const triggerNode = findNode('RabbitMQ Trigger');
       expect(triggerNode.parameters.queue).toBe(LEAD_ENRICHMENT_QUEUE);
       expect(triggerNode.parameters.queue).toBe('n8n.lead-enrichment.q');
+      expect(triggerNode.credentials?.rabbitmq?.id).toBe(
+        'CONFIGURE_AFTER_IMPORT',
+      );
+      expect(workflowJson.nodes).toHaveLength(12);
+
+      const httpNodes = workflowJson.nodes.filter(
+        (node) => node.type === 'n8n-nodes-base.httpRequest',
+      );
+      expect(httpNodes).toHaveLength(4);
+      for (const node of httpNodes) {
+        expect(node.retryOnFail).toBe(true);
+      }
+
+      const notifNode = findNode('HTTP Request: Backend Notification');
+      expect(notifNode.parameters.jsonBody).toContain('JSON.stringify');
+      expect(notifNode.parameters.jsonBody).toContain('idempotencyKey');
+    });
+
+    it('treats HTTP and adapter errors as terminal failures without fabricating firmographics', () => {
+      const normalizeProviderNode = findNode('Code: Normalize Provider Result');
+      const runNormalizeProvider = (response: Record<string, unknown>) => {
+        const fn = new Function(
+          '$input',
+          '$',
+          normalizeProviderNode.parameters.jsCode ?? '',
+        ) as (
+          input: { first: () => { json: Record<string, unknown> } },
+          nodeLookup: (name: string) => {
+            first: () => { json: Record<string, unknown> };
+          },
+        ) => Array<{ json: Record<string, unknown> }>;
+
+        return fn({ first: () => ({ json: response }) }, () => ({
+          first: () => ({
+            json: {
+              leadId: '11111111-1111-4111-8111-111111111111',
+              workflowRunId: '22222222-2222-4222-8222-222222222222',
+              leadSource: 'BACKEND_INTERNAL_API',
+              degradedLeadRead: false,
+              leadReadError: null,
+            },
+          }),
+        }));
+      };
+
+      const http500Result = runNormalizeProvider({
+        statusCode: 500,
+        message: 'Adapter upstream failed',
+      });
+      expect(http500Result[0].json).toEqual(
+        expect.objectContaining({
+          isHttpError: true,
+          companyName: null,
+          industry: null,
+          companySize: null,
+          errorMessage: 'Adapter upstream failed',
+        }),
+      );
+
+      const connErrResult = runNormalizeProvider({
+        code: 'ECONNREFUSED',
+        error: { message: 'connect ECONNREFUSED 127.0.0.1:3000' },
+      });
+      expect(connErrResult[0].json).toEqual(
+        expect.objectContaining({
+          isHttpError: true,
+          companyName: null,
+          errorMessage: 'connect ECONNREFUSED 127.0.0.1:3000',
+        }),
+      );
     });
 
     it('rejects RabbitMQ events missing a valid workflowRunId or leadId UUID in Code: Normalize Event', () => {
