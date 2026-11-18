@@ -37,6 +37,19 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
       expect(fs.existsSync(workflowPath)).toBe(true);
       const wf = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
       expect(wf.nodes).toHaveLength(12);
+
+      const trigger = wf.nodes.find(
+        (n: { name: string }) => n.name === 'RabbitMQ Trigger',
+      );
+      expect(trigger?.credentials?.rabbitmq?.id).toBe('CONFIGURE_AFTER_IMPORT');
+
+      const httpNodes = wf.nodes.filter(
+        (n: { type: string }) => n.type === 'n8n-nodes-base.httpRequest',
+      );
+      expect(httpNodes).toHaveLength(7);
+      for (const node of httpNodes) {
+        expect(node.retryOnFail).toBe(true);
+      }
     });
 
     it('configures RabbitMQ trigger queue to match backend publisher constant LEAD_SCORING_QUEUE', () => {

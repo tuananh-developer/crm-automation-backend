@@ -20,6 +20,7 @@ import { AuditModule } from './modules/audit/audit.module.js';
 import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module.js';
+import { FeedbackModule } from './modules/feedback/feedback.module.js';
 import { T12WorkflowsModule } from './modules/t12-workflows/t12-workflows.module.js';
 import { CommunicationModule } from './modules/communication/communication.module.js';
 import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
@@ -60,15 +61,22 @@ import { validateEnvironmentConfiguration } from './config/environment.validatio
           (config.get<string>('NODE_ENV') || '').trim().toLowerCase() ===
           'production';
         const useLocalDb = config.get<string>('USE_LOCAL_DB') === 'true';
+        const allowLocalInfra =
+          config.get<string>('ALLOW_LOCAL_INFRA_IN_PRODUCTION') === 'true';
         const dbUrl = config.get<string>('DATABASE_URL')?.trim();
 
-        if (isProd && (useLocalDb || !dbUrl)) {
+        if (isProd && !useLocalDb && !dbUrl) {
+          throw new Error('FATAL: DATABASE_URL is required in production');
+        }
+        if (isProd && useLocalDb && !allowLocalInfra) {
           throw new Error(
-            'FATAL: DATABASE_URL is required in production and USE_LOCAL_DB must not be true',
+            'FATAL: USE_LOCAL_DB in production requires ALLOW_LOCAL_INFRA_IN_PRODUCTION=true',
           );
         }
 
-        // Connect to remote database (Neon / Supabase) if in production or DATABASE_URL provided without USE_LOCAL_DB
+        // Remote managed PostgreSQL is the production default. A private Docker
+        // Compose database is available only through the explicit, validated
+        // ALLOW_LOCAL_INFRA_IN_PRODUCTION mode.
         if (!useLocalDb && dbUrl) {
           const sslCa = config
             .get<string>('DB_SSL_CA')
@@ -88,7 +96,6 @@ import { validateEnvironmentConfiguration } from './config/environment.validatio
           };
         }
 
-        // Development mode: Fallback to local Docker Postgres (crm_postgres)
         const localHost =
           config.get<string>('LOCAL_DB_HOST') ||
           config.get<string>('DB_HOST') ||
@@ -134,6 +141,7 @@ import { validateEnvironmentConfiguration } from './config/environment.validatio
     AuditModule,
     AuthModule,
     DataCleaningModule,
+    FeedbackModule,
     T12WorkflowsModule,
     CommunicationModule,
     ThrottlerModule.forRoot([

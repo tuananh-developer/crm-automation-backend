@@ -57,6 +57,42 @@ describe('RabbitMQService', () => {
     expect(service.getRabbitmqUrl()).toBe('amqps://broker.example.test/vhost');
   });
 
+  it('uses the private Compose broker only when explicitly enabled in production', () => {
+    configService.get.mockImplementation((key: string) => {
+      const values: Record<string, string> = {
+        NODE_ENV: 'production',
+        ALLOW_LOCAL_INFRA_IN_PRODUCTION: 'true',
+        USE_LOCAL_AMQP: 'true',
+        LOCAL_RABBITMQ_HOST: 'rabbitmq',
+        LOCAL_RABBITMQ_PORT: '5672',
+        LOCAL_RABBITMQ_USER: 'crm_broker',
+        LOCAL_RABBITMQ_PASSWORD: 'rabbit-secret-' + 'x'.repeat(40),
+      };
+      return values[key];
+    });
+
+    expect(service.getRabbitmqUrl()).toBe(
+      'amqp://crm_broker:rabbit-secret-' + 'x'.repeat(40) + '@rabbitmq:5672',
+    );
+  });
+
+  it('rejects local production RabbitMQ without the explicit infrastructure flag', () => {
+    configService.get.mockImplementation((key: string) => {
+      const values: Record<string, string> = {
+        NODE_ENV: 'production',
+        USE_LOCAL_AMQP: 'true',
+        LOCAL_RABBITMQ_HOST: 'rabbitmq',
+        LOCAL_RABBITMQ_USER: 'crm_broker',
+        LOCAL_RABBITMQ_PASSWORD: 'rabbit-secret-' + 'x'.repeat(40),
+      };
+      return values[key];
+    });
+
+    expect(() => service.getRabbitmqUrl()).toThrow(
+      'ALLOW_LOCAL_INFRA_IN_PRODUCTION=true',
+    );
+  });
+
   it('fails fast when CloudAMQP is explicitly enabled without a URL', () => {
     configService.get.mockImplementation((key: string) =>
       key === 'USE_CLOUD_AMQP' ? 'true' : undefined,

@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEnum,
   IsNotEmpty,
@@ -5,7 +6,6 @@ import {
   IsString,
   IsUUID,
 } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   NotificationSeverity,
   NotificationType,
@@ -14,53 +14,65 @@ import {
 export class CreateInternalNotificationDto {
   @ApiPropertyOptional({
     description:
-      'Target user ID. If omitted, will be resolved from lead owner.',
+      'Recipient user UUID. If omitted, will be resolved from lead owner.',
+    format: 'uuid',
   })
   @IsOptional()
-  @IsUUID()
+  @IsUUID('4')
   userId?: string;
 
-  @ApiProperty({ enum: NotificationType, description: 'Notification type' })
+  @ApiProperty({
+    description: 'Notification category type',
+    enum: NotificationType,
+    example: NotificationType.WORKFLOW_COMPLETED,
+  })
   @IsNotEmpty()
-  @IsString()
-  type!: NotificationType | string;
+  @IsEnum(NotificationType)
+  type!: NotificationType;
 
   @ApiProperty({ description: 'Notification title' })
   @IsNotEmpty()
   @IsString()
   title!: string;
 
-  @ApiPropertyOptional({ description: 'Notification message or content' })
+  @ApiPropertyOptional({ description: 'Notification message body' })
   @IsOptional()
   @IsString()
   message?: string;
 
-  @ApiPropertyOptional({ description: 'Notification content alias' })
+  @ApiPropertyOptional({ description: 'Alternative notification content body' })
   @IsOptional()
   @IsString()
   content?: string;
 
   @ApiPropertyOptional({
+    description: 'Severity level',
     enum: NotificationSeverity,
-    description: 'Notification severity',
+    default: NotificationSeverity.INFO,
   })
   @IsOptional()
   @IsEnum(NotificationSeverity)
   severity?: NotificationSeverity;
 
-  @ApiPropertyOptional({ description: 'Associated lead ID' })
+  @ApiPropertyOptional({ description: 'Associated lead UUID', format: 'uuid' })
   @IsOptional()
-  @IsUUID()
+  @IsUUID('4')
   leadId?: string;
 
-  @ApiPropertyOptional({ description: 'Associated customer ID' })
+  @ApiPropertyOptional({
+    description: 'Associated customer UUID',
+    format: 'uuid',
+  })
   @IsOptional()
-  @IsUUID()
+  @IsUUID('4')
   customerId?: string;
 
-  @ApiPropertyOptional({ description: 'Associated review task ID' })
+  @ApiPropertyOptional({
+    description: 'Associated review task UUID',
+    format: 'uuid',
+  })
   @IsOptional()
-  @IsUUID()
+  @IsUUID('4')
   reviewTaskId?: string;
 
   @ApiPropertyOptional({ description: 'Idempotency key for deduplication' })

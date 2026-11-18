@@ -18,7 +18,7 @@
       ],
       "credentials": {
         "rabbitmq": {
-          "id": "EJyxO5a1fpGmbLj0",
+          "id": "CONFIGURE_AFTER_IMPORT",
           "name": "RabbitMQ account"
         }
       }
@@ -58,6 +58,9 @@
         }
       },
       "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-3-get-lead",
       "name": "HTTP Request: Get Lead",
       "type": "n8n-nodes-base.httpRequest",
@@ -89,6 +92,9 @@
         }
       },
       "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-4-get-latest-qualification",
       "name": "HTTP Request: Get Latest Qualification",
       "type": "n8n-nodes-base.httpRequest",
@@ -120,6 +126,9 @@
         }
       },
       "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-5-get-latest-enrichment",
       "name": "HTTP Request: Get Latest Enrichment",
       "type": "n8n-nodes-base.httpRequest",
@@ -151,6 +160,9 @@
         }
       },
       "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-6-get-interactions",
       "name": "HTTP Request: Get Interactions",
       "type": "n8n-nodes-base.httpRequest",
@@ -197,6 +209,9 @@
           "timeout": 15000
         }
       },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
       "id": "node-8-evaluate-scoring-policy",
       "name": "HTTP Request: Evaluate Backend Scoring Policy",
       "type": "n8n-nodes-base.httpRequest",
@@ -247,6 +262,9 @@
           }
         }
       },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
       "id": "node-10-scoring-callback",
       "name": "HTTP Request: Scoring Callback",
       "type": "n8n-nodes-base.httpRequest",
@@ -306,11 +324,14 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  type: 'WORKFLOW_COMPLETED',\n  title: '🔥 Hot Lead Opportunity',\n  message: 'Lead scored ' + $('Code: Validate Canonical Score').item.json.score + ' (HOT). Immediate sales outreach recommended.',\n  severity: 'HIGH',\n  leadId: $('Code: Validate Canonical Score').item.json.leadId,\n  userId: $('HTTP Request: Get Lead').item.json.ownerId || $('Code: Aggregate Features').item.json.lead?.ownerId || undefined,\n  idempotencyKey: 'wf04:' + $('Code: Validate Canonical Score').item.json.workflowRunId + ':hot:' + ($('HTTP Request: Get Lead').item.json.ownerId || $('Code: Aggregate Features').item.json.lead?.ownerId || '')\n}) }}",
+        "jsonBody": "={{ (() => { const val = $('Code: Validate Canonical Score').item.json; const getLead = $('HTTP Request: Get Lead').item.json || {}; const aggLead = $('Code: Aggregate Features').item.json.lead || {}; const recipientUserId = getLead.ownerId || getLead.createdBy || aggLead.ownerId || aggLead.createdBy || null; return JSON.stringify({ type: 'WORKFLOW_COMPLETED', title: '🔥 Hot Lead Opportunity', message: 'Lead scored ' + val.score + ' (HOT). Immediate sales outreach recommended.', severity: 'HIGH', leadId: val.leadId, ...(recipientUserId ? { userId: recipientUserId } : {}), idempotencyKey: 'wf04:' + val.workflowRunId + ':hot:' + (recipientUserId || 'unassigned') }); })() }}",
         "options": {
           "timeout": 10000
         }
       },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "id": "node-12-backend-next-action",
       "name": "HTTP Request: Backend Next-Action/Notification",
       "type": "n8n-nodes-base.httpRequest",

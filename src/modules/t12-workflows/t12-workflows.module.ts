@@ -84,6 +84,7 @@ const ENTITIES = [
     WorkflowExecutionClaimsService,
   ],
   exports: [
+    N8nWorkflowDispatchService,
     NextBestActionsService,
     SalesMeetingsService,
     QuotesService,
