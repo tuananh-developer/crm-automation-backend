@@ -12,15 +12,15 @@ import {
 } from '../enums/notification.enum.js';
 
 export class CreateInternalNotificationDto {
-  @ApiProperty({ description: 'Recipient user UUID', format: 'uuid' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ description: 'Recipient user UUID', format: 'uuid' })
+  @IsOptional()
   @IsUUID('4')
-  userId!: string;
+  userId?: string;
 
   @ApiProperty({
     description: 'Notification category type',
     enum: NotificationType,
-    example: NotificationType.CUSTOMER_FEEDBACK_PROCESSED,
+    example: NotificationType.WORKFLOW_COMPLETED,
   })
   @IsNotEmpty()
   @IsEnum(NotificationType)
@@ -47,8 +47,8 @@ export class CreateInternalNotificationDto {
     default: NotificationSeverity.INFO,
   })
   @IsOptional()
-  @IsString()
-  severity?: string;
+  @IsEnum(NotificationSeverity)
+  severity?: NotificationSeverity;
 
   @ApiPropertyOptional({ description: 'Associated lead UUID', format: 'uuid' })
   @IsOptional()
@@ -70,4 +70,9 @@ export class CreateInternalNotificationDto {
   @IsOptional()
   @IsUUID('4')
   reviewTaskId?: string;
+
+  @ApiPropertyOptional({ description: 'Idempotency key for deduplication' })
+  @IsOptional()
+  @IsString()
+  idempotencyKey?: string;
 }

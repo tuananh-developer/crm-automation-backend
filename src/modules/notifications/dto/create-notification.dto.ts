@@ -1,8 +1,9 @@
 import { IsOptional, IsString, IsUUID, Length } from 'class-validator';
 
 export class CreateNotificationDto {
+  @IsOptional()
   @IsUUID()
-  userId!: string;
+  userId?: string;
 
   @IsString()
   @Length(1, 50)

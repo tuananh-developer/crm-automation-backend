@@ -30,20 +30,14 @@ export class Notification {
   @Column({ name: 'type', type: 'varchar', length: 50 })
   type!: string;
 
-  @Column({
-    name: 'severity',
-    type: 'varchar',
-    length: 30,
-    nullable: true,
-    default: 'INFO',
-  })
-  severity?: string | null;
-
   @Column({ name: 'title', type: 'varchar', length: 255 })
   title!: string;
 
   @Column({ name: 'content', type: 'text', nullable: true })
   content!: string | null;
+
+  @Column({ name: 'severity', type: 'varchar', length: 30, default: 'INFO' })
+  severity!: string;
 
   @Column({ name: 'lead_id', type: 'uuid', nullable: true })
   leadId!: string | null;

@@ -121,7 +121,11 @@ export class LeadsService {
     try {
       const savedLead = await this.dataSource.transaction(async (manager) => {
         const persistedLead = await manager.save(Lead, lead);
-        await this.rabbitmqService.enqueueEvent(manager, CRM_EVENTS.LEAD_CREATED, { leadId: persistedLead.id });
+        await this.rabbitmqService.enqueueEvent(
+          manager,
+          CRM_EVENTS.LEAD_CREATED,
+          { leadId: persistedLead.id },
+        );
         return persistedLead;
       });
       this.logger.log(`Created new lead ${savedLead.id} (${savedLead.email})`);
@@ -218,6 +222,11 @@ export class LeadsService {
   ): Promise<LeadResponseDto> {
     const lead = await this.findLeadEntity(id);
     this.assertLeadAccess(lead, actor);
+    return LeadMapper.toResponseDto(lead);
+  }
+
+  async findOneInternal(id: string): Promise<LeadResponseDto> {
+    const lead = await this.findLeadEntity(id);
     return LeadMapper.toResponseDto(lead);
   }
 
