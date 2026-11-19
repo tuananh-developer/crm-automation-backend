@@ -838,7 +838,119 @@ describe('SegmentsService', () => {
 
       expect(result.status).toBe(WorkflowStatus.SUCCESS);
       expect(duplicate).toEqual(result);
+      expect(workflowRunRepository.findOne).toHaveBeenCalledWith({
+        where: { id: run.id },
+        lock: { mode: 'pessimistic_write' },
+      });
       expect(workflowRunRepository.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('serializes concurrent conflicting SUCCESS and FAILED callbacks with a pessimistic write lock and preserves the first committed terminal result', async () => {
+      const run = Object.assign(new WorkflowRun(), {
+        id: 'workflow-run-race-1',
+        workflowName: 'WF07_CUSTOMER_SEGMENTATION',
+        inputPayload: { segmentId: 'segment-1' },
+        outputPayload: null,
+        status: WorkflowStatus.RUNNING,
+        finishedAt: null,
+        errorMessage: null,
+      });
+
+      const txManager = {
+        getRepository: jest.fn(() => workflowRunRepository),
+      };
+      (
+        workflowRunRepository as unknown as {
+          manager: {
+            transaction: (
+              cb: (manager: typeof txManager) => Promise<unknown>,
+            ) => Promise<unknown>;
+          };
+        }
+      ).manager = {
+        transaction: jest.fn((cb) => cb(txManager)),
+      };
+
+      (workflowRunRepository.findOne as jest.Mock).mockImplementation(
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          return run;
+        },
+      );
+      (workflowRunRepository.save as jest.Mock).mockImplementation(
+        async (updated: WorkflowRun) => {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          Object.assign(run, updated);
+          return run;
+        },
+      );
+
+      const successCallback: SegmentWorkflowCallbackDto = {
+        workflowRunId: run.id,
+        segmentId: 'segment-1',
+        segmentName: 'Enterprise Tech',
+        status: 'SUCCESS',
+        statistics: {
+          total: 10,
+          processed: 10,
+          matched: 4,
+          unmatched: 6,
+          matchRate: '40.00%',
+        },
+        aiInsights: [
+          {
+            insight: 'Matched 4 of 10 customers',
+            evidence: 'matched=4',
+            confidence: 0.95,
+          },
+        ],
+        rejectedInsights: 0,
+      };
+
+      const lateFailedCallback: SegmentWorkflowCallbackDto = {
+        workflowRunId: run.id,
+        segmentId: 'segment-1',
+        segmentName: 'Enterprise Tech',
+        status: 'FAILED',
+        statistics: {
+          total: 10,
+          processed: 0,
+          matched: 0,
+          unmatched: 10,
+          matchRate: '0%',
+        },
+        aiInsights: [],
+        rejectedInsights: 0,
+        errorMessage: 'Late conflicting failure callback',
+      };
+
+      const [firstOutcome, secondOutcome] = await Promise.all([
+        service.handleWorkflowCallback(successCallback),
+        service.handleWorkflowCallback(lateFailedCallback),
+      ]);
+
+      expect(firstOutcome).toEqual({
+        success: true,
+        workflowRunId: run.id,
+        status: WorkflowStatus.SUCCESS,
+      });
+      expect(secondOutcome).toEqual({
+        success: true,
+        workflowRunId: run.id,
+        status: WorkflowStatus.SUCCESS,
+      });
+      expect(workflowRunRepository.findOne).toHaveBeenCalledWith({
+        where: { id: run.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(workflowRunRepository.save).toHaveBeenCalledTimes(1);
+      expect(run.status).toBe(WorkflowStatus.SUCCESS);
+      expect(run.errorMessage).toBeNull();
+      expect(run.outputPayload).toEqual(
+        expect.objectContaining({
+          statistics: expect.objectContaining({ matched: 4 }),
+        }),
+      );
     });
 
     it('rejects an empty run idempotency key', async () => {

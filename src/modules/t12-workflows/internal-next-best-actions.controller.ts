@@ -22,6 +22,7 @@ import {
   NextBestActionCallbackDto,
   NextBestActionReviewDto,
   NextBestActionContextQueryDto,
+  ClaimNextBestActionContextDto,
 } from './dto/index.js';
 
 @ApiTags('Internal n8n — WF10 Next Best Action')
@@ -41,6 +42,18 @@ export class InternalNextBestActionsController {
       query.entityId,
       query.workflowRunId,
     );
+  }
+
+  @Post('claim-and-entity-context')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Atomically claim a WF10 execution and return its scoped entity profile',
+    description:
+      'A competing execution receives HTTP 409 before AI processing. Retrying the claim from the winning execution is idempotent.',
+  })
+  @ApiBody({ type: ClaimNextBestActionContextDto })
+  claimAndGetEntityContext(@Body() dto: ClaimNextBestActionContextDto) {
+    return this.service.claimAndGetEntityContext(dto);
   }
 
   @Get('intelligence-context')
@@ -70,11 +83,12 @@ export class InternalNextBestActionsController {
     summary:
       'Read follow-up and segment context plus backend allowlisted actions',
   })
-  getFollowUpSegmentContext(@Query() query: NextBestActionContextQueryDto) {
+  getFollowUpSegmentContext(@Query() query: ClaimNextBestActionContextDto) {
     return this.service.getFollowUpSegmentContext(
       query.entityType,
       query.entityId,
       query.workflowRunId,
+      query.n8nExecutionId,
     );
   }
 

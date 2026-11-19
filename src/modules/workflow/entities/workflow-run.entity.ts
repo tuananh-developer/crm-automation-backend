@@ -32,6 +32,9 @@ export class WorkflowRun {
   @Column({ name: 'workflow_name', type: 'varchar', length: 150 })
   workflowName!: string;
 
+  @Column({ name: 'claim_expires_at', type: 'timestamptz', nullable: true })
+  claimExpiresAt?: Date | null;
+
   @Column({
     name: 'n8n_execution_id',
     type: 'varchar',

@@ -20,4 +20,6 @@
 | WF14 | CustomerFeedback, CustomerTask | Feedback submitted via NestJS | input/rate-limit, redaction, classification and escalation dedupe tests |
 | WF15 | Customer, CustomerHealthAssessment, CustomerTask | Weekly schedule | manual strategic flag, weighted score, insufficient data and dedupe tests |
 
+`workflow-traceability.csv` is committed beside this document. It records owner, trigger, export, code/test evidence, and separate integration/runtime status. Rows marked `NOT_AUDITED_IN_THIS_PATCH` are outside this owner's scope and are not sign-off.
+
 The complete exact node sequences are in `03_T12_15_WORKFLOWS_DESIGN.md`; the cross-component message sequences are under `diagrams/sequence/`, and the domain relationships are under `diagrams/erd/`.

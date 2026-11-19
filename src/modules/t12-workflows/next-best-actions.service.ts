@@ -22,10 +22,12 @@ import { NotificationType } from '../notifications/enums/notification.enum.js';
 import { UserRole } from '../users/enums/user.enum.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { NextBestActionRecommendation } from './entities/next-best-action-recommendation.entity.js';
+import { WorkflowExecutionClaimsService } from './workflow-execution-claims.service.js';
 import {
   NextBestActionCallbackDto,
   NextBestActionReviewDto,
   StartNextBestActionDto,
+  ClaimNextBestActionContextDto,
 } from './dto/index.js';
 import { N8nWorkflowDispatchService } from './n8n-workflow-dispatch.service.js';
 import { hasSamePayload, isPostgresUniqueViolation } from '../../common/utils/idempotency.util.js';
@@ -94,6 +96,7 @@ export class NextBestActionsService {
     private readonly notifications: Repository<Notification>,
     private readonly dataSource: DataSource,
     private readonly dispatcher: N8nWorkflowDispatchService,
+    private readonly executionClaims: WorkflowExecutionClaimsService,
   ) {}
 
   private assertIdempotencyKey(key?: string): string {
@@ -247,42 +250,52 @@ export class NextBestActionsService {
         where: { id: entityId },
         select: {
           id: true,
-          firstName: true,
-          lastName: true,
-          email: true,
-          phone: true,
           companyName: true,
           companyWebsite: true,
           jobTitle: true,
           companySize: true,
           industry: true,
           status: true,
-          ownerId: true,
-          createdAt: true,
         },
       });
       if (!lead) throw new NotFoundException('Lead not found');
       return { data: { ...lead, entityType } };
     }
+    // WF10 ranks business actions from company and engagement context only.
+    // Contact names, email addresses and phone numbers are not needed in n8n.
     const customer = await this.customers.findOne({
       where: { id: entityId },
       select: {
         id: true,
-        name: true,
-        email: true,
-        phone: true,
         companyName: true,
         companyWebsite: true,
         jobTitle: true,
         companySize: true,
         industry: true,
         status: true,
-        createdBy: true,
-        createdAt: true,
       },
     });
     if (!customer) throw new NotFoundException('Customer not found');
     return { data: { ...customer, entityType } };
+  }
+
+  async claimAndGetEntityContext(dto: ClaimNextBestActionContextDto) {
+    const context = await this.getEntityProfile(
+      dto.entityType,
+      dto.entityId,
+      dto.workflowRunId,
+    );
+    const claim = await this.executionClaims.claim({
+      workflowRunId: dto.workflowRunId,
+      workflowName: WF10_NAME,
+      n8nExecutionId: dto.n8nExecutionId,
+    });
+    if (!claim.claimed) {
+      throw new ConflictException(
+        'WorkflowRun is already claimed by another n8n execution or is no longer active',
+      );
+    }
+    return context;
   }
 
   async getIntelligenceContext(
@@ -308,8 +321,6 @@ export class NextBestActionsService {
           ? {
               status: qualification.status,
               confidence: qualification.confidence,
-              intent: qualification.intent,
-              reason: qualification.reason,
               createdAt: qualification.createdAt,
             }
           : null,
@@ -318,7 +329,6 @@ export class NextBestActionsService {
           ? {
               score: score.score,
               label: score.label,
-              reason: score.reason,
               createdAt: score.createdAt,
             }
           : null,
@@ -354,7 +364,6 @@ export class NextBestActionsService {
             status: qualification.status,
             confidence: qualification.confidence,
             intent: qualification.intent,
-            reason: qualification.reason,
             createdAt: qualification.createdAt,
           }
         : null,
@@ -363,7 +372,6 @@ export class NextBestActionsService {
         ? {
             score: score.score,
             label: score.label,
-            reason: score.reason,
             createdAt: score.createdAt,
           }
         : null,
@@ -385,15 +393,14 @@ export class NextBestActionsService {
       leadIds = linkedLeads.map((lead) => lead.id);
     }
     if (!leadIds.length) return { items: [] };
+    // WF10 uses interaction identity/type/time as evidence references only.
+    // Do not copy message subjects or free-form contents into n8n execution data.
     const records = await this.interactions.find({
       where: { leadId: In(leadIds) },
       select: {
         id: true,
-        leadId: true,
         type: true,
         channel: true,
-        subject: true,
-        content: true,
         occurredAt: true,
       },
       order: { occurredAt: 'DESC' },
@@ -402,11 +409,8 @@ export class NextBestActionsService {
     return {
       items: records.map((item) => ({
         id: item.id,
-        leadId: item.leadId,
         type: item.type,
         channel: item.channel,
-        subject: item.subject,
-        content: item.content?.slice(0, 2000) ?? null,
         occurredAt: item.occurredAt,
       })),
     };
@@ -416,8 +420,14 @@ export class NextBestActionsService {
     entityType: 'Lead' | 'Customer',
     entityId: string,
     workflowRunId: string,
+    n8nExecutionId: string,
   ) {
     await this.getScopedRun(entityType, entityId, workflowRunId);
+    await this.executionClaims.heartbeat({
+      workflowRunId,
+      workflowName: WF10_NAME,
+      n8nExecutionId,
+    });
     let followUps: LeadFollowUpEnrollment[] = [];
     let segments: CustomerSegment[] = [];
     if (entityType === 'Lead') {
@@ -444,12 +454,10 @@ export class NextBestActionsService {
         id: item.id,
         status: item.status,
         sequenceId: item.sequenceId,
-        sequenceName: item.sequence?.name ?? null,
         startedAt: item.startedAt,
       })),
       segments: segments.map((item) => ({
         segmentId: item.segmentId,
-        segmentName: item.segment?.name ?? null,
         assignmentType: item.assignmentType,
         assignedAt: item.assignedAt,
       })),
@@ -523,10 +531,18 @@ export class NextBestActionsService {
         );
       }
 
+      const now = new Date();
+      const ownsActiveLease =
+        run.n8nExecutionId === dto.n8nExecutionId &&
+        Boolean(run.claimExpiresAt) &&
+        run.claimExpiresAt!.getTime() > now.getTime();
       const existing = await recommendationRepository.findOne({
         where: { workflowRunId: run.id },
       });
       if (existing) {
+        if (run.n8nExecutionId !== dto.n8nExecutionId) {
+          throw new ConflictException('Workflow execution no longer owns this recommendation');
+        }
         if (
           existing.entityType !== dto.entityType ||
           existing.entityId !== dto.entityId ||
@@ -535,6 +551,9 @@ export class NextBestActionsService {
           throw new ConflictException(
             'WorkflowRun already has a different Next Best Action recommendation',
           );
+        }
+        if (run.status !== WorkflowStatus.SUCCESS && !ownsActiveLease) {
+          throw new ConflictException('Workflow execution claim has expired or is no longer active');
         }
         return {
           id: existing.id,
@@ -547,6 +566,7 @@ export class NextBestActionsService {
       }
 
       if (
+        !ownsActiveLease ||
         ![WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status)
       ) {
         throw new ConflictException(
@@ -565,8 +585,17 @@ export class NextBestActionsService {
           reviewTaskId: null,
         }),
       );
-      run.status = WorkflowStatus.SUCCESS;
-      run.finishedAt = new Date();
+      // Keep the execution claim alive until the approval/notification
+      // gate has also completed. The workflow's final callback releases it.
+      run.status = requiresHumanApproval
+        ? WorkflowStatus.RUNNING
+        : WorkflowStatus.SUCCESS;
+      if (!requiresHumanApproval) {
+        run.claimExpiresAt = null;
+        run.finishedAt = new Date();
+      } else {
+        run.finishedAt = null;
+      }
       run.outputPayload = {
         ...(run.outputPayload ?? {}),
         recommendationId: saved.id,
@@ -678,16 +707,11 @@ export class NextBestActionsService {
         entityType: dto.entityType,
       },
     });
-    if (!recommendation)
+    if (!recommendation) {
       throw new NotFoundException(
         'Recommendation not found for this WorkflowRun',
       );
-    if (!recommendation.requiresHumanApproval)
-      return {
-        approvalRequired: false,
-        reviewTaskId: null,
-        notificationFound: false,
-      };
+    }
 
     return this.dataSource.transaction(async (manager) => {
       const runRepo = manager.getRepository(WorkflowRun);
@@ -697,7 +721,7 @@ export class NextBestActionsService {
       const notificationRepo = manager.getRepository(Notification);
       const reviewTaskRepo = manager.getRepository(ReviewTask);
       const run = await runRepo.findOne({
-        where: { id: dto.workflowRunId },
+        where: { id: dto.workflowRunId, workflowName: WF10_NAME },
         lock: { mode: 'pessimistic_write' },
       });
       if (!run) throw new NotFoundException('WorkflowRun not found');
@@ -705,6 +729,40 @@ export class NextBestActionsService {
         where: { id: recommendation.id },
       });
       if (!current) throw new NotFoundException('Recommendation not found');
+
+      const ownsLiveLease =
+        run.n8nExecutionId === dto.n8nExecutionId &&
+        [WorkflowStatus.PENDING, WorkflowStatus.RUNNING].includes(run.status) &&
+        Boolean(run.claimExpiresAt) &&
+        run.claimExpiresAt!.getTime() > Date.now();
+      const completedReplay =
+        run.n8nExecutionId === dto.n8nExecutionId &&
+        [WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL].includes(run.status);
+      if (!ownsLiveLease && !completedReplay) {
+        throw new ConflictException(
+          'Workflow execution no longer owns this finalization request',
+        );
+      }
+
+      if (!current.requiresHumanApproval) {
+        if (ownsLiveLease) {
+          run.status = WorkflowStatus.SUCCESS;
+          run.claimExpiresAt = null;
+          run.finishedAt = new Date();
+          run.outputPayload = {
+            ...(run.outputPayload ?? {}),
+            reviewTaskId: null,
+            notificationFound: false,
+          };
+          await runRepo.save(run);
+        }
+        return {
+          approvalRequired: false,
+          reviewTaskId: null,
+          notificationFound: false,
+          reused: completedReplay,
+        };
+      }
 
       let ownerId: string | null;
       let leadId: string | null = null;
@@ -771,6 +829,9 @@ export class NextBestActionsService {
       }
       current.status = 'PENDING_APPROVAL';
       await recommendationRepo.save(current);
+      run.status = WorkflowStatus.PARTIAL;
+      run.claimExpiresAt = null;
+      run.finishedAt = null;
       run.outputPayload = {
         ...(run.outputPayload ?? {}),
         reviewTaskId: current.reviewTaskId,
@@ -785,6 +846,7 @@ export class NextBestActionsService {
           dto.entityType === 'Lead'
             ? 'REVIEW_TASK_AND_NOTIFICATION'
             : 'OWNER_NOTIFICATION',
+        reused: completedReplay,
       };
     });
   }

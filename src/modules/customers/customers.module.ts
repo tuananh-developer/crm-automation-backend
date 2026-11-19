@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Customer } from './entities/customer.entity.js';
+import { CustomerTask } from './entities/customer-task.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
 import { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
@@ -18,6 +19,7 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
   imports: [
     TypeOrmModule.forFeature([
       Customer,
+      CustomerTask,
       Segment,
       CustomerSegment,
       LeadScore,

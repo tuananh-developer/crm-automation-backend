@@ -1,19 +1,24 @@
 @startuml
 title T12-WF04 — AI CRM Follow-up Agent
 start
-:01 | RabbitMQ Trigger\nconsume one lead.follow_up.triggered event with required executionId target field; keep this as the single primary trigger for that execution, not a parallel webhook.;
+:01 | Webhook Trigger\nreceive the protected internal request from NestJS for a persisted FollowUpExecution; NestJS waits for the synchronous DeliveryResult; do not also trigger this execution through RabbitMQ.;
 :02 | Code: Validate Execution Request\nvalidate execution, enrollment, step, channel and correlation IDs.;
-:03 | HTTP Request: Get Follow-up Context\nfetch the enrollment, Lead and step from NestJS.;
-:04 | Code: Check Eligibility\nverify active enrollment, due time, next step and duplicate-execution safeguards.;
-:05 | Code: Render Message Payload\nprepare recipient, subject and content from approved templates.;
-:06 | HTTP Request: Backend Send Message\ncall the NestJS Communication API; actual email/provider delivery stays in backend.;
-:07 | Code: Normalize Delivery Result\nclassify the result as SUCCESS, RETRYABLE_FAILURE or PERMANENT_FAILURE.;
-:08 | HTTP Request: Execution Callback\nrecord the normalized delivery result through the authenticated backend callback.;
-:09 | Code: Prepare Execution Outcome\nretain the canonical delivery status and correlation/idempotency keys for the next decision.;
+:03 | Backend: Load Follow-up Context\nFollowUpService loads the authoritative enrollment, Lead and step before n8n dispatch.;
+:04 | Backend: Check Eligibility\nNestJS validates enrollment state, active step, due time and duplicate-execution safeguards before dispatch.;
+:05 | Backend: Render Message Payload\nFollowUpService resolves subjectTemplate/contentTemplate, renders recipient/subject/message and persists requestPayload before n8n dispatch; this is not an n8n node.;
+:06 | HTTP Request: Backend Send Message\nPOST /api/v1/internal/communication/follow-ups/{executionId}/send with an empty body and Idempotency-Key equal to executionId.;
+:07 | Backend: Claim and Deliver\nCommunicationService loads the persisted payload, claims idempotent delivery and sends through backend-configured SMTP.;
+:08 | Webhook Response: Return Delivery Result\nreturn the authoritative DeliveryResult to the original FollowUpService dispatch call; do not call a separate delivery-callback endpoint.;
+:09 | Backend: Persist Execution Outcome\nFollowUpService records the returned status and correlation/idempotency identity.;
 if (10 | Delivery succeeded?) then (yes)
-  :11 | HTTP Request: Backend Advance/Complete\nadvance the step or complete the enrollment transactionally after confirmed delivery.;
+  :11 | Backend: Advance/Complete\nFollowUpService advances the step or completes the enrollment transactionally only after confirmed SENT.;
 else (no)
-  :12 | HTTP Request: Backend Handle Delivery Failure\nbackend applies bounded retry for retryable errors or records terminal failure; never advance a failed delivery.;
+  :12 | Backend: Handle Delivery Failure\nFollowUpService applies bounded retry for definite retryable failures or records terminal failure; UNKNOWN is never blindly resent.;
 endif
+note right
+UC06 uses the protected NestJS-to-n8n Webhook request/response path; there is no RabbitMQ trigger or asynchronous result callback in this implementation.\nThe PR #72 export currently has six functional nodes.\nWF04 owner remains responsible for the final 12-functional-node graph and runtime acceptance.
+
+
+end note
 stop
 @enduml

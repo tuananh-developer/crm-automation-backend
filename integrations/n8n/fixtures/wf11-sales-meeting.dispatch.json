@@ -1,0 +1,12 @@
+{
+  "meetingId": "50000000-0000-4000-8000-000000000011",
+  "workflowRunId": "30000000-0000-4000-8000-000000000011",
+  "attendeeIds": [
+    "40000000-0000-4000-8000-000000000011"
+  ],
+  "meetingPurpose": "Review enterprise proposal and next delivery milestones.",
+  "transcript": "We met with Contact: Jane Doe (jane@example.test, +1 202 555 0123) to review the enterprise proposal and agree on delivery milestones. No pricing or legal commitments were approved.",
+  "sourceType": "MEETING_TRANSCRIPT",
+  "requestedBy": "40000000-0000-4000-8000-000000000011",
+  "idempotencyKey": "30000000-0000-4000-8000-000000000011"
+}

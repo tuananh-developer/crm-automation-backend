@@ -4,9 +4,10 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
@@ -35,6 +36,8 @@ import { UserRole } from '../users/enums/user.enum.js';
 
 @Injectable()
 export class SegmentsService {
+  private readonly callbackLocks = new Map<string, Promise<unknown>>();
+
   constructor(
     @InjectRepository(Customer)
     private readonly customersRepository: Repository<Customer>,
@@ -50,6 +53,9 @@ export class SegmentsService {
 
     @InjectRepository(WorkflowRun)
     private readonly workflowRunRepository: Repository<WorkflowRun>,
+
+    @Optional()
+    private readonly dataSource?: DataSource,
   ) {}
 
   async create(
@@ -791,69 +797,113 @@ export class SegmentsService {
     workflowRunId: string;
     status: string;
   }> {
-    const workflowRun = await this.workflowRunRepository.findOne({
-      where: { id: dto.workflowRunId },
+    return this.withCallbackLock(dto.workflowRunId, () =>
+      this.runInWorkflowTransaction(async (workflowRunRepo) => {
+        const workflowRun = await workflowRunRepo.findOne({
+          where: { id: dto.workflowRunId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!workflowRun) {
+          throw new NotFoundException(
+            `WorkflowRun '${dto.workflowRunId}' not found`,
+          );
+        }
+
+        if (
+          workflowRun.workflowName !== 'WF07_CUSTOMER_SEGMENTATION' ||
+          workflowRun.inputPayload?.segmentId !== dto.segmentId
+        ) {
+          throw new NotFoundException(
+            `WorkflowRun '${dto.workflowRunId}' not found`,
+          );
+        }
+
+        if (
+          [
+            WorkflowStatus.SUCCESS,
+            WorkflowStatus.PARTIAL,
+            WorkflowStatus.FAILED,
+          ].includes(workflowRun.status)
+        ) {
+          return {
+            success: true,
+            workflowRunId: workflowRun.id,
+            status: workflowRun.status,
+          };
+        }
+
+        workflowRun.status =
+          dto.status === 'SUCCESS'
+            ? WorkflowStatus.SUCCESS
+            : dto.status === 'PARTIAL'
+              ? WorkflowStatus.PARTIAL
+              : WorkflowStatus.FAILED;
+
+        const existingOutput =
+          (workflowRun.outputPayload as Record<string, any>) || {};
+
+        const updatedOutput = {
+          ...existingOutput,
+          segmentId: dto.segmentId,
+          segmentName: dto.segmentName,
+          statistics: dto.statistics,
+          aiInsights: dto.aiInsights,
+          rejectedInsights: dto.rejectedInsights,
+          anomalyDetected: dto.anomalyDetected ?? false,
+          receivedAt: new Date().toISOString(),
+        };
+
+        workflowRun.outputPayload = updatedOutput;
+        workflowRun.finishedAt = new Date();
+        workflowRun.errorMessage = dto.errorMessage || null;
+
+        await workflowRunRepo.save(workflowRun);
+
+        return {
+          success: true,
+          workflowRunId: workflowRun.id,
+          status: workflowRun.status,
+        };
+      }),
+    );
+  }
+
+  private async runInWorkflowTransaction<T>(
+    work: (workflowRunRepo: Repository<WorkflowRun>) => Promise<T>,
+  ): Promise<T> {
+    if (this.dataSource?.transaction) {
+      return this.dataSource.transaction(async (manager) =>
+        work(manager.getRepository(WorkflowRun)),
+      );
+    }
+    if (this.workflowRunRepository.manager?.transaction) {
+      return this.workflowRunRepository.manager.transaction(async (manager) =>
+        work(manager.getRepository(WorkflowRun)),
+      );
+    }
+    return work(this.workflowRunRepository);
+  }
+
+  private async withCallbackLock<T>(
+    workflowRunId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.callbackLocks.get(workflowRunId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    if (!workflowRun) {
-      throw new NotFoundException(
-        `WorkflowRun '${dto.workflowRunId}' not found`,
-      );
+    const chained = previous.then(() => current);
+    this.callbackLocks.set(workflowRunId, chained);
+
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.callbackLocks.get(workflowRunId) === chained) {
+        this.callbackLocks.delete(workflowRunId);
+      }
     }
-
-    if (
-      workflowRun.workflowName !== 'WF07_CUSTOMER_SEGMENTATION' ||
-      workflowRun.inputPayload?.segmentId !== dto.segmentId
-    ) {
-      throw new NotFoundException(
-        `WorkflowRun '${dto.workflowRunId}' not found`,
-      );
-    }
-
-    if (
-      [
-        WorkflowStatus.SUCCESS,
-        WorkflowStatus.PARTIAL,
-        WorkflowStatus.FAILED,
-      ].includes(workflowRun.status)
-    ) {
-      return {
-        success: true,
-        workflowRunId: workflowRun.id,
-        status: workflowRun.status,
-      };
-    }
-
-    workflowRun.status =
-      dto.status === 'SUCCESS'
-        ? WorkflowStatus.SUCCESS
-        : dto.status === 'PARTIAL'
-          ? WorkflowStatus.PARTIAL
-          : WorkflowStatus.FAILED;
-
-    const existingOutput =
-      (workflowRun.outputPayload as Record<string, any>) || {};
-
-    const updatedOutput = {
-      ...existingOutput,
-      segmentId: dto.segmentId,
-      segmentName: dto.segmentName,
-      statistics: dto.statistics,
-      aiInsights: dto.aiInsights,
-      rejectedInsights: dto.rejectedInsights,
-      anomalyDetected: dto.anomalyDetected ?? false,
-      receivedAt: new Date().toISOString(),
-    };
-
-    workflowRun.outputPayload = updatedOutput;
-    workflowRun.finishedAt = new Date();
-    workflowRun.errorMessage = dto.errorMessage || null;
-
-    await this.workflowRunRepository.save(workflowRun);
-
-    return {
-      success: true,
-      workflowRunId: workflowRun.id,
-      status: workflowRun.status,
-    };
   }
 }
