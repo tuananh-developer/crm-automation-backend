@@ -5,6 +5,8 @@ export interface CreateNotificationInput {
   type: NotificationType | string;
   title: string;
   content?: string | null;
+  message?: string | null;
+  severity?: string | null;
   leadId?: string | null;
   customerId?: string | null;
   reviewTaskId?: string | null;
