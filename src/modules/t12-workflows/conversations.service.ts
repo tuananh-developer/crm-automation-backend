@@ -518,12 +518,16 @@ export class ConversationsService {
         : WorkflowStatus.FAILED;
 
       // 3. State-machine & Active-state assertion:
-      const isTerminal =
-        workflowRun.status === WorkflowStatus.SUCCESS ||
-        workflowRun.status === WorkflowStatus.FAILED;
+      const isActive =
+        workflowRun.status === WorkflowStatus.PENDING ||
+        workflowRun.status === WorkflowStatus.RUNNING;
 
-      if (isTerminal) {
-        if (workflowRun.status !== targetRunStatus) {
+      if (!isActive) {
+        if (
+          (workflowRun.status !== WorkflowStatus.SUCCESS &&
+            workflowRun.status !== WorkflowStatus.FAILED) ||
+          workflowRun.status !== targetRunStatus
+        ) {
           throw new ConflictException(
             `Conflict: WorkflowRun '${workflowRun.id}' is already in terminal state '${workflowRun.status}', cannot transition to '${targetRunStatus}'`,
           );

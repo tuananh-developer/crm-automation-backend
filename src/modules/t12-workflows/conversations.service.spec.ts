@@ -711,6 +711,45 @@ describe('ConversationsService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
+    it.each([WorkflowStatus.PARTIAL, WorkflowStatus.CANCELLED])(
+      'treats %s as terminal and rejects both SUCCESS and FAILED callbacks with ConflictException',
+      async (terminalStatus) => {
+        transcriptsRepository.findOne.mockResolvedValue({
+          id: 't-1',
+          workflowRunId: 'run-1',
+          processingStatus: TranscriptProcessingStatus.COMPLETED,
+        });
+        const mockRun = {
+          id: 'run-1',
+          workflowName: 't12-wf09-conversation-summarizer',
+          status: terminalStatus,
+        };
+        workflowRunsRepository.findOne.mockResolvedValue(mockRun);
+
+        await expect(
+          service.handleCallback({
+            transcriptId: 't-1',
+            workflowRunId: 'run-1',
+            status: 'SUCCESS',
+            summaryText: 'Late success against non-active run',
+          }),
+        ).rejects.toThrow(ConflictException);
+
+        await expect(
+          service.handleCallback({
+            transcriptId: 't-1',
+            workflowRunId: 'run-1',
+            status: 'FAILED',
+            errorMessage: 'Late failure against non-active run',
+          }),
+        ).rejects.toThrow(ConflictException);
+
+        expect(mockRun.status).toBe(terminalStatus);
+        expect(summariesRepository.save).not.toHaveBeenCalled();
+        expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+      },
+    );
+
     it('creates authoritative completion notification with idempotencyKey on SUCCESS callback', async () => {
       transcriptsRepository.findOne.mockResolvedValue({
         id: 't-1',
