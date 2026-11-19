@@ -1,8 +1,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { LeadIntelligenceService } from './lead-intelligence.service.js';
-import { ScoreLabel } from './enums/lead-intelligence.enum.js';
+import {
+  EnrichmentStatus,
+  QualificationStatus,
+  ScoreLabel,
+} from './enums/lead-intelligence.enum.js';
 import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { NotificationType } from '../notifications/enums/notification.enum.js';
@@ -12,7 +22,7 @@ import {
   LEAD_SCORING_QUEUE,
 } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
 import { UserRole, UserStatus } from '../users/enums/user.enum.js';
-import type { ScoringCallbackDto } from './dto/scoring-callback.dto.js';
+import { ScoringCallbackDto } from './dto/scoring-callback.dto.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import type { Repository } from 'typeorm';
 import type { Lead } from '../leads/entities/lead.entity.js';
@@ -348,23 +358,71 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
 
   describe('Backend Authority: Policy Evaluation across 3 Score Bands & Title Classification', () => {
     let service: LeadIntelligenceService;
+    let leadsRepo: jest.Mocked<Partial<Repository<Lead>>>;
+    let workflowRunsRepo: jest.Mocked<Partial<Repository<WorkflowRun>>>;
+    let qualificationsRepo: jest.Mocked<Partial<Repository<LeadQualification>>>;
+    let enrichmentsRepo: jest.Mocked<Partial<Repository<LeadEnrichment>>>;
+    let interactionsRepo: jest.Mocked<Partial<Repository<Interaction>>>;
+
+    const setupCanonicalPolicyState = (opts: {
+      leadId: string;
+      workflowRunId: string;
+      runStatus?: WorkflowStatus;
+      runLeadId?: string;
+      runWorkflowName?: string;
+      lead?: Partial<Lead>;
+      qual?: Partial<LeadQualification> | null;
+      enrich?: Partial<LeadEnrichment> | null;
+      interactions?: Array<Partial<Interaction>>;
+    }) => {
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        id: opts.workflowRunId,
+        leadId: opts.runLeadId ?? opts.leadId,
+        workflowName: opts.runWorkflowName ?? 'lead-scoring',
+        status: opts.runStatus ?? WorkflowStatus.PENDING,
+      });
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({
+        id: opts.leadId,
+        email: 'lead@example.com',
+        ...opts.lead,
+      });
+      (qualificationsRepo.findOne as jest.Mock).mockResolvedValue(
+        opts.qual ? { leadId: opts.leadId, ...opts.qual } : null,
+      );
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue(
+        opts.enrich ? { leadId: opts.leadId, ...opts.enrich } : null,
+      );
+      (interactionsRepo.find as jest.Mock).mockResolvedValue(
+        (opts.interactions ?? []).map((item) => ({
+          leadId: opts.leadId,
+          occurredAt: new Date(),
+          ...item,
+        })),
+      );
+    };
 
     beforeEach(() => {
+      leadsRepo = { findOne: jest.fn() };
+      workflowRunsRepo = { findOne: jest.fn() };
+      qualificationsRepo = { findOne: jest.fn().mockResolvedValue(null) };
+      enrichmentsRepo = { findOne: jest.fn().mockResolvedValue(null) };
+      interactionsRepo = { find: jest.fn().mockResolvedValue([]) };
+
       service = new LeadIntelligenceService(
-        undefined as unknown as Repository<LeadQualification>,
-        undefined as unknown as Repository<Lead>,
-        undefined as unknown as Repository<WorkflowRun>,
+        qualificationsRepo as Repository<LeadQualification>,
+        leadsRepo as Repository<Lead>,
+        workflowRunsRepo as Repository<WorkflowRun>,
         undefined as unknown as Repository<ReviewTask>,
         undefined as unknown as Repository<Notification>,
         undefined as unknown as RabbitMQService,
         undefined as unknown as Repository<LeadScore>,
-        undefined as unknown as Repository<Interaction>,
-        undefined as unknown as Repository<LeadEnrichment>,
+        interactionsRepo as Repository<Interaction>,
+        enrichmentsRepo as Repository<LeadEnrichment>,
       );
     });
 
-    it('evaluates HOT band (score >= 75) from raw context with canonical breakdown and version 1.0', async () => {
-      const result = await service.evaluateScoringPolicy({
+    it('evaluates HOT band (score >= 75) from canonical server context with version 1.0', async () => {
+      setupCanonicalPolicyState({
         leadId: 'lead-1',
         workflowRunId: 'run-1',
         lead: {
@@ -373,14 +431,19 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
           jobTitle: 'Chief Executive Officer',
         },
         qual: {
-          status: 'QUALIFIED',
+          status: QualificationStatus.QUALIFIED,
           confidence: 0.8,
         },
         enrich: {
-          status: 'SUCCESS',
+          status: EnrichmentStatus.SUCCESS,
           companySize: 200,
         },
         interactions: [{ id: 'i1' }, { id: 'i2' }],
+      });
+
+      const result = await service.evaluateScoringPolicy({
+        leadId: 'lead-1',
+        workflowRunId: 'run-1',
       });
 
       // base(20) + profileFit(20) + decisionMaker(20) + qual(20) + engagement(16) + enrich(10) = 100
@@ -393,8 +456,8 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
       expect(result.modelInfo?.modelVersion).toBe('1.0');
     });
 
-    it('evaluates WARM band (40 <= score < 75) from raw context with canonical breakdown', async () => {
-      const result = await service.evaluateScoringPolicy({
+    it('evaluates WARM band (40 <= score < 75) from canonical server context', async () => {
+      setupCanonicalPolicyState({
         leadId: 'lead-2',
         workflowRunId: 'run-2',
         lead: {
@@ -403,9 +466,14 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
           jobTitle: 'Software Engineer',
         },
         qual: {
-          status: 'NEEDS_REVIEW',
+          status: QualificationStatus.NEEDS_REVIEW,
         },
         interactions: [{ id: 'i1' }],
+      });
+
+      const result = await service.evaluateScoringPolicy({
+        leadId: 'lead-2',
+        workflowRunId: 'run-2',
       });
 
       // base(20) + profileFit(10) + non-DM title(10) + qual(10) + engagement(8) + enrich(0) = 58
@@ -415,17 +483,22 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
       expect(result.reason).toContain('WARM');
     });
 
-    it('evaluates COLD band (score < 40) from raw context with canonical breakdown', async () => {
-      const result = await service.evaluateScoringPolicy({
+    it('evaluates COLD band (score < 40) from canonical server context', async () => {
+      setupCanonicalPolicyState({
         leadId: 'lead-3',
         workflowRunId: 'run-3',
         lead: {
           companySize: 2,
         },
         qual: {
-          status: 'DISQUALIFIED',
+          status: QualificationStatus.DISQUALIFIED,
         },
         interactions: [],
+      });
+
+      const result = await service.evaluateScoringPolicy({
+        leadId: 'lead-3',
+        workflowRunId: 'run-3',
       });
 
       // base(20) + profileFit(5) + decisionMaker(0) + qual(-20) + engagement(0) + enrich(0) = 5
@@ -435,17 +508,36 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
       expect(result.reason).toContain('COLD');
     });
 
-    it('ignores caller-supplied scoringFeatures point overrides and derives score strictly from raw context', async () => {
-      const result = await service.evaluateScoringPolicy({
-        leadId: 'lead-tampered',
-        workflowRunId: 'run-tampered',
+    it('ignores forged caller-supplied context and scoringFeatures point overrides in favor of server records', async () => {
+      setupCanonicalPolicyState({
+        leadId: 'lead-cold',
+        workflowRunId: 'run-cold',
         lead: {
           companySize: 2,
         },
         qual: {
-          status: 'DISQUALIFIED',
+          status: QualificationStatus.DISQUALIFIED,
         },
         interactions: [],
+      });
+
+      const result = await service.evaluateScoringPolicy({
+        leadId: 'lead-cold',
+        workflowRunId: 'run-cold',
+        lead: {
+          companyName: 'Forged Enterprise',
+          companySize: 500,
+          jobTitle: 'Chief Executive Officer',
+        },
+        qual: {
+          status: 'QUALIFIED',
+          confidence: 1,
+        },
+        enrich: {
+          status: 'SUCCESS',
+          companySize: 500,
+        },
+        interactions: [{ id: 'fake-1' }, { id: 'fake-2' }, { id: 'fake-3' }],
         scoringFeatures: {
           baseScore: 50,
           profileFitPoints: 80,
@@ -463,6 +555,92 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
       expect(result.breakdown?.qualificationPoints).toBe(-20);
     });
 
+    it('rejects evaluateScoringPolicy when WorkflowRun is missing, mismatched, or terminal', async () => {
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(
+        service.evaluateScoringPolicy({
+          leadId: 'lead-a',
+          workflowRunId: 'missing-run',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      setupCanonicalPolicyState({
+        leadId: 'lead-a',
+        workflowRunId: 'run-other-lead',
+        runLeadId: 'lead-b',
+      });
+      await expect(
+        service.evaluateScoringPolicy({
+          leadId: 'lead-a',
+          workflowRunId: 'run-other-lead',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      setupCanonicalPolicyState({
+        leadId: 'lead-a',
+        workflowRunId: 'run-wrong-wf',
+        runWorkflowName: 'lead-enrichment',
+      });
+      await expect(
+        service.evaluateScoringPolicy({
+          leadId: 'lead-a',
+          workflowRunId: 'run-wrong-wf',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      setupCanonicalPolicyState({
+        leadId: 'lead-a',
+        workflowRunId: 'run-terminal',
+        runStatus: WorkflowStatus.SUCCESS,
+      });
+      await expect(
+        service.evaluateScoringPolicy({
+          leadId: 'lead-a',
+          workflowRunId: 'run-terminal',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('rejects evaluateScoringPolicy when supplied source records belong to a different Lead', async () => {
+      setupCanonicalPolicyState({
+        leadId: 'lead-a',
+        workflowRunId: 'run-a',
+        lead: { id: 'lead-a' },
+      });
+
+      await expect(
+        service.evaluateScoringPolicy({
+          leadId: 'lead-a',
+          workflowRunId: 'run-a',
+          lead: { id: 'lead-b', companySize: 500 },
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      await expect(
+        service.evaluateScoringPolicy({
+          leadId: 'lead-a',
+          workflowRunId: 'run-a',
+          qual: { leadId: 'lead-b', status: 'QUALIFIED' },
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      await expect(
+        service.evaluateScoringPolicy({
+          leadId: 'lead-a',
+          workflowRunId: 'run-a',
+          enrich: { leadId: 'lead-b', status: 'SUCCESS' },
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      await expect(
+        service.evaluateScoringPolicy({
+          leadId: 'lead-a',
+          workflowRunId: 'run-a',
+          interactions: [{ id: 'int-1', leadId: 'lead-b' }],
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
     it('does not treat individual-contributor or team-lead titles containing "lead" as executive decision makers', async () => {
       const nonDecisionLeadTitles = [
         'Team Lead',
@@ -473,12 +651,14 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
       ];
 
       for (const title of nonDecisionLeadTitles) {
+        setupCanonicalPolicyState({
+          leadId: 'lead-title-check',
+          workflowRunId: 'run-title-check',
+          lead: { jobTitle: title },
+        });
         const res = await service.evaluateScoringPolicy({
           leadId: 'lead-title-check',
           workflowRunId: 'run-title-check',
-          lead: {
-            jobTitle: title,
-          },
         });
         expect(res.breakdown?.decisionMakerPoints).toBe(10);
         expect(res.scoringFeatures?.isDecisionMaker).toBe(false);
@@ -495,12 +675,14 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
       ];
 
       for (const title of executiveTitles) {
+        setupCanonicalPolicyState({
+          leadId: 'lead-exec-check',
+          workflowRunId: 'run-exec-check',
+          lead: { jobTitle: title },
+        });
         const res = await service.evaluateScoringPolicy({
           leadId: 'lead-exec-check',
           workflowRunId: 'run-exec-check',
-          lead: {
-            jobTitle: title,
-          },
         });
         expect(res.breakdown?.decisionMakerPoints).toBe(20);
         expect(res.scoringFeatures?.isDecisionMaker).toBe(true);
@@ -626,22 +808,35 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
         (n: { name: string }) => n.name === 'Code: Validate Canonical Score',
       );
 
+      (workflowRunsRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 'run-1',
+        leadId: 'lead-1',
+        workflowName: 'lead-scoring',
+        status: WorkflowStatus.PENDING,
+      });
+      (leadsRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 'lead-1',
+        companyName: 'Acme Corp',
+        companySize: 200,
+        jobTitle: 'CEO',
+      });
+      (qualificationsRepo.findOne as jest.Mock).mockResolvedValue({
+        leadId: 'lead-1',
+        status: QualificationStatus.QUALIFIED,
+        confidence: 0.9,
+      });
+      (enrichmentsRepo.findOne as jest.Mock).mockResolvedValue({
+        leadId: 'lead-1',
+        status: EnrichmentStatus.SUCCESS,
+      });
+      (interactionsRepo.find as jest.Mock).mockResolvedValue([
+        { id: 'int-1', leadId: 'lead-1', occurredAt: new Date() },
+        { id: 'int-2', leadId: 'lead-1', occurredAt: new Date() },
+      ]);
+
       const policyResponse = await service.evaluateScoringPolicy({
         leadId: 'lead-1',
         workflowRunId: 'run-1',
-        lead: {
-          companyName: 'Acme Corp',
-          companySize: 200,
-          jobTitle: 'CEO',
-        },
-        qual: {
-          status: 'QUALIFIED',
-          confidence: 0.9,
-        },
-        enrich: {
-          status: 'SUCCESS',
-        },
-        interactions: [{ id: 'int-1' }, { id: 'int-2' }],
       });
 
       const runValidateScore = new Function(
@@ -794,6 +989,40 @@ describe('UC04 AI Lead Scoring Workflow Contract & Integration', () => {
       expect(result.score).toBeNull();
       expect(result.workflowRunUpdated).toBe(true);
       expect(pendingRun.status).toBe(WorkflowStatus.FAILED);
+      expect(scoresRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects invalid runtime callback status values (CANCELLED, ERROR, PARTIAL) at both DTO and service layers', async () => {
+      for (const invalidStatus of ['CANCELLED', 'ERROR', 'PARTIAL']) {
+        const dtoInstance = plainToInstance(ScoringCallbackDto, {
+          leadId: '11111111-1111-4111-8111-111111111111',
+          workflowRunId: '22222222-2222-4222-8222-222222222222',
+          status: invalidStatus,
+          score: 85,
+          label: ScoreLabel.HOT,
+        });
+        const errors = await validate(dtoInstance);
+        expect(errors.some((e) => e.property === 'status')).toBe(true);
+
+        await expect(
+          service.handleScoringCallback({
+            leadId: 'lead-1',
+            workflowRunId: 'run-1',
+            status: invalidStatus as 'SUCCESS' | 'FAILED',
+            score: 85,
+            label: ScoreLabel.HOT,
+          }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      }
+
+      const validDto = plainToInstance(ScoringCallbackDto, {
+        leadId: '11111111-1111-4111-8111-111111111111',
+        workflowRunId: '22222222-2222-4222-8222-222222222222',
+        status: 'SUCCESS',
+        score: 85,
+        label: ScoreLabel.HOT,
+      });
+      expect(await validate(validDto)).toHaveLength(0);
       expect(scoresRepo.save).not.toHaveBeenCalled();
     });
   });

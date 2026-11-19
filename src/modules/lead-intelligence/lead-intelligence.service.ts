@@ -1240,13 +1240,24 @@ export class LeadIntelligenceService {
 
   /**
    * Evaluates the canonical lead scoring policy (UC04).
-   * Backend owns the authoritative 0-100 score, label thresholds, and policy version 1.0.
-   * Feature points are ALWAYS derived from raw context (lead, qual, enrich, interactions);
-   * caller-supplied point overrides in scoringFeatures/features are never trusted.
+   * Correlates the WorkflowRun to the target Lead and 'lead-scoring' workflow,
+   * rejects cross-lead context tampering, and derives all feature points strictly
+   * from server-side canonical records.
    */
   async evaluateScoringPolicy(
     dto: EvaluateScoringPolicyDto,
   ): Promise<EvaluateScoringPolicyResponseDto> {
+    const workflowRun = await this.workflowRunsRepository.findOne({
+      where: { id: dto.workflowRunId },
+    });
+    if (!workflowRun) {
+      throw new NotFoundException(
+        `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+      );
+    }
+    this.assertCallbackRunScope(workflowRun, dto.leadId, 'lead-scoring');
+    this.assertCallbackRunActive(workflowRun);
+
     const enrichObj =
       typeof dto.enrich === 'object' && dto.enrich !== null
         ? dto.enrich
@@ -1256,12 +1267,67 @@ export class LeadIntelligenceService {
     const qualObj =
       typeof dto.qual === 'object' && dto.qual !== null ? dto.qual : undefined;
 
+    if (
+      leadObj &&
+      typeof leadObj['id'] === 'string' &&
+      leadObj['id'].trim() !== '' &&
+      leadObj['id'] !== dto.leadId
+    ) {
+      throw new BadRequestException(
+        `Supplied lead context id '${leadObj['id']}' does not match dto.leadId '${dto.leadId}'`,
+      );
+    }
+    if (
+      qualObj &&
+      typeof qualObj['leadId'] === 'string' &&
+      qualObj['leadId'].trim() !== '' &&
+      qualObj['leadId'] !== dto.leadId
+    ) {
+      throw new BadRequestException(
+        `Supplied qualification context leadId '${qualObj['leadId']}' does not match dto.leadId '${dto.leadId}'`,
+      );
+    }
+    if (
+      enrichObj &&
+      typeof enrichObj['leadId'] === 'string' &&
+      enrichObj['leadId'].trim() !== '' &&
+      enrichObj['leadId'] !== dto.leadId
+    ) {
+      throw new BadRequestException(
+        `Supplied enrichment context leadId '${enrichObj['leadId']}' does not match dto.leadId '${dto.leadId}'`,
+      );
+    }
+    if (Array.isArray(dto.interactions)) {
+      for (const item of dto.interactions) {
+        if (
+          typeof item === 'object' &&
+          item !== null &&
+          'leadId' in item &&
+          typeof (item as Record<string, unknown>)['leadId'] === 'string' &&
+          String((item as Record<string, unknown>)['leadId']).trim() !== '' &&
+          (item as Record<string, unknown>)['leadId'] !== dto.leadId
+        ) {
+          throw new BadRequestException(
+            `Supplied interaction context leadId '${String((item as Record<string, unknown>)['leadId'])}' does not match dto.leadId '${dto.leadId}'`,
+          );
+        }
+      }
+    }
+
+    const canonicalContext = await this.getScoringContext(dto.leadId);
+    const canonicalLead = canonicalContext.lead;
+    const canonicalQual = canonicalContext.qualification;
+    const canonicalEnrich = canonicalContext.enrichment;
+    const canonicalInteractions = Array.isArray(canonicalContext.interactions)
+      ? canonicalContext.interactions
+      : [];
+
     const baseScore = 20;
 
     // 1. Profile Fit Points (0..20)
     let profileFitPoints = 0;
     const rawCompanySize =
-      enrichObj?.['companySize'] ?? leadObj?.['companySize'];
+      canonicalEnrich?.companySize ?? canonicalLead.companySize;
     const companySize =
       typeof rawCompanySize === 'number' &&
       Number.isFinite(rawCompanySize) &&
@@ -1269,10 +1335,10 @@ export class LeadIntelligenceService {
         ? rawCompanySize
         : undefined;
     const hasCompanyName =
-      (typeof enrichObj?.['companyName'] === 'string' &&
-        enrichObj['companyName'].trim().length > 0) ||
-      (typeof leadObj?.['companyName'] === 'string' &&
-        leadObj['companyName'].trim().length > 0);
+      (typeof canonicalEnrich?.companyName === 'string' &&
+        canonicalEnrich.companyName.trim().length > 0) ||
+      (typeof canonicalLead.companyName === 'string' &&
+        canonicalLead.companyName.trim().length > 0);
 
     if (typeof companySize === 'number') {
       if (companySize >= 100) profileFitPoints = 20;
@@ -1285,7 +1351,8 @@ export class LeadIntelligenceService {
 
     // 2. Decision Maker Points (0..20)
     let decisionMakerPoints = 0;
-    const rawJobTitle = enrichObj?.['contactJobTitle'] ?? leadObj?.['jobTitle'];
+    const rawJobTitle =
+      canonicalEnrich?.contactJobTitle ?? canonicalLead.jobTitle;
     const normalizedJobTitle =
       typeof rawJobTitle === 'string' ? rawJobTitle.trim() : '';
     if (isExecutiveDecisionMakerTitle(normalizedJobTitle)) {
@@ -1296,31 +1363,27 @@ export class LeadIntelligenceService {
 
     // 3. Qualification Points (-20..25)
     let qualificationPoints = 0;
-    if (qualObj && qualObj['status'] === 'QUALIFIED') {
-      const rawConf =
-        typeof qualObj['confidence'] === 'number' &&
-        Number.isFinite(qualObj['confidence'])
-          ? qualObj['confidence']
+    if (canonicalQual?.status === QualificationStatus.QUALIFIED) {
+      const parsedConf =
+        canonicalQual.confidence !== undefined &&
+        canonicalQual.confidence !== null
+          ? Number(canonicalQual.confidence)
           : 0.85;
+      const rawConf = Number.isFinite(parsedConf) ? parsedConf : 0.85;
       const clampedConf = Math.max(0, Math.min(1, rawConf));
       qualificationPoints = Math.round(clampedConf * 25);
-    } else if (qualObj && qualObj['status'] === 'DISQUALIFIED') {
+    } else if (canonicalQual?.status === QualificationStatus.DISQUALIFIED) {
       qualificationPoints = -20;
-    } else if (qualObj && qualObj['status'] === 'NEEDS_REVIEW') {
+    } else if (canonicalQual?.status === QualificationStatus.NEEDS_REVIEW) {
       qualificationPoints = 10;
     }
 
     // 4. Engagement Points (0..25)
-    const validInteractions = Array.isArray(dto.interactions)
-      ? dto.interactions.filter(
-          (item) => typeof item === 'object' && item !== null,
-        )
-      : [];
-    const engagementPoints = Math.min(25, validInteractions.length * 8);
+    const engagementPoints = Math.min(25, canonicalInteractions.length * 8);
 
     // 5. Enrichment Bonus (0..10)
     const enrichmentBonus =
-      enrichObj && enrichObj['status'] === 'SUCCESS' ? 10 : 0;
+      canonicalEnrich?.status === EnrichmentStatus.SUCCESS ? 10 : 0;
 
     const calculatedTotal =
       baseScore +
@@ -1361,15 +1424,13 @@ export class LeadIntelligenceService {
       companySize: companySize ?? null,
       jobTitle: normalizedJobTitle || null,
       isDecisionMaker: decisionMakerPoints === 20,
-      qualificationStatus:
-        typeof qualObj?.['status'] === 'string' ? qualObj['status'] : null,
-      enrichmentStatus:
-        typeof enrichObj?.['status'] === 'string' ? enrichObj['status'] : null,
-      interactionCount: validInteractions.length,
+      qualificationStatus: canonicalQual?.status ?? null,
+      enrichmentStatus: canonicalEnrich?.status ?? null,
+      interactionCount: canonicalInteractions.length,
       ...(dto.contextAudit ? { contextAudit: dto.contextAudit } : {}),
     };
 
-    return Promise.resolve({
+    return {
       score: canonicalScore,
       label,
       policyVersion,
@@ -1381,7 +1442,7 @@ export class LeadIntelligenceService {
         model: 'deterministic-scoring-v1',
         modelVersion: policyVersion,
       },
-    });
+    };
   }
 
   /**
@@ -1533,6 +1594,16 @@ export class LeadIntelligenceService {
     if (!dto.workflowRunId || !dto.workflowRunId.trim()) {
       throw new BadRequestException(
         'workflowRunId is required for scoring callback correlation',
+      );
+    }
+
+    if (
+      dto.status !== undefined &&
+      dto.status !== 'SUCCESS' &&
+      dto.status !== 'FAILED'
+    ) {
+      throw new BadRequestException(
+        `Invalid scoring callback status '${String(dto.status)}'. Expected 'SUCCESS' or 'FAILED'`,
       );
     }
 
