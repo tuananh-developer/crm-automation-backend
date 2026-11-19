@@ -104,10 +104,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       });
     expect(adminRegistration.status).toBe(201);
     adminUserId = adminRegistration.body.user.id;
-    await dataSource.query(
-      "UPDATE users SET role = 'ADMIN' WHERE id = $1;",
-      [adminUserId],
-    );
+    await dataSource.query("UPDATE users SET role = 'ADMIN' WHERE id = $1;", [
+      adminUserId,
+    ]);
 
     const adminLogin = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
@@ -444,10 +443,11 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
 
       expect(apply.status).toBe(500);
 
-      const leads = await dataSource.query(
-        'SELECT id, phone FROM leads WHERE id = ANY($1::uuid[]) ORDER BY id;',
-        [[firstLeadId, secondLeadId]],
-      );
+      const leads: Array<{ id: string; phone: string }> =
+        await dataSource.query(
+          'SELECT id, phone FROM leads WHERE id = ANY($1::uuid[]) ORDER BY id;',
+          [[firstLeadId, secondLeadId]],
+        );
       const phonesById = new Map(leads.map((lead) => [lead.id, lead.phone]));
       expect(phonesById.get(firstLeadId)).toBe('+1 (415) 555-0101');
       expect(phonesById.get(secondLeadId)).toBe('+1 (415) 555-0102');
@@ -474,17 +474,19 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
   it('returns one success and one 409 for concurrent registrations with the same email', async () => {
     const email = `register.race.${suffix}@example.test`;
     const register = () =>
-      request(app.getHttpServer())
-        .post('/api/v1/auth/register')
-        .send({
-          name: 'Concurrent Registration',
-          email,
-          password: 'E2eStrongPassword123!',
-        });
+      request(app.getHttpServer()).post('/api/v1/auth/register').send({
+        name: 'Concurrent Registration',
+        email,
+        password: 'E2eStrongPassword123!',
+      });
 
     const responses = await Promise.all([register(), register()]);
-    expect(responses.filter((response) => response.status === 201)).toHaveLength(1);
-    expect(responses.filter((response) => response.status === 409)).toHaveLength(1);
+    expect(
+      responses.filter((response) => response.status === 201),
+    ).toHaveLength(1);
+    expect(
+      responses.filter((response) => response.status === 409),
+    ).toHaveLength(1);
 
     const [users] = await dataSource.query(
       'SELECT COUNT(*)::int AS count FROM users WHERE email = $1;',
@@ -506,7 +508,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     }
 
     expect(statuses).toContain(429);
-    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(0);
+    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('preserves Lead contact edits when review resolution runs concurrently', async () => {
@@ -627,9 +631,7 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       await dataSource.query(
         `DROP TRIGGER IF EXISTS ${triggerName} ON audit_logs;`,
       );
-      await dataSource.query(
-        `DROP FUNCTION IF EXISTS ${functionName}();`,
-      );
+      await dataSource.query(`DROP FUNCTION IF EXISTS ${functionName}();`);
     }
   });
 
@@ -741,5 +743,126 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     expect(rejectedRequest.decision_comment).toBe(
       'Discount exceeds the permitted policy',
     );
+  });
+
+  it('deduplicates concurrent WF09 transcript ingestions under PostgreSQL 23505 and separates distinct meetings when idempotencyKey is omitted', async () => {
+    const leadId = await createLead(
+      'WF09 Concurrency',
+      `wf09.concurrent.${suffix}@example.test`,
+      '+14155550177',
+    );
+    const idempotencyKey = `wf09-concurrent-${suffix}`;
+
+    const meetingRun1 = await dataSource.getRepository(WorkflowRun).save({
+      workflowName: 'T12-WF11_SALES_MEETING',
+      leadId,
+      customerId: null,
+      triggeredByUserId: userId,
+      status: WorkflowStatus.PENDING,
+      inputPayload: {},
+      outputPayload: null,
+      errorMessage: null,
+      startedAt: new Date(),
+      finishedAt: null,
+    });
+    const meetingRun2 = await dataSource.getRepository(WorkflowRun).save({
+      workflowName: 'T12-WF11_SALES_MEETING',
+      leadId,
+      customerId: null,
+      triggeredByUserId: userId,
+      status: WorkflowStatus.PENDING,
+      inputPayload: {},
+      outputPayload: null,
+      errorMessage: null,
+      startedAt: new Date(),
+      finishedAt: null,
+    });
+    workflowRunIds.push(meetingRun1.id, meetingRun2.id);
+
+    const meetingId1 = randomUUID();
+    const meetingId2 = randomUUID();
+    await dataSource.query(
+      `INSERT INTO sales_meetings (id, workflow_run_id, owner_id, lead_id, status)
+       VALUES ($1, $2, $3, $4, 'PROCESSING'), ($5, $6, $3, $4, 'PROCESSING');`,
+      [meetingId1, meetingRun1.id, userId, leadId, meetingId2, meetingRun2.id],
+    );
+
+    try {
+      const [first, second] = await Promise.all([
+        api.post('/api/v1/conversation-transcripts').send({
+          leadId,
+          sourceType: 'CALL',
+          content: 'Customer asked for enterprise SLA pricing details.',
+          idempotencyKey,
+        }),
+        api.post('/api/v1/conversation-transcripts').send({
+          leadId,
+          sourceType: 'CALL',
+          content: 'Customer asked for enterprise SLA pricing details.',
+          idempotencyKey,
+        }),
+      ]);
+
+      expect(first.status).toBe(202);
+      expect(second.status).toBe(202);
+      expect(first.body.workflowRunId).toBeDefined();
+      expect(second.body.workflowRunId).toBe(first.body.workflowRunId);
+      expect(second.body.transcriptId).toBe(first.body.transcriptId);
+      workflowRunIds.push(first.body.workflowRunId as string);
+
+      const transcriptRows = await dataSource.query(
+        'SELECT id FROM conversation_transcripts WHERE workflow_run_id = $1;',
+        [first.body.workflowRunId],
+      );
+      expect(transcriptRows).toHaveLength(1);
+
+      const outboxRows = await dataSource.query(
+        "SELECT id FROM outbox_events WHERE payload->>'workflowRunId' = $1;",
+        [first.body.workflowRunId],
+      );
+      expect(outboxRows).toHaveLength(1);
+
+      // Two distinct meetings with identical transcript content when idempotencyKey is omitted
+      const meetingFirst = await api
+        .post('/api/v1/conversation-transcripts')
+        .send({
+          leadId,
+          meetingId: meetingId1,
+          sourceType: 'MEETING',
+          content: 'Identical follow-up discussion transcript.',
+        });
+      const meetingSecond = await api
+        .post('/api/v1/conversation-transcripts')
+        .send({
+          leadId,
+          meetingId: meetingId2,
+          sourceType: 'MEETING',
+          content: 'Identical follow-up discussion transcript.',
+        });
+
+      expect(meetingFirst.status).toBe(202);
+      expect(meetingSecond.status).toBe(202);
+      expect(meetingFirst.body.workflowRunId).toBeDefined();
+      expect(meetingSecond.body.workflowRunId).toBeDefined();
+      expect(meetingSecond.body.workflowRunId).not.toBe(
+        meetingFirst.body.workflowRunId,
+      );
+      expect(meetingSecond.body.transcriptId).not.toBe(
+        meetingFirst.body.transcriptId,
+      );
+      workflowRunIds.push(
+        meetingFirst.body.workflowRunId as string,
+        meetingSecond.body.workflowRunId as string,
+      );
+    } finally {
+      await dataSource.query(
+        'DELETE FROM conversation_transcripts WHERE workflow_run_id = ANY($1::uuid[]);',
+        [workflowRunIds],
+      );
+      await dataSource.query(
+        'DELETE FROM sales_meetings WHERE id = ANY($1::uuid[]);',
+        [[meetingId1, meetingId2]],
+      );
+    }
   });
 });

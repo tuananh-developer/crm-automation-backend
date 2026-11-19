@@ -67,7 +67,7 @@ export class NotificationsService {
     return result.affected ?? 0;
   }
 
-  /** Used by other modules (UC06, UC07, WF14) to raise an in-app notification. */
+  /** Used by other modules (UC06, UC07, WF09, WF14) to raise an in-app notification. */
   async create(input: CreateNotificationInput): Promise<Notification> {
     const payload = {
       userId: input.userId,
