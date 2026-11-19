@@ -189,10 +189,10 @@ describe('WF15 Account Health & Strategic Customers (E2E)', () => {
     });
   });
 
-  describe('Account Health Calculate API (POST /api/v1/account-health/calculate)', () => {
+  describe('Account Health Calculate API (POST /api/v1/internal/n8n/account-health/calculate)', () => {
     it('evaluates health score and persists snapshot for a strategic customer', async () => {
       const res = await request(app.getHttpServer())
-        .post('/api/v1/account-health/calculate')
+        .post('/api/v1/internal/n8n/account-health/calculate')
         .set('x-n8n-api-key', n8nApiKey)
         .send({
           customerId: strategicCustomer.id,
@@ -227,7 +227,7 @@ describe('WF15 Account Health & Strategic Customers (E2E)', () => {
 
     it('propagates INSUFFICIENT_DATA and does not save snapshot when evidence is missing', async () => {
       const res = await request(app.getHttpServer())
-        .post('/api/v1/account-health/calculate')
+        .post('/api/v1/internal/n8n/account-health/calculate')
         .set('x-n8n-api-key', n8nApiKey)
         .send({
           customerId: strategicCustomer.id,
@@ -245,7 +245,7 @@ describe('WF15 Account Health & Strategic Customers (E2E)', () => {
 
     it('rejects non-existent customerId with 404 NotFoundException', async () => {
       await request(app.getHttpServer())
-        .post('/api/v1/account-health/calculate')
+        .post('/api/v1/internal/n8n/account-health/calculate')
         .set('x-n8n-api-key', n8nApiKey)
         .send({
           customerId: '00000000-0000-4000-8000-000000000000',
@@ -259,7 +259,7 @@ describe('WF15 Account Health & Strategic Customers (E2E)', () => {
 
     it('rejects unauthorized requests without valid n8n credential', async () => {
       await request(app.getHttpServer())
-        .post('/api/v1/account-health/calculate')
+        .post('/api/v1/internal/n8n/account-health/calculate')
         .send({
           customerId: strategicCustomer.id,
           engagement: 80,
@@ -271,10 +271,12 @@ describe('WF15 Account Health & Strategic Customers (E2E)', () => {
     });
   });
 
-  describe('Account Health Snapshot History (GET /api/v1/account-health/snapshots/:customerId)', () => {
+  describe('Account Health Snapshot History (GET /api/v1/internal/n8n/account-health/snapshots/:customerId)', () => {
     it('retrieves snapshot history for customer ordered newest first', async () => {
       const res = await request(app.getHttpServer())
-        .get(`/api/v1/account-health/snapshots/${strategicCustomer.id}`)
+        .get(
+          `/api/v1/internal/n8n/account-health/snapshots/${strategicCustomer.id}`,
+        )
         .set('x-n8n-api-key', n8nApiKey)
         .expect(200);
 
@@ -284,7 +286,7 @@ describe('WF15 Account Health & Strategic Customers (E2E)', () => {
     });
   });
 
-  describe('Validate Actions API (POST /api/v1/account-health/validate-actions)', () => {
+  describe('Validate Actions API (POST /api/v1/internal/n8n/account-health/validate-actions)', () => {
     it('validates allowed actions with matching customerId and snapshotId evidence', async () => {
       const snapshotRepo = dataSource.getRepository(AccountHealthSnapshot);
       const snapshot = await snapshotRepo.findOne({
@@ -292,7 +294,7 @@ describe('WF15 Account Health & Strategic Customers (E2E)', () => {
       });
 
       const res = await request(app.getHttpServer())
-        .post('/api/v1/account-health/validate-actions')
+        .post('/api/v1/internal/n8n/account-health/validate-actions')
         .set('x-n8n-api-key', n8nApiKey)
         .send({
           customerId: strategicCustomer.id,
@@ -317,10 +319,10 @@ describe('WF15 Account Health & Strategic Customers (E2E)', () => {
     });
   });
 
-  describe('Validate AI Output API (POST /api/v1/account-health/validate-ai-output)', () => {
+  describe('Validate AI Output API (POST /api/v1/internal/n8n/account-health/validate-ai-output)', () => {
     it('validates structured AI output matching required schema and score', async () => {
       const res = await request(app.getHttpServer())
-        .post('/api/v1/account-health/validate-ai-output')
+        .post('/api/v1/internal/n8n/account-health/validate-ai-output')
         .set('x-n8n-api-key', n8nApiKey)
         .send({
           score: 85,

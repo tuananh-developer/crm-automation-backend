@@ -32,9 +32,10 @@ import {
 
 /**
  * Canonical internal routes: /api/v1/internal/n8n/account-health/...
+ * (Also supports /api/v1/account-health/... alias for backward compatibility).
  * Protected by N8nAuthGuard; browsers never call this directly.
  */
-@Controller('internal/n8n/account-health')
+@Controller(['internal/n8n/account-health', 'account-health'])
 @UseGuards(N8nAuthGuard)
 export class AccountHealthController {
   constructor(
