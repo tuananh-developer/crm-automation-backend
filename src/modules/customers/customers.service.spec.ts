@@ -342,6 +342,176 @@ describe('CustomersService', () => {
       );
     });
 
+    it('derives LOW, MEDIUM, and HIGH churn scores from sourced evidence when score is omitted', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      (churnAssessmentsRepository.create as jest.Mock).mockImplementation(
+        (input) =>
+          Object.assign(new CustomerChurnAssessment(), {
+            id: 'assessment-derived',
+            ...input,
+          }),
+      );
+      (churnAssessmentsRepository.save as jest.Mock).mockImplementation(
+        (assessment) => Promise.resolve(assessment),
+      );
+
+      // 1. LOW risk: recent interaction, zero failed follow-ups
+      const lowAssessment = await service.createChurnAssessment('customer-1', {
+        asOfDate: '2026-11-10',
+        evidence: [
+          {
+            source: 'interactions',
+            signal: 'recorded_interaction_count',
+            value: 3,
+            observedAt: '2026-11-08T10:00:00.000Z',
+          },
+          {
+            source: 'follow_up_executions',
+            signal: 'failed_or_retrying_execution_count',
+            value: 0,
+          },
+        ],
+      });
+      expect(lowAssessment.score).toBe(0);
+      expect(lowAssessment.riskLevel).toBe('LOW');
+
+      // 2. MEDIUM risk: 2 failed follow-up executions with recent interactions
+      const mediumAssessment = await service.createChurnAssessment(
+        'customer-1',
+        {
+          asOfDate: '2026-11-10',
+          evidence: [
+            {
+              source: 'interactions',
+              signal: 'recorded_interaction_count',
+              value: 3,
+              observedAt: '2026-11-08T10:00:00.000Z',
+            },
+            {
+              source: 'follow_up_executions',
+              signal: 'failed_or_retrying_execution_count',
+              value: 2,
+            },
+          ],
+        },
+      );
+      expect(mediumAssessment.score).toBe(50);
+      expect(mediumAssessment.riskLevel).toBe('MEDIUM');
+
+      // 3. HIGH risk: stale interaction (>60 days) + failed follow-up execution
+      const highAssessment = await service.createChurnAssessment('customer-1', {
+        asOfDate: '2026-11-10',
+        evidence: [
+          {
+            source: 'interactions',
+            signal: 'recorded_interaction_count',
+            value: 1,
+            observedAt: '2026-08-01T10:00:00.000Z',
+          },
+          {
+            source: 'follow_up_executions',
+            signal: 'failed_or_retrying_execution_count',
+            value: 1,
+          },
+        ],
+      });
+      expect(highAssessment.score).toBe(95);
+      expect(highAssessment.riskLevel).toBe('HIGH');
+    });
+
+    it('reaches the retention-task path when WF06 submits high-risk evidence without an explicit score', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      (churnAssessmentsRepository.create as jest.Mock).mockImplementation(
+        (input) =>
+          Object.assign(new CustomerChurnAssessment(), {
+            id: 'assessment-high-1',
+            ...input,
+          }),
+      );
+      (churnAssessmentsRepository.save as jest.Mock).mockImplementation(
+        (assessment) => Promise.resolve(assessment),
+      );
+      (churnAssessmentsRepository.findOne as jest.Mock).mockImplementation(
+        ({ where }: { where: { id: string; customerId: string } }) =>
+          Promise.resolve(
+            where.id === 'assessment-high-1' &&
+              where.customerId === 'customer-1'
+              ? Object.assign(new CustomerChurnAssessment(), {
+                  id: 'assessment-high-1',
+                  customerId: 'customer-1',
+                  score: 75,
+                  riskLevel: 'HIGH',
+                })
+              : null,
+          ),
+      );
+      (customerTasksRepository.findOne as jest.Mock).mockResolvedValue(null);
+      (customerTasksRepository.create as jest.Mock).mockImplementation(
+        (input) =>
+          Object.assign(new CustomerTask(), {
+            id: 'task-retention-1',
+            ...input,
+          }),
+      );
+      (customerTasksRepository.save as jest.Mock).mockImplementation((task) =>
+        Promise.resolve(task),
+      );
+
+      // WF06 Node 7 payload omits score and sends only asOfDate, evidence, coverage, metadata
+      const assessment = await service.createChurnAssessment('customer-1', {
+        asOfDate: '2026-11-10',
+        evidence: [
+          {
+            source: 'follow_up_executions',
+            signal: 'failed_or_retrying_execution_count',
+            value: 3,
+          },
+        ],
+        coverage: { followUps: 'AVAILABLE' },
+        metadata: { correlationId: 'wf06:exec-1:customer-1', source: 'WF06' },
+      });
+
+      expect(assessment.score).toBe(75);
+      expect(assessment.riskLevel).toBe('HIGH');
+
+      // Downstream WF06 Node 11 condition: riskLevel === 'HIGH' && score !== null && evidence.length > 0
+      expect(
+        assessment.riskLevel === 'HIGH' &&
+          assessment.score !== null &&
+          (assessment.evidence?.length ?? 0) > 0,
+      ).toBe(true);
+
+      // WF06 Node 12 creates the retention CustomerTask
+      const retentionTask = await service.createCustomerTask({
+        customerId: 'customer-1',
+        assessmentId: assessment.id,
+        taskType: 'RETENTION',
+        priority: 'HIGH',
+        idempotencyKey: `wf06:customer-1:${assessment.id}:RETENTION`,
+        notes: 'High churn risk retention follow-up',
+        metadata: {
+          correlationId: 'wf06:exec-1:customer-1',
+          riskLevel: assessment.riskLevel,
+          score: assessment.score,
+        },
+      });
+
+      expect(retentionTask).toEqual(
+        expect.objectContaining({
+          id: 'task-retention-1',
+          customerId: 'customer-1',
+          assessmentId: 'assessment-high-1',
+          taskType: 'RETENTION',
+          priority: 'HIGH',
+          status: 'OPEN',
+        }),
+      );
+    });
+
     it('rejects a score outside the supported range', async () => {
       (customersRepository.findOne as jest.Mock).mockResolvedValue(
         mockCustomer,

@@ -18,6 +18,7 @@ import {
   CreateQuoteInternalDto,
   QuotePricePreviewDto,
   SubmitQuoteApprovalDto,
+  ClaimQuoteEntityContextDto,
 } from './dto/index.js';
 
 @ApiTags('Internal n8n — WF12 Quote & Proposal')
@@ -36,6 +37,17 @@ export class InternalQuotesController {
     @Query('workflowRunId') workflowRunId?: string,
   ) {
     return this.service.getEntityContext(customerId, leadId, workflowRunId);
+  }
+
+  @Post('claim-and-entity-context')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Validate quote context and atomically claim the WF12 execution',
+    description:
+      'A competing execution receives HTTP 409 before AI proposal generation. A retry from the winning execution is idempotent.',
+  })
+  claimAndGetEntityContext(@Body() dto: ClaimQuoteEntityContextDto) {
+    return this.service.claimAndGetEntityContext(dto);
   }
 
   @Post('price-preview')

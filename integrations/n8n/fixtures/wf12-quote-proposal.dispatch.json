@@ -1,0 +1,15 @@
+{
+  "workflowRunId": "30000000-0000-4000-8000-000000000012",
+  "customerId": "20000000-0000-4000-8000-000000000012",
+  "leadId": null,
+  "requestedItems": [
+    {
+      "catalogItemId": "60000000-0000-4000-8000-000000000012",
+      "quantity": 2
+    }
+  ],
+  "requirements": "Prepare a proposal for the Acme onboarding package. Contact: Jane Doe, email jane@example.test, phone +1 202 555 0123. Do not invent discounts or delivery dates.",
+  "currency": "VND",
+  "requestedBy": "40000000-0000-4000-8000-000000000012",
+  "idempotencyKey": "30000000-0000-4000-8000-000000000012"
+}

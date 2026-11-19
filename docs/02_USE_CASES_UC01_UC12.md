@@ -42,8 +42,8 @@
 ## UC06 — Execute Follow-up
 - **Actor:** Automation system; Sales User observes status.
 - **Goal:** execute one persisted `FollowUpExecution` and record delivery/retry outcome.
-- **Main flow:** backend creates/marks the execution → publish `lead.follow_up.triggered` containing required `data.executionId` → WF04 checks eligibility and prepares message → NestJS Communication API sends idempotently → callback records delivery status → backend advances only after confirmed success or records retry/terminal failure.
-- **Boundary:** execution does not create a sequence/enrollment. There is one primary automated trigger path (RabbitMQ), not parallel webhook and queue execution for the same ID.
+- **Main flow:** backend creates/marks the persisted `FollowUpExecution`, resolves the Lead and step, renders the step's `subjectTemplate`/`contentTemplate`, and saves recipient/subject/message in `requestPayload` → WF04 receives only execution/enrollment/step IDs → n8n calls `POST /api/v1/internal/communication/follow-ups/:executionId/send` with an empty body and `Idempotency-Key` equal to `executionId` → NestJS CommunicationService reads the persisted payload, claims the delivery idempotently, sends through backend-configured SMTP, and persists the delivery result → WF04 returns that result to the dispatching FollowUpService; there is no separate delivery-callback request → backend advances only after confirmed `SENT`, applies bounded retries to definite retryable failures, and does not blindly resend `UNKNOWN` deliveries.
+- **Boundary:** execution does not create a sequence/enrollment. Template resolution/rendering, recipient selection, SMTP credentials, delivery state and idempotency are NestJS-owned. n8n must not contain editable email templates, recipient/message content or SMTP transport. The WF04 owner remains responsible for the final 12-node workflow graph and runtime acceptance.
 
 ## UC07 — Human-in-the-Loop Review
 - **Actor:** Reviewer or assigned user.

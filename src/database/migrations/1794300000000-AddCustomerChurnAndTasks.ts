@@ -48,9 +48,9 @@ export class AddCustomerChurnAndTasks1794300000000 implements MigrationInterface
         "id" uuid NOT NULL DEFAULT gen_random_uuid(),
         "customer_id" uuid NOT NULL,
         "assessment_id" uuid,
-        "task_type" varchar(40) NOT NULL DEFAULT 'RETENTION',
+        "task_type" varchar(50) NOT NULL DEFAULT 'RETENTION',
         "status" varchar(30) NOT NULL DEFAULT 'OPEN',
-        "priority" varchar(20) NOT NULL DEFAULT 'HIGH',
+        "priority" varchar(30) NOT NULL DEFAULT 'HIGH',
         "idempotency_key" varchar(255) NOT NULL,
         "due_at" timestamptz,
         "notes" text,
@@ -60,10 +60,33 @@ export class AddCustomerChurnAndTasks1794300000000 implements MigrationInterface
         "completed_at" timestamptz,
         CONSTRAINT "PK_customer_tasks" PRIMARY KEY ("id"),
         CONSTRAINT "FK_customer_tasks_customer"
-          FOREIGN KEY ("customer_id") REFERENCES "customers"("id") ON DELETE CASCADE,
-        CONSTRAINT "FK_customer_tasks_assessment"
-          FOREIGN KEY ("assessment_id") REFERENCES "customer_churn_assessments"("id") ON DELETE SET NULL
+          FOREIGN KEY ("customer_id") REFERENCES "customers"("id") ON DELETE CASCADE
       )
+    `);
+    await queryRunner.query(`
+      ALTER TABLE "customer_tasks"
+        ADD COLUMN IF NOT EXISTS "assessment_id" uuid,
+        ADD COLUMN IF NOT EXISTS "churn_assessment_id" uuid,
+        ADD COLUMN IF NOT EXISTS "customer_feedback_id" uuid,
+        ADD COLUMN IF NOT EXISTS "customer_issue_id" uuid,
+        ADD COLUMN IF NOT EXISTS "health_assessment_id" uuid,
+        ADD COLUMN IF NOT EXISTS "workflow_run_id" uuid,
+        ADD COLUMN IF NOT EXISTS "task_type" varchar(50) NOT NULL DEFAULT 'RETENTION',
+        ADD COLUMN IF NOT EXISTS "title" varchar(255) NOT NULL DEFAULT 'Customer Task',
+        ADD COLUMN IF NOT EXISTS "description" text,
+        ADD COLUMN IF NOT EXISTS "notes" text,
+        ADD COLUMN IF NOT EXISTS "priority" varchar(30) NOT NULL DEFAULT 'HIGH',
+        ADD COLUMN IF NOT EXISTS "status" varchar(30) NOT NULL DEFAULT 'OPEN',
+        ADD COLUMN IF NOT EXISTS "assigned_to" uuid,
+        ADD COLUMN IF NOT EXISTS "created_by" uuid,
+        ADD COLUMN IF NOT EXISTS "due_at" timestamptz,
+        ADD COLUMN IF NOT EXISTS "idempotency_key" varchar(255),
+        ADD COLUMN IF NOT EXISTS "source_entity_type" varchar(50),
+        ADD COLUMN IF NOT EXISTS "source_entity_id" uuid,
+        ADD COLUMN IF NOT EXISTS "metadata" jsonb,
+        ADD COLUMN IF NOT EXISTS "completed_at" timestamptz,
+        ADD COLUMN IF NOT EXISTS "created_at" timestamptz NOT NULL DEFAULT now(),
+        ADD COLUMN IF NOT EXISTS "updated_at" timestamptz NOT NULL DEFAULT now();
     `);
     await queryRunner.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS "UQ_customer_tasks_idempotency_key"
@@ -81,10 +104,30 @@ export class AddCustomerChurnAndTasks1794300000000 implements MigrationInterface
       CREATE INDEX IF NOT EXISTS "IDX_customer_tasks_status"
       ON "customer_tasks" ("status")
     `);
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_customer_tasks_assessment') THEN
+          ALTER TABLE "customer_tasks"
+            ADD CONSTRAINT "FK_customer_tasks_assessment"
+            FOREIGN KEY ("assessment_id") REFERENCES "customer_churn_assessments"("id") ON DELETE SET NULL;
+        END IF;
+      END $$;
+    `);
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query('DROP TABLE IF EXISTS "customer_tasks"');
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'customer_tasks') THEN
+          IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_customer_tasks_assessment') THEN
+            ALTER TABLE "customer_tasks" DROP CONSTRAINT "FK_customer_tasks_assessment";
+          END IF;
+          DELETE FROM "customer_tasks" WHERE "assessment_id" IS NOT NULL;
+        END IF;
+      END $$;
+    `);
     await queryRunner.query(
       'DROP TABLE IF EXISTS "customer_churn_assessments"',
     );

@@ -6,6 +6,8 @@ export interface N8nFollowUpResponse {
   providerMessageId?: string | null;
   message?: string;
   error?: string;
+  retryable?: boolean;
+  deliveryStatus?: string;
 }
 
 export interface ExecuteFollowUpResult {

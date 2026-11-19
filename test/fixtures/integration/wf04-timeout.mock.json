@@ -1,0 +1,10 @@
+{
+  "_mock": true,
+  "_workflow": "WF04",
+  "_scenario": "timeout",
+  "error": {
+    "statusCode": null,
+    "message": "Request timed out after 15000ms",
+    "timeout": true
+  }
+}

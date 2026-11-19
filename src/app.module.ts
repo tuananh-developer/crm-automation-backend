@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ObserveModule } from './observe.js';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -19,11 +20,24 @@ import { AuditModule } from './modules/audit/audit.module.js';
 import { RabbitMQModule } from './infrastructure/rabbitmq/rabbitmq.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { DataCleaningModule } from './modules/data-cleaning/data-cleaning.module.js';
+import { FeedbackModule } from './modules/feedback/feedback.module.js';
 import { T12WorkflowsModule } from './modules/t12-workflows/t12-workflows.module.js';
+import { CommunicationModule } from './modules/communication/communication.module.js';
 import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
+import { validateEnvironmentConfiguration } from './config/environment.validation.js';
 
 @Module({
   imports: [
+    ObserveModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        appKey: config.get<string>('OBSERVE_APP_KEY'),
+        appSecret: config.get<string>('OBSERVE_APP_SECRET'),
+        serviceId: 'crm-automation-backend',
+        enabled: config.get<string>('NODE_ENV') === 'production',
+      }),
+    }),
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: [
@@ -39,11 +53,30 @@ import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
-        const isProd = config.get<string>('NODE_ENV') === 'production';
-        const useLocalDb = config.get<string>('USE_LOCAL_DB') === 'true';
-        const dbUrl = config.get<string>('DATABASE_URL');
+        // Validate at provider initialization rather than ConfigModule import time.
+        // This preserves runtime env overrides used by E2E fixtures and test harnesses.
+        validateEnvironmentConfiguration(process.env);
 
-        // Connect to remote database (Neon / Supabase) if in production or DATABASE_URL provided without USE_LOCAL_DB
+        const isProd =
+          (config.get<string>('NODE_ENV') || '').trim().toLowerCase() ===
+          'production';
+        const useLocalDb = config.get<string>('USE_LOCAL_DB') === 'true';
+        const allowLocalInfra =
+          config.get<string>('ALLOW_LOCAL_INFRA_IN_PRODUCTION') === 'true';
+        const dbUrl = config.get<string>('DATABASE_URL')?.trim();
+
+        if (isProd && !useLocalDb && !dbUrl) {
+          throw new Error('FATAL: DATABASE_URL is required in production');
+        }
+        if (isProd && useLocalDb && !allowLocalInfra) {
+          throw new Error(
+            'FATAL: USE_LOCAL_DB in production requires ALLOW_LOCAL_INFRA_IN_PRODUCTION=true',
+          );
+        }
+
+        // Remote managed PostgreSQL is the production default. A private Docker
+        // Compose database is available only through the explicit, validated
+        // ALLOW_LOCAL_INFRA_IN_PRODUCTION mode.
         if (!useLocalDb && dbUrl) {
           const sslCa = config
             .get<string>('DB_SSL_CA')
@@ -63,7 +96,6 @@ import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
           };
         }
 
-        // Development mode: Fallback to local Docker Postgres (crm_postgres)
         const localHost =
           config.get<string>('LOCAL_DB_HOST') ||
           config.get<string>('DB_HOST') ||
@@ -109,7 +141,9 @@ import { resolvePostgresConnectionOptions } from './config/postgres-ssl.js';
     AuditModule,
     AuthModule,
     DataCleaningModule,
+    FeedbackModule,
     T12WorkflowsModule,
+    CommunicationModule,
     ThrottlerModule.forRoot([
       {
         name: 'default',

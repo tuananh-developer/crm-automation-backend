@@ -1,0 +1,10 @@
+{
+  "_mock": true,
+  "_workflow": "WF04",
+  "_scenario": "unauthorized",
+  "error": {
+    "statusCode": 401,
+    "message": "Unauthorized",
+    "error": "Unauthorized"
+  }
+}

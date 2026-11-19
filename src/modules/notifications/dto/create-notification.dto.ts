@@ -17,6 +17,14 @@ export class CreateNotificationDto {
   content?: string;
 
   @IsOptional()
+  @IsString()
+  message?: string;
+
+  @IsOptional()
+  @IsString()
+  severity?: string;
+
+  @IsOptional()
   @IsUUID()
   leadId?: string;
 

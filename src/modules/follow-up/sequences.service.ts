@@ -41,6 +41,10 @@ import {
 import { LeadFollowUpEnrollmentResponseDto } from './dto/lead-follow-up-enrollment-response.dto.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { UserRole } from '../users/enums/user.enum.js';
+import {
+  getUnsupportedFollowUpActionMessage,
+  isSupportedFollowUpAction,
+} from './follow-up-action.js';
 
 @Injectable()
 export class SequencesService {
@@ -234,6 +238,15 @@ export class SequencesService {
             ? 'EMAIL'
             : 'SYSTEM');
 
+    if (
+      (dto.isActive ?? true) &&
+      !isSupportedFollowUpAction(channel, dto.actionType)
+    ) {
+      throw new BadRequestException(
+        getUnsupportedFollowUpActionMessage(channel, dto.actionType),
+      );
+    }
+
     const metadata = dto.metadata ?? actionConfig ?? null;
 
     const step = this.stepsRepository.create({
@@ -318,6 +331,15 @@ export class SequencesService {
     }
     if (dto.isActive !== undefined) step.isActive = dto.isActive;
 
+    if (
+      step.isActive &&
+      !isSupportedFollowUpAction(step.channel, step.actionType)
+    ) {
+      throw new BadRequestException(
+        getUnsupportedFollowUpActionMessage(step.channel, step.actionType),
+      );
+    }
+
     const updated = await this.stepsRepository.save(step);
     return FollowUpStepMapper.toResponseDto(updated);
   }
@@ -386,6 +408,19 @@ export class SequencesService {
     if (activeSteps.length === 0) {
       throw new BadRequestException(
         'Cannot enroll into sequence with no steps',
+      );
+    }
+
+    const unsupportedStep = activeSteps.find(
+      (step) => !isSupportedFollowUpAction(step.channel, step.actionType),
+    );
+    if (unsupportedStep) {
+      throw new BadRequestException(
+        `Sequence contains an unsupported active step (order=${unsupportedStep.stepOrder}): ` +
+          getUnsupportedFollowUpActionMessage(
+            unsupportedStep.channel,
+            unsupportedStep.actionType,
+          ),
       );
     }
 

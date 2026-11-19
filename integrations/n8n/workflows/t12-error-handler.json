@@ -1,0 +1,100 @@
+{
+  "name": "T12 Shared Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d6f67689-6f3f-4e38-b4f9-7a8c850f8e01",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const event=$input.first().json||{};\nconst execution=event.execution||{};\nconst workflow=event.workflow||{};\nconst executionId=String(execution.id||event.executionId||'').trim();\nconst workflowName=String(workflow.name||event.workflowName||'').toUpperCase();\nconst mapping=[\n  ['WF01','lead-qualification'],\n  ['WF08','UC10_DATA_CLEANING'],\n  ['WF10','T12-WF10_NEXT_BEST_ACTION'],\n  ['WF11','T12-WF11_SALES_MEETING'],\n  ['WF12','T12-WF12_QUOTE_PROPOSAL']\n];\nconst selected=mapping.find(([marker])=>workflowName.includes(marker));\nif(!executionId||!selected)throw new Error('Cannot map Error Trigger event to an allowlisted T12 workflow');\n\nconst uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\nfunction findWorkflowRunId(value,depth=0){\n  if(depth>12||value===null||value===undefined)return null;\n  if(Array.isArray(value)){\n    for(const item of value){const found=findWorkflowRunId(item,depth+1);if(found)return found;}\n    return null;\n  }\n  if(typeof value!=='object')return null;\n  if(typeof value.workflowRunId==='string'&&uuid.test(value.workflowRunId))return value.workflowRunId;\n  for(const child of Object.values(value)){const found=findWorkflowRunId(child,depth+1);if(found)return found;}\n  return null;\n}\nconst workflowRunId=findWorkflowRunId(execution.data) || findWorkflowRunId(event.data);\nconst rawMessage=String(execution.error?.message||event.error?.message||'').toLowerCase();\nlet errorCategory='WORKFLOW_EXECUTION_FAILED';\nif(rawMessage.includes('timeout')||rawMessage.includes('timed out'))errorCategory='UPSTREAM_TIMEOUT';\nelse if(rawMessage.includes('429')||rawMessage.includes('rate limit'))errorCategory='UPSTREAM_RATE_LIMIT';\nelse if(rawMessage.includes('401')||rawMessage.includes('403')||rawMessage.includes('unauthorized'))errorCategory='UPSTREAM_AUTH_FAILURE';\nelse if(rawMessage.includes('validation')||rawMessage.includes('invalid'))errorCategory='INVALID_INPUT';\nconst failedNodeName=String(execution.lastNodeExecuted||event.lastNodeExecuted||'unknown').replace(/[\\r\\n]/g,' ').slice(0,120);\nreturn [{json:{\n  workflowRunId:workflowRunId||undefined,\n  workflowName:selected[1],\n  n8nExecutionId:executionId,\n  errorCategory,\n  failedNodeName\n}}];"
+      },
+      "id": "fba4ca21-87b6-4d17-a810-9f9f2ee9ee2f",
+      "name": "Code: Normalize Failure Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/workflow-executions/failure' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { workflowRunId: $json.workflowRunId, workflowName: $json.workflowName, n8nExecutionId: $json.n8nExecutionId, errorCategory: $json.errorCategory, failedNodeName: $json.failedNodeName } }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "bc2d3e97-5cb8-4e24-a1eb-741ae02d85cd",
+      "name": "HTTP Request: Record Workflow Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        760,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalize Failure Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize Failure Event": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Record Workflow Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

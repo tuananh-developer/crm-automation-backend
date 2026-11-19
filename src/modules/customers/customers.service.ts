@@ -119,6 +119,30 @@ export class CustomersService {
     );
   }
 
+  async findOneInternal(id: string): Promise<CustomerResponseDto> {
+    const customer = await this.customersRepository.findOne({
+      where: { id },
+      relations: {
+        creator: true,
+        convertedLeads: true,
+        customerSegments: {
+          segment: true,
+          assignedByUser: true,
+        },
+      },
+    });
+
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${id}' not found`);
+    }
+
+    return CustomerMapper.toResponseDto(
+      Object.assign(customer, {
+        segmentCount: customer.customerSegments?.length ?? 0,
+      }),
+    );
+  }
+
   private async assertCustomerAccess(
     customerId: string,
     actor: AuthenticatedUser,
@@ -161,10 +185,112 @@ export class CustomersService {
     return 'HIGH';
   }
 
+  deriveChurnScoreFromEvidence(
+    evidence: Array<Record<string, unknown>>,
+    asOfDate?: string,
+  ): number | null {
+    const validItems = evidence.filter(
+      (item) =>
+        typeof item.source === 'string' &&
+        typeof item.signal === 'string' &&
+        item.value !== null &&
+        item.value !== undefined,
+    );
+    if (validItems.length === 0) {
+      return null;
+    }
+
+    const parsedRef =
+      asOfDate && !Number.isNaN(Date.parse(asOfDate))
+        ? Date.parse(asOfDate)
+        : Date.now();
+
+    let totalScore = 0;
+
+    for (const item of validItems) {
+      const source = String(item.source).toLowerCase();
+      const signal = String(item.signal).toLowerCase();
+      const numericValue =
+        typeof item.value === 'number' && Number.isFinite(item.value)
+          ? item.value
+          : Number(item.value);
+
+      if (
+        signal.includes('failed') ||
+        signal.includes('retrying') ||
+        source.includes('follow_up')
+      ) {
+        if (Number.isFinite(numericValue) && numericValue > 0) {
+          totalScore += Math.min(75, Math.round(numericValue * 25));
+        }
+        continue;
+      }
+
+      if (
+        signal.includes('days_since_last_interaction') ||
+        signal.includes('inactivity_days')
+      ) {
+        if (Number.isFinite(numericValue)) {
+          if (numericValue >= 60) {
+            totalScore += 50;
+          } else if (numericValue >= 30) {
+            totalScore += 35;
+          } else if (numericValue >= 14) {
+            totalScore += 15;
+          }
+        }
+        continue;
+      }
+
+      if (signal.includes('interaction') || source.includes('interaction')) {
+        if (Number.isFinite(numericValue)) {
+          if (numericValue <= 0) {
+            totalScore += 35;
+          } else if (numericValue === 1) {
+            totalScore += 20;
+          } else if (numericValue === 2) {
+            totalScore += 10;
+          }
+        }
+
+        if (typeof item.observedAt === 'string') {
+          const observedTime = Date.parse(item.observedAt);
+          if (!Number.isNaN(observedTime)) {
+            const daysSince = Math.max(
+              0,
+              Math.floor((parsedRef - observedTime) / 86_400_000),
+            );
+            if (daysSince >= 60) {
+              totalScore += 50;
+            } else if (daysSince >= 30) {
+              totalScore += 30;
+            } else if (daysSince >= 14) {
+              totalScore += 15;
+            }
+          }
+        }
+        continue;
+      }
+
+      if (
+        signal.includes('feedback') ||
+        signal.includes('issue') ||
+        signal.includes('complaint') ||
+        signal.includes('risk')
+      ) {
+        if (Number.isFinite(numericValue) && numericValue > 0) {
+          totalScore += Math.min(70, Math.round(numericValue * 30));
+        }
+      }
+    }
+
+    return Math.min(100, Math.max(0, Math.round(totalScore)));
+  }
+
   async createChurnAssessment(
     customerId: string,
     input: {
-      score: number | null;
+      score?: number | null;
       riskLevel?: string;
       evidence?: Array<Record<string, unknown>>;
       coverage?: Record<string, unknown>;
@@ -195,7 +321,12 @@ export class CustomersService {
         item.value !== null &&
         item.value !== undefined,
     );
-    const score = hasEvidence ? input.score : null;
+    const asOfDate = input.asOfDate ?? new Date().toISOString().slice(0, 10);
+    const score = hasEvidence
+      ? input.score !== null && input.score !== undefined
+        ? input.score
+        : this.deriveChurnScoreFromEvidence(evidence, asOfDate)
+      : null;
     const derivedRisk = this.classifyChurnScore(score);
 
     if (input.riskLevel && input.riskLevel.toUpperCase() !== derivedRisk) {
@@ -210,7 +341,6 @@ export class CustomersService {
       );
     }
 
-    const asOfDate = input.asOfDate ?? new Date().toISOString().slice(0, 10);
     const assessment = this.churnAssessmentsRepository.create({
       customerId,
       score: score ?? null,

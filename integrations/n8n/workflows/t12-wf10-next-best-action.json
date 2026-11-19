@@ -107,8 +107,8 @@
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/next-best-actions/entity-context?entityType=' + $node['Code: Validate Entity Reference'].json.entityType + '&entityId=' + $node['Code: Validate Entity Reference'].json.entityId + '&workflowRunId=' + $node['Code: Validate Entity Reference'].json.workflowRunId }}",
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/next-best-actions/claim-and-entity-context' }}",
         "options": {
           "timeout": 20000
         },
@@ -124,7 +124,10 @@
               "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
-        }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { entityType: $node['Code: Validate Entity Reference'].json.entityType, entityId: $node['Code: Validate Entity Reference'].json.entityId, workflowRunId: $node['Code: Validate Entity Reference'].json.workflowRunId, n8nExecutionId: String($exec.id) } }}"
       },
       "id": "de268c41-2513-4c29-a572-1c08ee4cd83b",
       "name": "HTTP Request: Get Entity Profile",
@@ -213,7 +216,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/next-best-actions/follow-up-segment-context?entityType=' + $node['Code: Validate Entity Reference'].json.entityType + '&entityId=' + $node['Code: Validate Entity Reference'].json.entityId + '&workflowRunId=' + $node['Code: Validate Entity Reference'].json.workflowRunId }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/next-best-actions/follow-up-segment-context?entityType=' + $node['Code: Validate Entity Reference'].json.entityType + '&entityId=' + $node['Code: Validate Entity Reference'].json.entityId + '&workflowRunId=' + $node['Code: Validate Entity Reference'].json.workflowRunId + '&n8nExecutionId=' + String($exec.id) }}",
         "options": {
           "timeout": 20000
         },
@@ -248,7 +251,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const request=$node['Code: Validate Entity Reference'].json;\nconst profile=$node['HTTP Request: Get Entity Profile'].json;\nconst intel=$node['HTTP Request: Get Qualification and Score'].json;\nconst interactions=$node['HTTP Request: Get Interaction History'].json;\nconst followup=$input.first().json;\nconst allowed=followup.allowedActions||followup.data?.allowedActions;\nif(!Array.isArray(allowed)||allowed.length===0)throw new Error('Backend must supply a non-empty allowedActions list');\nconst evidence=[];\nfor(const x of (interactions.items||interactions.data?.items||[]).slice(0,30)){if(x.id)evidence.push({id:x.id,type:x.type||'INTERACTION',occurredAt:x.occurredAt||null,summary:String(x.subject||x.content||'').slice(0,300)});}\nfor(const k of ['qualificationId','scoreId'])if(intel[k])evidence.push({id:intel[k],type:k.toUpperCase()});\nconst candidateActions=allowed.slice(0,20).map(a=>({actionCode:a.actionCode,label:a.label,description:a.description||'',requiresApproval:Boolean(a.requiresApproval),evidenceIds:(a.evidenceIds||[]).filter(id=>evidence.some(e=>e.id===id))}));\nconst context={entityType:request.entityType,entityId:request.entityId,profile:profile.data||profile,intelligence:intel,followupSegment:followup,evidence,candidateActions};\nconst prompt=`Rank only the supplied candidateActions for this CRM entity. Do not invent actions or facts. Return JSON only: {\"recommendations\":[{\"actionCode\":\"...\",\"rank\":1,\"confidence\":0.0,\"explanation\":\"...\",\"evidenceIds\":[\"...\"]}]}. Every evidenceIds value must come from supplied evidence. No execution instructions, no direct writes, no sending messages.\\nCONTEXT=${JSON.stringify(context)}`;\nreturn [{json:{...request,context,candidateActions,prompt}}];"
+        "jsCode": "const request=$node['Code: Validate Entity Reference'].json;\nconst rawProfile=$node['HTTP Request: Get Entity Profile'].json;\nconst intel=$node['HTTP Request: Get Qualification and Score'].json;\nconst interactions=$node['HTTP Request: Get Interaction History'].json;\nconst followup=$input.first().json;\nconst allowed=followup.allowedActions||followup.data?.allowedActions;\nif(!Array.isArray(allowed)||allowed.length===0)throw new Error('Backend must supply a non-empty allowedActions list');\nconst sourceProfile=rawProfile.data||rawProfile;\nconst profile={\n  entityType:request.entityType,\n  companyName:sourceProfile.companyName||null,\n  companyWebsite:sourceProfile.companyWebsite||null,\n  industry:sourceProfile.industry||null,\n  jobTitle:sourceProfile.jobTitle||null,\n  companySize:sourceProfile.companySize??null,\n  status:sourceProfile.status||null\n};\nconst evidence=[];\nfor(const x of (interactions.items||interactions.data?.items||[]).slice(0,30)){\n  if(x.id)evidence.push({id:x.id,type:x.type||'INTERACTION',occurredAt:x.occurredAt||null});\n}\nfor(const k of ['qualificationId','scoreId'])if(intel[k])evidence.push({id:intel[k],type:k.toUpperCase()});\nconst intelligence={\n  qualificationStatus:intel.qualification?.status||null,\n  qualificationConfidence:intel.qualification?.confidence??null,\n  score:intel.score?.score??null,\n  scoreLabel:intel.score?.label||null\n};\nconst safeFollowup={\n  followUps:(followup.followUps||followup.data?.followUps||[]).map(x=>({status:x.status,sequenceId:x.sequenceId})),\n  segments:(followup.segments||followup.data?.segments||[]).map(x=>({segmentId:x.segmentId,assignmentType:x.assignmentType})),\n  allowedActions:allowed.map(a=>({actionCode:a.actionCode,label:a.label,description:a.description||'',requiresApproval:Boolean(a.requiresApproval),evidenceIds:(a.evidenceIds||[]).filter(id=>evidence.some(e=>e.id===id))}))\n};\nconst candidateActions=safeFollowup.allowedActions.slice(0,20);\nconst context={entityType:request.entityType,profile,intelligence,followUpAndSegment:safeFollowup,evidence,candidateActions};\nconst prompt=\\`Rank only the supplied candidateActions for this CRM entity. Do not invent actions or facts. Use company/engagement metadata only; no personal contact data or free-form communication text is provided. Return JSON only: {\"recommendations\":[{\"actionCode\":\"...\",\"rank\":1,\"confidence\":0.0,\"explanation\":\"...\",\"evidenceIds\":[\"...\"]}]}. Every evidenceIds value must come from supplied evidence. No execution instructions, no direct writes, no sending messages.\nCONTEXT=\\${JSON.stringify(context)}\\`;\nreturn [{json:{...request,context,candidateActions,prompt}}];"
       },
       "id": "7774ddc7-5f32-4772-9e5b-9b1155ac9f78",
       "name": "Code: Generate Candidate Actions",
@@ -300,7 +303,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const ai=$input.first().json||{}; const prep=$node['Code: Generate Candidate Actions'].json;\nconst t=ai.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')||''; if(!t)throw new Error('Gemini returned no recommendations');\nconst clean=t.replace(/^```(?:json)?\\s*/i,'').replace(/\\s*```$/,'').trim();const parsed=JSON.parse(clean);\nif(!Array.isArray(parsed.recommendations))throw new Error('recommendations must be an array');\nconst byCode=new Map(prep.candidateActions.map(a=>[a.actionCode,a]));const evidenceIds=new Set(prep.context.evidence.map(e=>e.id));\nconst recommendations=parsed.recommendations.slice(0,10).map(r=>{const c=byCode.get(r.actionCode);if(!c)throw new Error('AI proposed action outside backend allowlist: '+r.actionCode);if(!Array.isArray(r.evidenceIds)||r.evidenceIds.some(id=>!evidenceIds.has(id)))throw new Error('Recommendation contains unsupported evidence reference');if(typeof r.confidence!=='number'||r.confidence<0||r.confidence>1)throw new Error('Invalid recommendation confidence');return {actionCode:c.actionCode,rank:Number.isInteger(r.rank)&&r.rank>0?r.rank:99,confidence:r.confidence,explanation:String(r.explanation||'').slice(0,1000),evidenceIds:r.evidenceIds,requiresApproval:c.requiresApproval};}).sort((a,b)=>a.rank-b.rank);\nif(!recommendations.length)throw new Error('No valid recommendations');\nconst humanApprovalRequired=recommendations.some(r=>r.requiresApproval||r.confidence<0.7);\nreturn [{json:{...prep,recommendations,humanApprovalRequired,callbackPayload:{workflowRunId:prep.workflowRunId,entityType:prep.entityType,entityId:prep.entityId,recommendations,source:'AI_NEXT_BEST_ACTION',status:'COMPLETED'}}}];"
+        "jsCode": "const ai=$input.first().json||{}; const prep=$node['Code: Generate Candidate Actions'].json;\nconst t=ai.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')||''; if(!t)throw new Error('Gemini returned no recommendations');\nconst clean=t.replace(/^```(?:json)?\\s*/i,'').replace(/\\s*```$/,'').trim();const parsed=JSON.parse(clean);\nif(!Array.isArray(parsed.recommendations))throw new Error('recommendations must be an array');\nconst byCode=new Map(prep.candidateActions.map(a=>[a.actionCode,a]));const evidenceIds=new Set(prep.context.evidence.map(e=>e.id));\nconst recommendations=parsed.recommendations.slice(0,10).map(r=>{const c=byCode.get(r.actionCode);if(!c)throw new Error('AI proposed action outside backend allowlist: '+r.actionCode);if(!Array.isArray(r.evidenceIds)||r.evidenceIds.some(id=>!evidenceIds.has(id)))throw new Error('Recommendation contains unsupported evidence reference');if(typeof r.confidence!=='number'||r.confidence<0||r.confidence>1)throw new Error('Invalid recommendation confidence');return {actionCode:c.actionCode,rank:Number.isInteger(r.rank)&&r.rank>0?r.rank:99,confidence:r.confidence,explanation:String(r.explanation||'').slice(0,1000),evidenceIds:r.evidenceIds,requiresApproval:c.requiresApproval};}).sort((a,b)=>a.rank-b.rank);\nif(!recommendations.length)throw new Error('No valid recommendations');\nconst humanApprovalRequired=recommendations.some(r=>r.requiresApproval||r.confidence<0.7);\nreturn [{json:{...prep,recommendations,humanApprovalRequired,callbackPayload:{workflowRunId:prep.workflowRunId,n8nExecutionId:String($exec.id),entityType:prep.entityType,entityId:prep.entityId,recommendations,source:'AI_NEXT_BEST_ACTION',status:'COMPLETED'}}}];"
       },
       "id": "61f52a80-0aac-4f15-8d8c-db8920b5f411",
       "name": "Code: Validate Action",
@@ -364,7 +367,7 @@
           "conditions": [
             {
               "id": "2ef052d7-3878-4565-bc6d-67facf8454e0",
-              "leftValue": "={ $json.humanApprovalRequired }",
+              "leftValue": "={{ $json.requiresHumanApproval }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -412,7 +415,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Validate Action'].json.workflowRunId, entityType: $node['Code: Validate Action'].json.entityType, entityId: $node['Code: Validate Action'].json.entityId, recommendationId: $node['HTTP Request: Save Recommendation'].json.recommendationId || $node['HTTP Request: Save Recommendation'].json.data?.id, idempotencyKey: $node['Code: Validate Action'].json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Validate Action'].json.workflowRunId, entityType: $node['Code: Validate Action'].json.entityType, entityId: $node['Code: Validate Action'].json.entityId, recommendationId: $node['HTTP Request: Save Recommendation'].json.recommendationId || $node['HTTP Request: Save Recommendation'].json.data?.id, n8nExecutionId: String($exec.id), idempotencyKey: $node['Code: Validate Action'].json.workflowRunId } }}"
       },
       "id": "1ccdffaa-2fc7-498b-84bd-4ee41b10e2a8",
       "name": "HTTP Request: Create Review and Notification",
@@ -427,60 +430,6 @@
       "waitBetweenTries": 5000,
       "notes": "PROVISIONAL API: backend must create/reuse ReviewTask. n8n never changes the CRM entity or executes the recommendation.",
       "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/workflow-executions/claim' }}",
-        "options": {
-          "timeout": 20000
-        },
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Accept",
-              "value": "application/json"
-            },
-            {
-              "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY }}"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: ($json.body || $json).workflowRunId, workflowName: 'T12-WF10_NEXT_BEST_ACTION', n8nExecutionId: String($exec.id) } }}"
-      },
-      "id": "a1100000-0000-4000-8000-000000000010",
-      "name": "HTTP Request: Claim Workflow Execution",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [
-        320,
-        160
-      ],
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 1000,
-      "notes": "Atomically claims this WorkflowRun before AI processing. A duplicate n8n execution receives claimed=false and is stopped by the next node.",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const claim = $input.first()?.json ?? {};\nif (claim.claimed !== true) {\n  return [];\n}\nreturn [{ json: $('Webhook Trigger').first().json }];"
-      },
-      "id": "a1100000-0000-4000-8000-000000000011",
-      "name": "Code: Stop Duplicate Execution",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        560,
-        160
-      ],
-      "notes": "Only the execution that atomically claimed the WorkflowRun may continue.",
-      "notesInFlow": true
     }
   ],
   "connections": {
@@ -488,7 +437,7 @@
       "main": [
         [
           {
-            "node": "HTTP Request: Claim Workflow Execution",
+            "node": "Code: Validate Entity Reference",
             "type": "main",
             "index": 0
           }
@@ -605,28 +554,6 @@
         ],
         []
       ]
-    },
-    "HTTP Request: Claim Workflow Execution": {
-      "main": [
-        [
-          {
-            "node": "Code: Stop Duplicate Execution",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code: Stop Duplicate Execution": {
-      "main": [
-        [
-          {
-            "node": "Code: Validate Entity Reference",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
     }
   },
   "settings": {
@@ -640,5 +567,5 @@
     "templateCredsSetupCompleted": false
   },
   "tags": [],
-  "description": "Owner: Tuấn Anh. Protected internal webhook. AI may only rank backend-allowlisted actions. Several dedicated internal APIs are provisional and require backend implementation before activation."
+  "description": "Owner: Tuấn Anh. Protected internal webhook. AI may only rank backend-allowlisted actions. Several dedicated internal APIs are provisional and require backend implementation before activation. Atomic WorkflowRun claim is folded into the entity-context request; the graph has exactly 12 functional nodes."
 }

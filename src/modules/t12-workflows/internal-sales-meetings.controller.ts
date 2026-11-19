@@ -9,6 +9,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -24,8 +25,11 @@ export class InternalSalesMeetingsController {
 
   @Get(':meetingId/context')
   @ApiOperation({ summary: 'Read meeting and attendee CRM context' })
-  getContext(@Param('meetingId', ParseUUIDPipe) meetingId: string) {
-    return this.service.getContext(meetingId);
+  getContext(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Query('n8nExecutionId') n8nExecutionId: string,
+  ) {
+    return this.service.getContext(meetingId, n8nExecutionId);
   }
 
   @Post(':meetingId/summary')

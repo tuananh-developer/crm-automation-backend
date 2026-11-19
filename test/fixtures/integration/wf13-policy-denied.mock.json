@@ -1,0 +1,19 @@
+{
+  "_mock": true,
+  "_workflow": "WF13",
+  "_scenario": "policy-denied",
+  "contractId": "550e8400-e29b-41d4-a716-446655440030",
+  "customerId": "550e8400-e29b-41d4-a716-446655440031",
+  "asOfDate": "2026-10-29",
+  "autoSendAllowed": false,
+  "reason": "No valid consent or approved template",
+  "renewalAttempt": {
+    "id": "550e8400-e29b-41d4-a716-446655440035",
+    "status": "PENDING_APPROVAL"
+  },
+  "customerTask": {
+    "id": "550e8400-e29b-41d4-a716-446655440036",
+    "type": "RENEWAL",
+    "status": "OPEN"
+  }
+}

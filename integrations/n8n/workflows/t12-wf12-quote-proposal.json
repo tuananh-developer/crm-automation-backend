@@ -107,8 +107,8 @@
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/quotes/entity-context?customerId=' + ($node['Code: Validate Requirements'].json.customerId || '') + '&leadId=' + ($node['Code: Validate Requirements'].json.leadId || '') + '&workflowRunId=' + $node['Code: Validate Requirements'].json.workflowRunId }}",
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/quotes/claim-and-entity-context' }}",
         "options": {
           "timeout": 20000
         },
@@ -124,7 +124,10 @@
               "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
-        }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { customerId: $node['Code: Validate Requirements'].json.customerId || null, leadId: $node['Code: Validate Requirements'].json.leadId || null, workflowRunId: $node['Code: Validate Requirements'].json.workflowRunId, n8nExecutionId: String($exec.id) } }}"
       },
       "id": "2dffa5f8-8b89-4006-9269-c18fe8e94a42",
       "name": "HTTP Request: Get Customer Context",
@@ -143,7 +146,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/catalog/items?workflowRunId=' + $node['Code: Validate Requirements'].json.workflowRunId }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/catalog/items?workflowRunId=' + $node['Code: Validate Requirements'].json.workflowRunId + '&n8nExecutionId=' + String($exec.id) }}",
         "options": {
           "timeout": 20000
         },
@@ -176,7 +179,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const req=$node['Code: Validate Requirements'].json;const c=$node['HTTP Request: Get Customer Context'].json;const catalog=$input.first().json;\nconst items=catalog.items||catalog.data?.items||catalog.data||[];if(!Array.isArray(items))throw new Error('Catalog response must be array');\nconst byId=new Map(items.map(i=>[i.id,i]));const normalized=req.requestedItems.map(x=>{const item=byId.get(x.catalogItemId);if(!item)throw new Error('Unknown catalogItemId: '+x.catalogItemId);if(item.isActive===false||item.status==='INACTIVE')throw new Error('Catalog item is inactive: '+x.catalogItemId);return {catalogItemId:item.id,sku:item.sku||null,name:item.name,description:item.description||'',quantity:x.quantity,currency:item.currency||req.currency};});\nconst customerContext=c.data||c;\nconst prompt=`Draft a concise professional B2B quote proposal using ONLY this customer context, requested requirements, and selected catalog items. Do not invent prices, discounts, tax rates, payment terms, contract terms, delivery dates or legal commitments. The backend is the only source of truth for all prices and taxes. Return JSON only: {\"title\":\"...\",\"executiveSummary\":\"...\",\"body\":\"...\",\"lineItems\":[{\"catalogItemId\":\"...\",\"quantity\":1,\"description\":\"...\"}]}. Include only catalogItemId and quantity exactly as supplied; never add products or alter quantities.\nCUSTOMER=${JSON.stringify(customerContext)}\nREQUIREMENTS=${req.requirements}\nCATALOG=${JSON.stringify(normalized)}`;\nreturn [{json:{...req,customerContext,catalogItems:normalized,prompt}}];"
+        "jsCode": "const req=$node['Code: Validate Requirements'].json;\nconst c=$node['HTTP Request: Get Customer Context'].json;\nconst catalog=$input.first().json;\nconst items=catalog.items||catalog.data?.items||catalog.data||[];\nif(!Array.isArray(items))throw new Error('Catalog response must be array');\nconst byId=new Map(items.map(i=>[i.id,i]));\nconst normalized=req.requestedItems.map(x=>{\n  const item=byId.get(x.catalogItemId);\n  if(!item)throw new Error('Unknown catalogItemId: '+x.catalogItemId);\n  if(item.isActive===false||item.status==='INACTIVE')throw new Error('Catalog item is inactive: '+x.catalogItemId);\n  return {catalogItemId:item.id,sku:item.sku||null,name:item.name,description:item.description||'',quantity:x.quantity,currency:item.currency||req.currency};\n});\nconst sourceCustomer=c.data?.entity||c.entity||c.data||c;\nconst customerContext={\n  entityType:sourceCustomer.entityType||'Customer',\n  companyName:sourceCustomer.companyName||null,\n  companyWebsite:sourceCustomer.companyWebsite||null,\n  industry:sourceCustomer.industry||null,\n  jobTitle:sourceCustomer.jobTitle||null\n};\nconst minimizedRequirements=String(req.requirements||'')\n  .normalize('NFKC')\n  .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi,'[REDACTED_EMAIL]')\n  .replace(/(?:\\+?\\d[\\d .()\\-]{7,}\\d)/g,'[REDACTED_PHONE]')\n  .replace(/\\b(?:\\d[ -]?){8,34}\\b/g,'[REDACTED_IDENTIFIER]')\n  .replace(/((?:full\\s+name|customer\\s+name|contact(?:\\s+person)?|attendee|name|attn|họ\\s+tên|tên\\s+khách\\s+hàng|người\\s+liên\\s+hệ)\\s*[:=]\\s*)[^\\n,;.!?]{2,100}/giu,'$1[REDACTED_PERSON]')\n  .replace(/((?:residential\\s+address|office\\s+address|shipping\\s+address|address|địa\\s+chỉ|nơi\\s+ở)\\s*[:=]?\\s*)[^\\n;.!?]{4,150}/giu,'$1[REDACTED_ADDRESS]')\n  .replace(/\\b\\d{1,6}\\s+[\\p{L}\\d.'-]+(?:\\s+[\\p{L}\\d.'-]+){0,4}\\s+(?:street|st\\.?|road|rd\\.?|avenue|ave\\.?|lane|ln\\.?|boulevard|blvd\\.?)\\b[^,\\n;]*/giu,'[REDACTED_ADDRESS]')\n  .replace(/(?:số\\s+\\d{1,6}\\s*,?\\s*)?(?:đường|phố|ngõ|hẻm)\\s+[\\p{L}\\d .'-]{2,60}/giu,'[REDACTED_ADDRESS]')\n  .replace(/\\b(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret|mật khẩu)\\s*[:=]\\s*[\"']?[^\\s,\"';]+/giu,'$1=[REDACTED_SECRET]')\n  .slice(0,10000);\nconst prompt=`Draft a concise professional B2B quote proposal using ONLY the minimized business context, requirements, and selected catalog items. Do not invent prices, discounts, tax rates, payment terms, contract terms, delivery dates or legal commitments. The backend is the only source of truth for all prices and taxes. Return JSON only: {\"title\":\"...\",\"executiveSummary\":\"...\",\"body\":\"...\",\"lineItems\":[{\"catalogItemId\":\"...\",\"quantity\":1,\"description\":\"...\"}]}. Include only catalogItemId and quantity exactly as supplied; never add products or alter quantities.\nCUSTOMER=${JSON.stringify(customerContext)}\nREQUIREMENTS=${minimizedRequirements}\nCATALOG=${JSON.stringify(normalized)}`;\nreturn [{json:{...req,customerContext,catalogItems:normalized,minimizedRequirements,prompt}}];"
       },
       "id": "463bcbc5-aa8b-4e21-ad81-c692d64ddede",
       "name": "Code: Normalize Requirements",
@@ -265,7 +268,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Validate Requirements'].json.workflowRunId, customerId: $node['Code: Validate Requirements'].json.customerId, leadId: $node['Code: Validate Requirements'].json.leadId, items: $node['Code: Parse Line Items'].json.proposalDraft.lineItems, currency: $node['Code: Parse Line Items'].json.currency, idempotencyKey: $node['Code: Validate Requirements'].json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Validate Requirements'].json.workflowRunId, customerId: $node['Code: Validate Requirements'].json.customerId, leadId: $node['Code: Validate Requirements'].json.leadId, items: $node['Code: Parse Line Items'].json.proposalDraft.lineItems, currency: $node['Code: Parse Line Items'].json.currency, n8nExecutionId: String($exec.id), idempotencyKey: $node['Code: Validate Requirements'].json.workflowRunId } }}"
       },
       "id": "c1c662f8-a371-4b9b-8f3d-f5abdda88680",
       "name": "HTTP Request: Backend Pricing Validation",
@@ -321,7 +324,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Determine Approval Requirement'].json.workflowRunId, customerId: $node['Code: Determine Approval Requirement'].json.customerId, leadId: $node['Code: Determine Approval Requirement'].json.leadId, title: $node['Code: Determine Approval Requirement'].json.proposalDraft.title, executiveSummary: $node['Code: Determine Approval Requirement'].json.proposalDraft.executiveSummary, body: $node['Code: Determine Approval Requirement'].json.proposalDraft.body, items: $node['Code: Determine Approval Requirement'].json.proposalDraft.lineItems, currency: $node['Code: Determine Approval Requirement'].json.currency } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Determine Approval Requirement'].json.workflowRunId, customerId: $node['Code: Determine Approval Requirement'].json.customerId, leadId: $node['Code: Determine Approval Requirement'].json.leadId, title: $node['Code: Determine Approval Requirement'].json.proposalDraft.title, executiveSummary: $node['Code: Determine Approval Requirement'].json.proposalDraft.executiveSummary, body: $node['Code: Determine Approval Requirement'].json.proposalDraft.body, items: $node['Code: Determine Approval Requirement'].json.proposalDraft.lineItems, n8nExecutionId: String($exec.id), currency: $node['Code: Determine Approval Requirement'].json.currency } }}"
       },
       "id": "a201162a-82c8-4f83-be04-03c8690e6d30",
       "name": "HTTP Request: Save Draft",
@@ -346,7 +349,7 @@
           "conditions": [
             {
               "id": "40a0d670-6452-445d-a4c9-4e051fe15ea6",
-              "leftValue": "={ $json.approvalRequired }",
+              "leftValue": "={{ $json.approvalRequired }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -394,7 +397,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: $node['Code: Determine Approval Requirement'].json.workflowRunId, idempotencyKey: $node['Code: Determine Approval Requirement'].json.workflowRunId } }}"
+        "jsonBody": "={{ { workflowRunId: $node['Code: Determine Approval Requirement'].json.workflowRunId, n8nExecutionId: String($exec.id), idempotencyKey: $node['Code: Determine Approval Requirement'].json.workflowRunId } }}"
       },
       "id": "ca2e6046-c09b-488c-ad1c-fdabab7303bd",
       "name": "HTTP Request: Create Approval Task",
@@ -409,60 +412,6 @@
       "waitBetweenTries": 5000,
       "notes": "Canonical quote submit-for-approval endpoint. NestJS creates/reuses the approval task and controls state transitions.",
       "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/workflow-executions/claim' }}",
-        "options": {
-          "timeout": 20000
-        },
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Accept",
-              "value": "application/json"
-            },
-            {
-              "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY }}"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ { workflowRunId: ($json.body || $json).workflowRunId, workflowName: 'T12-WF12_QUOTE_PROPOSAL', n8nExecutionId: String($exec.id) } }}"
-      },
-      "id": "a1100000-0000-4000-8000-000000000210",
-      "name": "HTTP Request: Claim Workflow Execution",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [
-        320,
-        160
-      ],
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 1000,
-      "notes": "Atomically claims this WorkflowRun before AI proposal generation. A duplicate n8n execution receives claimed=false and is stopped by the next node.",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const claim = $input.first()?.json ?? {};\nif (claim.claimed !== true) {\n  return [];\n}\nreturn [{ json: $('Webhook Trigger').first().json }];"
-      },
-      "id": "a1100000-0000-4000-8000-000000000211",
-      "name": "Code: Stop Duplicate Execution",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        560,
-        160
-      ],
-      "notes": "Only the execution that atomically claimed the WorkflowRun may continue.",
-      "notesInFlow": true
     }
   ],
   "connections": {
@@ -470,7 +419,7 @@
       "main": [
         [
           {
-            "node": "HTTP Request: Claim Workflow Execution",
+            "node": "Code: Validate Requirements",
             "type": "main",
             "index": 0
           }
@@ -587,28 +536,6 @@
         ],
         []
       ]
-    },
-    "HTTP Request: Claim Workflow Execution": {
-      "main": [
-        [
-          {
-            "node": "Code: Stop Duplicate Execution",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code: Stop Duplicate Execution": {
-      "main": [
-        [
-          {
-            "node": "Code: Validate Requirements",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
     }
   },
   "settings": {
@@ -622,5 +549,5 @@
     "templateCredsSetupCompleted": false
   },
   "tags": [],
-  "description": "Owner: Tuấn Anh. Protected internal webhook. NestJS catalog/pricing/quote service is authoritative. Backend price-preview route is provisional and must be implemented before activation."
+  "description": "Owner: Tuấn Anh. Protected internal webhook. NestJS catalog/pricing/quote service is authoritative. Backend price-preview route is provisional and must be implemented before activation. Atomic WorkflowRun claim is folded into the customer-context request; the graph has exactly 12 functional nodes."
 }

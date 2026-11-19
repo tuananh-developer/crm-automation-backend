@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Customer } from './entities/customer.entity.js';
+import { CustomerTask } from './entities/customer-task.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
@@ -15,7 +16,6 @@ import {
   InternalCustomerTasksController,
 } from './internal-churn.controller.js';
 import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
-import { CustomerTask } from './entities/customer-task.entity.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 
@@ -23,13 +23,13 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
   imports: [
     TypeOrmModule.forFeature([
       Customer,
+      CustomerTask,
       Segment,
       CustomerSegment,
       LeadScore,
       User,
       WorkflowRun,
       CustomerChurnAssessment,
-      CustomerTask,
     ]),
     AuthModule,
   ],

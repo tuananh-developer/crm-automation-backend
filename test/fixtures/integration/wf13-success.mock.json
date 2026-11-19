@@ -1,0 +1,16 @@
+{
+  "_mock": true,
+  "_workflow": "WF13",
+  "_scenario": "success",
+  "contractId": "550e8400-e29b-41d4-a716-446655440030",
+  "customerId": "550e8400-e29b-41d4-a716-446655440031",
+  "asOfDate": "2026-10-29",
+  "correlationId": "550e8400-e29b-41d4-a716-446655440032",
+  "workflowRunId": "550e8400-e29b-41d4-a716-446655440033",
+  "renewalAttempt": {
+    "id": "550e8400-e29b-41d4-a716-446655440034",
+    "status": "SENT",
+    "sentAt": "2026-10-29T10:00:00.000Z"
+  },
+  "autoSendAllowed": true
+}
