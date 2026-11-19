@@ -550,10 +550,16 @@ export class SequencesService {
     if (query?.leadId) where.leadId = query.leadId;
     if (query?.sequenceId) where.sequenceId = query.sequenceId;
     if (query?.status) where.status = query.status;
+
+    const leadWhere: FindOptionsWhere<Lead> = {};
     if (query?.customerId) {
-      where.lead = { convertedCustomerId: query.customerId };
-    } else if (actor.role === UserRole.SALES) {
-      where.lead = { ownerId: actor.id };
+      leadWhere.convertedCustomerId = query.customerId;
+    }
+    if (actor.role === UserRole.SALES) {
+      leadWhere.ownerId = actor.id;
+    }
+    if (Object.keys(leadWhere).length > 0) {
+      where.lead = leadWhere;
     }
 
     const enrollments = await this.enrollmentsRepository.find({

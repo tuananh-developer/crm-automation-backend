@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { createHash } from 'node:crypto';
 import { NotFoundException } from '@nestjs/common';
 import { AccountHealthController } from './account-health.controller.js';
 import { AccountHealthService } from './account-health.service.js';
@@ -98,14 +99,30 @@ describe('AccountHealthController', () => {
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('reuses recent existing snapshot for idempotency on workflow retry', async () => {
+    it('reuses recent existing snapshot for idempotency on workflow retry when inputHash matches', async () => {
+      const expectedHash = createHash('sha256')
+        .update(
+          JSON.stringify({
+            idempotencyKey: null,
+            engagement: 80,
+            feedback: 80,
+            openIssues: 80,
+            followUpCompletion: 80,
+            evidence: [],
+          }),
+        )
+        .digest('hex');
+
       const recentSnapshot = {
         id: 'existing-snap-id',
         customerId: mockCustomer.id,
         score: 80,
         status: 'HEALTHY',
+        dataCoverage: {
+          inputHash: expectedHash,
+        },
         assessedAt: new Date(Date.now() - 60 * 1000), // 1 minute ago
-      } as AccountHealthSnapshot;
+      } as unknown as AccountHealthSnapshot;
 
       snapshotRepo.findOne = jest.fn().mockResolvedValue(recentSnapshot);
 
@@ -119,6 +136,46 @@ describe('AccountHealthController', () => {
 
       expect(snapshotRepo.save).not.toHaveBeenCalled();
       expect(result.id).toBe('existing-snap-id');
+    });
+
+    it('creates a new snapshot within 5 minutes when score is identical but input breakdown differs', async () => {
+      const previousHash = createHash('sha256')
+        .update(
+          JSON.stringify({
+            idempotencyKey: null,
+            engagement: 80,
+            feedback: 80,
+            openIssues: 80,
+            followUpCompletion: 80,
+            evidence: ['old evidence'],
+          }),
+        )
+        .digest('hex');
+
+      const recentSnapshot = {
+        id: 'existing-snap-id',
+        customerId: mockCustomer.id,
+        score: 80,
+        status: 'HEALTHY',
+        dataCoverage: {
+          inputHash: previousHash,
+        },
+        assessedAt: new Date(Date.now() - 60 * 1000),
+      } as unknown as AccountHealthSnapshot;
+
+      snapshotRepo.findOne = jest.fn().mockResolvedValue(recentSnapshot);
+
+      const result = await controller.calculate({
+        customerId: mockCustomer.id,
+        engagement: 90,
+        feedback: 70,
+        openIssues: 75,
+        followUpCompletion: 84,
+        evidence: ['new evidence'],
+      });
+
+      expect(snapshotRepo.save).toHaveBeenCalled();
+      expect(result.id).toBe('snap-saved');
     });
   });
 

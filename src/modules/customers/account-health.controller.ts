@@ -3,17 +3,27 @@ import {
   Controller,
   Get,
   NotFoundException,
+  Optional,
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { AccountHealthService } from './account-health.service.js';
+import { CustomersService } from './customers.service.js';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { AccountHealthSnapshot } from './entities/account-health-snapshot.entity.js';
 import { Customer } from './entities/customer.entity.js';
+import { CustomerTask } from './entities/customer-task.entity.js';
+import { Lead } from '../leads/entities/lead.entity.js';
+import { Interaction } from '../leads/entities/interaction.entity.js';
+import { LeadFollowUpEnrollment } from '../follow-up/entities/lead-follow-up-enrollment.entity.js';
+import { CustomerFeedback } from '../feedback/entities/customer-feedback.entity.js';
+import { QueryCustomerDto } from './dto/index.js';
 import {
   CalculateAccountHealthDto,
   ValidateActionsDto,
@@ -33,7 +43,111 @@ export class AccountHealthController {
     private readonly snapshotRepo: Repository<AccountHealthSnapshot>,
     @InjectRepository(Customer)
     private readonly customerRepo: Repository<Customer>,
+    @Optional()
+    private readonly customersService?: CustomersService,
+    @Optional()
+    @InjectRepository(Lead)
+    private readonly leadRepo?: Repository<Lead>,
+    @Optional()
+    @InjectRepository(Interaction)
+    private readonly interactionRepo?: Repository<Interaction>,
+    @Optional()
+    @InjectRepository(LeadFollowUpEnrollment)
+    private readonly enrollmentRepo?: Repository<LeadFollowUpEnrollment>,
+    @Optional()
+    @InjectRepository(CustomerFeedback)
+    private readonly feedbackRepo?: Repository<CustomerFeedback>,
+    @Optional()
+    @InjectRepository(CustomerTask)
+    private readonly customerTaskRepo?: Repository<CustomerTask>,
   ) {}
+
+  @Get('customers')
+  async listCustomers(@Query() query: QueryCustomerDto) {
+    if (this.customersService) {
+      return this.customersService.findAllInternal(query);
+    }
+    const where: Record<string, unknown> = {};
+    if (query.status) where.status = query.status;
+    if (query.isStrategic !== undefined) where.isStrategic = query.isStrategic;
+    const data = await this.customerRepo.find({ where });
+    return {
+      data,
+      meta: {
+        page: query.page ?? 1,
+        limit: query.limit ?? 20,
+        total: data.length,
+        totalPages: 1,
+      },
+    };
+  }
+
+  @Get('customers/:customerId/context')
+  async getCustomerAccountHealthContext(
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+  ) {
+    const customer = await this.customerRepo.findOne({
+      where: { id: customerId },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+
+    const leads = this.leadRepo
+      ? await this.leadRepo.find({
+          where: { convertedCustomerId: customerId },
+        })
+      : [];
+    const leadIds = leads.map((l) => l.id);
+
+    const interactions =
+      this.interactionRepo && leadIds.length > 0
+        ? await this.interactionRepo.find({
+            where: { leadId: In(leadIds) },
+            order: { occurredAt: 'DESC' },
+          })
+        : [];
+
+    const followUps =
+      this.enrollmentRepo && leadIds.length > 0
+        ? await this.enrollmentRepo.find({
+            where: { leadId: In(leadIds) },
+            relations: { executions: true },
+            order: { createdAt: 'DESC' },
+          })
+        : [];
+
+    const feedback = this.feedbackRepo
+      ? await this.feedbackRepo.find({
+          where: { customerId },
+          order: { createdAt: 'DESC' },
+        })
+      : [];
+
+    const issues = this.customerTaskRepo
+      ? await this.customerTaskRepo.find({
+          where: { customerId },
+          order: { createdAt: 'DESC' },
+        })
+      : [];
+
+    return {
+      customer: {
+        id: customer.id,
+        name: customer.name,
+        email: customer.email,
+        companyName: customer.companyName,
+        status: customer.status,
+        isStrategic: customer.isStrategic,
+        createdBy: customer.createdBy,
+        ownerId: customer.createdBy,
+      },
+      interactions,
+      followUps,
+      feedback,
+      issues,
+    };
+  }
 
   @Post('calculate')
   async calculate(@Body() body: CalculateAccountHealthDto) {
@@ -60,17 +174,16 @@ export class AccountHealthController {
       }
 
       // Idempotency: avoid duplicate snapshot on workflow retries within 5 minutes
-      // Use SHA256 hash of all input fields to detect actual changes
-      const crypto = await import('crypto');
-      const inputHash = crypto
-        .createHash('sha256')
+      // Use SHA256 hash of all normalized input fields (or explicit idempotencyKey) to detect actual changes
+      const inputHash = createHash('sha256')
         .update(
           JSON.stringify({
-            engagement: body.engagement,
-            feedback: body.feedback,
-            openIssues: body.openIssues,
-            followUpCompletion: body.followUpCompletion,
-            evidence: body.evidence,
+            idempotencyKey: body.idempotencyKey ?? null,
+            engagement: body.engagement ?? null,
+            feedback: body.feedback ?? null,
+            openIssues: body.openIssues ?? null,
+            followUpCompletion: body.followUpCompletion ?? null,
+            evidence: body.evidence ?? [],
           }),
         )
         .digest('hex');

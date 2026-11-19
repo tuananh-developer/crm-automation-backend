@@ -42,6 +42,10 @@ export class CalculateAccountHealthDto {
   @IsString({ each: true })
   @IsOptional()
   evidence?: string[];
+
+  @IsString()
+  @IsOptional()
+  idempotencyKey?: string;
 }
 
 export class ActionEvidenceDto {

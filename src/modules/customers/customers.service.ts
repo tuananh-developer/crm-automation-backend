@@ -28,6 +28,19 @@ export class CustomersService {
     query: QueryCustomerDto,
     actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
+    return this.queryCustomers(query, actor);
+  }
+
+  async findAllInternal(
+    query: QueryCustomerDto,
+  ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
+    return this.queryCustomers(query);
+  }
+
+  private async queryCustomers(
+    query: QueryCustomerDto,
+    actor?: AuthenticatedUser,
+  ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
@@ -52,7 +65,7 @@ export class CustomersService {
         isStrategic: query.isStrategic,
       });
     }
-    if (actor.role === UserRole.SALES) {
+    if (actor?.role === UserRole.SALES) {
       qb.andWhere('customer.createdBy = :actorId', { actorId: actor.id });
     }
 
@@ -93,6 +106,30 @@ export class CustomersService {
       !customer ||
       (actor.role === UserRole.SALES && customer.createdBy !== actor.id)
     ) {
+      throw new NotFoundException(`Customer with ID '${id}' not found`);
+    }
+
+    return CustomerMapper.toResponseDto(
+      Object.assign(customer, {
+        segmentCount: customer.customerSegments?.length ?? 0,
+      }),
+    );
+  }
+
+  async findOneInternal(id: string): Promise<CustomerResponseDto> {
+    const customer = await this.customersRepository.findOne({
+      where: { id },
+      relations: {
+        creator: true,
+        convertedLeads: true,
+        customerSegments: {
+          segment: true,
+          assignedByUser: true,
+        },
+      },
+    });
+
+    if (!customer) {
       throw new NotFoundException(`Customer with ID '${id}' not found`);
     }
 
