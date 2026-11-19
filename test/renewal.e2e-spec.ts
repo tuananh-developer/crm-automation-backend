@@ -231,14 +231,20 @@ describe('Renewal Management Module (e2e)', () => {
       expect(res.body.reason).toBe('FAIL_CLOSED: no backend consent record');
     });
 
-    it('SECURITY: Allows auto-send only when authoritative backend metadata satisfies all gates', async () => {
-      // Simulate backend approval workflow updating the draft metadata in database
-      await dataSource.query(`
-        UPDATE "renewal_drafts"
-        SET "status" = 'APPROVED',
-            "validation_result" = '{"grounded":true,"consentGranted":true,"templateApproved":true,"policyApproved":true,"approvedBy":"admin-system"}'
-        WHERE "id" = '${draftId}'
-      `);
+    it('SECURITY: Allows auto-send only when approved via audited POST /api/v1/renewal-attempts/:attemptId/approve', async () => {
+      const approveRes = await request(app.getHttpServer())
+        .post(`/api/v1/renewal-attempts/${draftId}/approve`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          comment: 'Approved in E2E verification',
+        });
+
+      expect(approveRes.status).toBe(200);
+      expect(approveRes.body.status).toBe('APPROVED');
+      expect(approveRes.body.canAutoSend).toBe(true);
 
       const res = await request(app.getHttpServer())
         .post('/api/v1/internal/n8n/renewal/check-eligibility')

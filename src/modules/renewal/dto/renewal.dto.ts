@@ -128,7 +128,7 @@ export class SaveRenewalDraftDto {
   draftContent?: string;
 
   @ApiPropertyOptional({
-    description: 'Draft status',
+    description: 'Draft status (ignored on create; backend owns transitions)',
     default: 'DRAFT',
     maxLength: 30,
   })
@@ -156,7 +156,8 @@ export class SaveRenewalDraftDto {
   aiModel?: string;
 
   @ApiPropertyOptional({
-    description: 'Backend validation and verification provenance metadata',
+    description:
+      'Grounding metadata only; consent/template/policy/approval flags are stripped and backend-owned',
   })
   @IsOptional()
   @IsObject()
@@ -190,6 +191,28 @@ export class SaveRenewalDraftDto {
   @IsString()
   @MaxLength(100)
   communicationId?: string;
+}
+
+export class ApproveRenewalDraftDto {
+  @ApiProperty({
+    description: 'Verified customer consent for renewal outreach',
+  })
+  @IsBoolean()
+  consentGranted!: boolean;
+
+  @ApiProperty({ description: 'Verified approved communication template' })
+  @IsBoolean()
+  templateApproved!: boolean;
+
+  @ApiProperty({ description: 'Verified commercial/renewal policy compliance' })
+  @IsBoolean()
+  policyApproved!: boolean;
+
+  @ApiPropertyOptional({ description: 'Optional reviewer comment' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  comment?: string;
 }
 
 export class CheckEligibilityDto {
@@ -241,6 +264,58 @@ export class CheckEligibilityDto {
   needsApproval?: boolean;
 }
 
+export class SendRenewalMessageDto {
+  @ApiProperty({ description: 'Contract UUID', format: 'uuid' })
+  @IsUUID('all')
+  @IsNotEmpty()
+  contractId!: string;
+
+  @ApiProperty({ description: 'Customer UUID', format: 'uuid' })
+  @IsUUID('all')
+  @IsNotEmpty()
+  customerId!: string;
+
+  @ApiProperty({ description: 'Approved renewal draft UUID', format: 'uuid' })
+  @IsUUID('all')
+  @IsNotEmpty()
+  draftId!: string;
+
+  @ApiProperty({
+    description: 'Idempotency key for message delivery',
+    maxLength: 255,
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  idempotencyKey!: string;
+}
+
+export class EnsureRenewalApprovalTaskDto {
+  @ApiProperty({ description: 'Contract UUID', format: 'uuid' })
+  @IsUUID('all')
+  @IsNotEmpty()
+  contractId!: string;
+
+  @ApiProperty({ description: 'Customer UUID', format: 'uuid' })
+  @IsUUID('all')
+  @IsNotEmpty()
+  customerId!: string;
+
+  @ApiPropertyOptional({ description: 'Renewal draft UUID', format: 'uuid' })
+  @IsOptional()
+  @IsUUID('all')
+  draftId?: string;
+
+  @ApiProperty({
+    description: 'Idempotency key for approval task creation',
+    maxLength: 255,
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  idempotencyKey!: string;
+}
+
 export class RecordRenewalAttemptDto {
   @ApiProperty({ description: 'Contract UUID', format: 'uuid' })
   @IsUUID('all')
@@ -251,6 +326,11 @@ export class RecordRenewalAttemptDto {
   @IsOptional()
   @IsUUID('all')
   customerId?: string;
+
+  @ApiPropertyOptional({ description: 'Renewal draft UUID', format: 'uuid' })
+  @IsOptional()
+  @IsUUID('all')
+  draftId?: string;
 
   @ApiProperty({
     description: 'Attempt outcome status: SENT, FAILED, or PENDING_APPROVAL',

@@ -23,8 +23,10 @@ import { RenewalService } from './renewal.service.js';
 import {
   CalculateUrgencyDto,
   CheckEligibilityDto,
+  EnsureRenewalApprovalTaskDto,
   RecordRenewalAttemptDto,
   SaveRenewalDraftDto,
+  SendRenewalMessageDto,
 } from './dto/renewal.dto.js';
 
 /**
@@ -115,6 +117,30 @@ export class RenewalController {
   @ApiResponse({ status: 200, description: 'Eligibility decision.' })
   checkEligibility(@Body() body: CheckEligibilityDto) {
     return this.renewalService.checkEligibility(body);
+  }
+
+  @Post('send-message')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Deliver an approved renewal draft via backend mail transport (fail-closed eligibility re-verified)',
+  })
+  @ApiBody({ type: SendRenewalMessageDto })
+  @ApiResponse({ status: 200, description: 'Renewal message sent.' })
+  sendMessage(@Body() body: SendRenewalMessageDto) {
+    return this.renewalService.sendApprovedRenewal(body);
+  }
+
+  @Post('approval-tasks')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Create or reuse an idempotent human renewal approval task and notify customer owner',
+  })
+  @ApiBody({ type: EnsureRenewalApprovalTaskDto })
+  @ApiResponse({ status: 200, description: 'Renewal approval task ensured.' })
+  ensureApprovalTask(@Body() body: EnsureRenewalApprovalTaskDto) {
+    return this.renewalService.ensureRenewalApprovalTask(body);
   }
 
   @Post('record-attempt')

@@ -115,8 +115,133 @@ describe('WF13 - AI Renewal Management Agent Workflow Structure', () => {
       expect(node.retryOnFail).toBe(true);
       expect(node.maxTries).toBeGreaterThanOrEqual(3);
       expect(node.waitBetweenTries).toBeGreaterThan(0);
-      expect(node.parameters?.url).toContain('/api/v1/internal/n8n/renewal');
+
+      if (node.name === 'HTTP Request: AI Renewal Recommendation') {
+        expect(node.parameters?.url).toContain(
+          'generativelanguage.googleapis.com',
+        );
+      } else {
+        expect(node.parameters?.url).toContain('/api/v1/internal/n8n/renewal');
+      }
     }
+
+    const sendNode = httpNodes.find(
+      (n) => n.name === 'HTTP Request: Backend Send Message',
+    );
+    const approvalNode = httpNodes.find(
+      (n) => n.name === 'HTTP Request: Create/Ensure Renewal Approval Task',
+    );
+    const recordNode = httpNodes.find(
+      (n) => n.name === 'HTTP Request: Record Renewal Attempt',
+    );
+
+    expect(sendNode?.parameters?.url).toContain(
+      '/api/v1/internal/n8n/renewal/send-message',
+    );
+    expect(approvalNode?.parameters?.url).toContain(
+      '/api/v1/internal/n8n/renewal/approval-tasks',
+    );
+    expect(recordNode?.parameters?.url).toContain(
+      '/api/v1/internal/n8n/renewal/record-attempt',
+    );
+  });
+
+  it('executes Code: Validate Draft with Gemini response and enforces contract grounding', () => {
+    const validateNode = workflow.nodes.find(
+      (node) => node.name === 'Code: Validate Draft',
+    );
+    const jsCode = validateNode?.parameters?.jsCode;
+    expect(jsCode).toBeDefined();
+
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const fn = new Function('$json', '$node', '$env', jsCode ?? '') as (
+      $json: Record<string, unknown>,
+      $node: Record<string, { json: Record<string, unknown> }>,
+      $env: Record<string, string>,
+    ) => Record<string, unknown>;
+
+    const contractContext = {
+      id: 'contract-uuid-1',
+      customerId: 'customer-uuid-1',
+      contractNumber: 'CTR-2026-100',
+      renewalDate: '2026-12-15T00:00:00.000Z',
+      urgency: 'HIGH',
+    };
+
+    const groundedResult = fn(
+      {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    recommendation: 'Offer 12-month renewal on CTR-2026-100',
+                    draftContent:
+                      'Hello, your contract CTR-2026-100 renews on 2026-12-15.',
+                    citedContractNumber: 'CTR-2026-100',
+                    citedRenewalDate: '2026-12-15',
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        'Code: Calculate Renewal Urgency': { json: contractContext },
+      },
+      { GEMINI_MODEL: 'gemini-2.5-flash' },
+    );
+
+    expect(groundedResult).toMatchObject({
+      contractId: 'contract-uuid-1',
+      customerId: 'customer-uuid-1',
+      urgency: 'HIGH',
+      recommendation: 'Offer 12-month renewal on CTR-2026-100',
+      validationResult: {
+        grounded: true,
+        sourceContractId: 'contract-uuid-1',
+        sourceCustomerId: 'customer-uuid-1',
+        citedContractNumber: 'CTR-2026-100',
+        citedRenewalDate: '2026-12-15',
+      },
+    });
+
+    // Ungrounded hallucinated contract number falls back to safe deterministic draft
+    const ungroundedResult = fn(
+      {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    recommendation: 'Hallucinated discount',
+                    draftContent: 'Contract CTR-999-FAKE renews soon.',
+                    citedContractNumber: 'CTR-999-FAKE',
+                    citedRenewalDate: '2026-12-15',
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        'Code: Calculate Renewal Urgency': { json: contractContext },
+      },
+      { GEMINI_MODEL: 'gemini-2.5-flash' },
+    );
+
+    expect(ungroundedResult).toMatchObject({
+      contractId: 'contract-uuid-1',
+      customerId: 'customer-uuid-1',
+      recommendation: 'Standard renewal terms review for CTR-2026-100',
+      validationResult: expect.objectContaining({
+        grounded: false,
+      }),
+    });
   });
 
   it('evaluates eligibility condition in the IF node with expressions', () => {

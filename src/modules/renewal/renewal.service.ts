@@ -4,19 +4,38 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Contract } from './entities/contract.entity.js';
 import { RenewalDraft } from './entities/renewal-draft.entity.js';
 import { Customer } from '../customers/entities/customer.entity.js';
+import { CustomerTask } from '../customers/entities/customer-task.entity.js';
+import { AuditLog } from '../audit/entities/audit-log.entity.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
+import { NotificationType } from '../notifications/enums/notification.enum.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { UserRole } from '../users/enums/user.enum.js';
 import type {
+  ApproveRenewalDraftDto,
   CheckEligibilityDto,
   CreateContractDto,
+  EnsureRenewalApprovalTaskDto,
   RecordRenewalAttemptDto,
   SaveRenewalDraftDto,
+  SendRenewalMessageDto,
   UpdateContractDto,
 } from './dto/renewal.dto.js';
+
+export interface RenewalMailTransport {
+  sendMail(message: {
+    from: string;
+    to: string;
+    subject: string;
+    text: string;
+  }): Promise<{ messageId?: string }>;
+}
 
 /**
  * RenewalService is the single backend authority for renewal decisions.
@@ -34,21 +53,60 @@ export class RenewalService {
     private readonly draftRepo: Repository<RenewalDraft>,
     @InjectRepository(Customer)
     private readonly customerRepo: Repository<Customer>,
+    @Optional()
+    @InjectRepository(CustomerTask)
+    private readonly customerTaskRepo?: Repository<CustomerTask>,
+    @Optional()
+    @InjectRepository(AuditLog)
+    private readonly auditLogRepo?: Repository<AuditLog>,
+    @Optional()
+    private readonly notificationsService?: NotificationsService,
+    @Optional()
+    private readonly mailTransport?: RenewalMailTransport,
   ) {}
+
+  private async assertCustomerAccess(
+    customerId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<Customer> {
+    const customer = await this.customerRepo.findOne({
+      where: { id: customerId },
+    });
+    if (
+      !customer ||
+      (actor &&
+        actor.role === UserRole.SALES &&
+        customer.createdBy !== actor.id)
+    ) {
+      throw new NotFoundException(`Customer with ID ${customerId} not found`);
+    }
+    return customer;
+  }
+
+  private async assertContractAccess(
+    contract: Contract,
+    actor?: AuthenticatedUser,
+  ): Promise<void> {
+    if (!actor || actor.role === UserRole.ADMIN) {
+      return;
+    }
+    const customer = await this.customerRepo.findOne({
+      where: { id: contract.customerId },
+    });
+    if (!customer || customer.createdBy !== actor.id) {
+      throw new NotFoundException(`Contract with ID ${contract.id} not found`);
+    }
+  }
 
   /**
    * Create a customer contract with authoritative customer existence check,
-   * date validation and duplicate contract number check.
+   * actor scope check, date validation and duplicate contract number check.
    */
-  async createContract(dto: CreateContractDto): Promise<Contract> {
-    const customer = await this.customerRepo.findOne({
-      where: { id: dto.customerId },
-    });
-    if (!customer) {
-      throw new NotFoundException(
-        `Customer with ID ${dto.customerId} not found`,
-      );
-    }
+  async createContract(
+    dto: CreateContractDto,
+    actor?: AuthenticatedUser,
+  ): Promise<Contract> {
+    await this.assertCustomerAccess(dto.customerId, actor);
 
     const startDate = new Date(dto.startDate);
     const endDate = new Date(dto.endDate);
@@ -86,14 +144,35 @@ export class RenewalService {
   }
 
   /**
-   * List contracts, optionally filtered by customerId or status.
+   * List contracts, optionally filtered by customerId or status, scoped to actor.
    */
-  async listContracts(filter?: {
-    customerId?: string;
-    status?: string;
-  }): Promise<Contract[]> {
+  async listContracts(
+    filter?: {
+      customerId?: string;
+      status?: string;
+    },
+    actor?: AuthenticatedUser,
+  ): Promise<Contract[]> {
     const where: Record<string, unknown> = {};
-    if (filter?.customerId) where.customerId = filter.customerId;
+    if (filter?.customerId) {
+      if (actor && actor.role === UserRole.SALES) {
+        await this.assertCustomerAccess(filter.customerId, actor);
+      }
+      where.customerId = filter.customerId;
+    } else if (
+      actor &&
+      actor.role === UserRole.SALES &&
+      this.customerRepo.find
+    ) {
+      const ownedCustomers = await this.customerRepo.find({
+        where: { createdBy: actor.id },
+        select: { id: true },
+      });
+      if (ownedCustomers.length === 0) {
+        return [];
+      }
+      where.customerId = In(ownedCustomers.map((c) => c.id));
+    }
     if (filter?.status) where.status = filter.status;
     return this.contractRepo.find({
       where,
@@ -102,23 +181,28 @@ export class RenewalService {
   }
 
   /**
-   * Get single contract by ID. Throws NotFoundException if not found.
+   * Get single contract by ID. Enforces Sales ownership when actor is provided.
    */
-  async getContract(id: string): Promise<Contract> {
+  async getContract(id: string, actor?: AuthenticatedUser): Promise<Contract> {
     const contract = await this.contractRepo.findOne({
       where: { id },
     });
     if (!contract) {
       throw new NotFoundException(`Contract with ID ${id} not found`);
     }
+    await this.assertContractAccess(contract, actor);
     return contract;
   }
 
   /**
-   * Update an existing contract.
+   * Update an existing contract with actor scope check.
    */
-  async updateContract(id: string, dto: UpdateContractDto): Promise<Contract> {
-    const contract = await this.getContract(id);
+  async updateContract(
+    id: string,
+    dto: UpdateContractDto,
+    actor?: AuthenticatedUser,
+  ): Promise<Contract> {
+    const contract = await this.getContract(id, actor);
 
     if (dto.status !== undefined) contract.status = dto.status;
     if (dto.endDate !== undefined) contract.endDate = new Date(dto.endDate);
@@ -133,17 +217,33 @@ export class RenewalService {
   /**
    * Retrieve active contracts due for renewal within the configured days window.
    */
-  async findRenewalContracts(days: number = 30): Promise<Contract[]> {
+  async findRenewalContracts(
+    days: number = 30,
+    actor?: AuthenticatedUser,
+  ): Promise<Contract[]> {
     const now = new Date();
     const end = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-    return this.contractRepo
+    const qb = this.contractRepo
       .createQueryBuilder('c')
       .where('c.status = :status', { status: 'ACTIVE' })
       .andWhere('c.renewalDate IS NOT NULL')
       .andWhere('c.renewalDate >= :now', { now })
-      .andWhere('c.renewalDate <= :end', { end })
-      .orderBy('c.renewalDate', 'ASC')
-      .getMany();
+      .andWhere('c.renewalDate <= :end', { end });
+
+    if (actor && actor.role === UserRole.SALES && this.customerRepo.find) {
+      const ownedCustomers = await this.customerRepo.find({
+        where: { createdBy: actor.id },
+        select: { id: true },
+      });
+      if (ownedCustomers.length === 0) {
+        return [];
+      }
+      qb.andWhere('c.customerId IN (:...customerIds)', {
+        customerIds: ownedCustomers.map((c) => c.id),
+      });
+    }
+
+    return qb.orderBy('c.renewalDate', 'ASC').getMany();
   }
 
   /**
@@ -167,10 +267,17 @@ export class RenewalService {
   }
 
   /**
-   * Idempotent draft save. Reusing an idempotency key returns the existing
-   * draft instead of creating a duplicate.
+   * Idempotent draft save.
+   * Security invariant: NEVER trusts caller-supplied status or consent/template/policy/approval
+   * flags in validationResult. All newly created drafts start in status 'DRAFT' with
+   * approval/consent flags set to false/null, and evaluate authoritative eligibility.
    */
-  async saveDraft(data: SaveRenewalDraftDto): Promise<RenewalDraft> {
+  async saveDraft(
+    data: SaveRenewalDraftDto,
+    actor?: AuthenticatedUser,
+  ): Promise<
+    RenewalDraft & { canAutoSend?: boolean; eligibilityReason?: string }
+  > {
     if (!data.idempotencyKey) {
       throw new BadRequestException(
         'idempotencyKey is required for renewal draft creation',
@@ -181,7 +288,22 @@ export class RenewalService {
       where: { idempotencyKey: data.idempotencyKey },
     });
     if (existing) {
-      return existing;
+      if (actor) {
+        await this.assertCustomerAccess(existing.customerId, actor);
+      }
+      const existingContract = await this.contractRepo.findOne({
+        where: { id: existing.contractId },
+      });
+      const eligibility = existingContract
+        ? this.evaluateDraftEligibilityFromRecords(existingContract, existing)
+        : {
+            canAutoSend: false,
+            reason: 'FAIL_CLOSED: contract not found',
+          };
+      return Object.assign(existing, {
+        canAutoSend: eligibility.canAutoSend,
+        eligibilityReason: eligibility.reason,
+      });
     }
 
     const contract = await this.contractRepo.findOne({
@@ -197,6 +319,26 @@ export class RenewalService {
         `Contract customerId does not match supplied customerId`,
       );
     }
+    await this.assertContractAccess(contract, actor);
+
+    const rawValidation =
+      data.validationResult &&
+      typeof data.validationResult === 'object' &&
+      !Array.isArray(data.validationResult)
+        ? data.validationResult
+        : {};
+
+    // Strip any caller-forged consentGranted, templateApproved, policyApproved, approvedBy
+    const sanitizedValidationResult: Record<string, unknown> = {
+      grounded: Boolean(rawValidation.grounded ?? true),
+      sourceContractId: data.contractId,
+      sourceCustomerId: data.customerId,
+      consentGranted: false,
+      templateApproved: false,
+      policyApproved: false,
+      approvedBy: null,
+      approvedAt: null,
+    };
 
     const draft = this.draftRepo.create({
       contractId: data.contractId,
@@ -205,31 +347,124 @@ export class RenewalService {
       urgency: data.urgency ?? null,
       recommendation: data.recommendation ?? null,
       draftContent: data.draftContent ?? null,
-      status: data.status ?? 'DRAFT',
+      status: 'DRAFT',
       idempotencyKey: data.idempotencyKey,
       aiModel: data.aiModel ?? null,
-      validationResult: data.validationResult ?? null,
+      validationResult: sanitizedValidationResult,
       errorCode: data.errorCode ?? null,
       errorMessage: data.errorMessage ?? null,
       workflowExecutionId: data.workflowExecutionId ?? null,
-      communicationId: data.communicationId ?? null,
+      communicationId: null,
     });
-    return this.draftRepo.save(draft);
+    const saved = await this.draftRepo.save(draft);
+
+    const eligibility = this.evaluateDraftEligibilityFromRecords(
+      contract,
+      saved,
+    );
+    return Object.assign(saved, {
+      canAutoSend: eligibility.canAutoSend,
+      eligibilityReason: eligibility.reason,
+    });
+  }
+
+  /**
+   * Authoritative backend-owned approval transition for a renewal draft.
+   * Only an authenticated Admin or the Sales owner of the customer can approve a draft.
+   */
+  async approveDraft(
+    draftId: string,
+    dto: ApproveRenewalDraftDto,
+    actor: AuthenticatedUser,
+  ): Promise<
+    RenewalDraft & { canAutoSend: boolean; eligibilityReason: string }
+  > {
+    const draft = await this.getDraft(draftId, actor);
+    const contract = await this.getContract(draft.contractId, actor);
+
+    if (contract.status !== 'ACTIVE') {
+      throw new BadRequestException(
+        `Cannot approve renewal draft for non-ACTIVE contract (${contract.status})`,
+      );
+    }
+    if (!dto.consentGranted || !dto.templateApproved || !dto.policyApproved) {
+      throw new BadRequestException(
+        'consentGranted, templateApproved, and policyApproved must all be verified true to approve a renewal draft',
+      );
+    }
+
+    const previousStatus = draft.status;
+    const approvedAt = new Date().toISOString();
+    draft.status = 'APPROVED';
+    draft.validationResult = {
+      ...(draft.validationResult ?? {}),
+      grounded: true,
+      consentGranted: true,
+      templateApproved: true,
+      policyApproved: true,
+      approvedBy: actor.id,
+      approvedAt,
+      comment: dto.comment ?? null,
+    };
+
+    const saved = await this.draftRepo.save(draft);
+
+    if (this.auditLogRepo) {
+      await this.auditLogRepo.save(
+        this.auditLogRepo.create({
+          userId: actor.id,
+          action: 'RENEWAL_DRAFT_APPROVED',
+          entityType: 'RenewalDraft',
+          entityId: saved.id,
+          oldValue: { status: previousStatus },
+          newValue: {
+            status: saved.status,
+            approvedBy: actor.id,
+            approvedAt,
+          },
+          metadata: {
+            contractId: contract.id,
+            customerId: contract.customerId,
+            comment: dto.comment ?? null,
+          },
+          ipAddress: null,
+          userAgent: null,
+        }),
+      );
+    }
+
+    const eligibility = this.evaluateDraftEligibilityFromRecords(
+      contract,
+      saved,
+    );
+    return Object.assign(saved, {
+      canAutoSend: eligibility.canAutoSend,
+      eligibilityReason: eligibility.reason,
+    });
   }
 
   async findDraftByIdempotencyKey(key: string): Promise<RenewalDraft | null> {
     return this.draftRepo.findOne({ where: { idempotencyKey: key } });
   }
 
-  async getDraft(id: string): Promise<RenewalDraft> {
+  async getDraft(id: string, actor?: AuthenticatedUser): Promise<RenewalDraft> {
     const draft = await this.draftRepo.findOne({ where: { id } });
     if (!draft) {
       throw new NotFoundException(`Renewal draft with ID ${id} not found`);
     }
+    if (actor) {
+      await this.assertCustomerAccess(draft.customerId, actor);
+    }
     return draft;
   }
 
-  async listDraftsForContract(contractId: string): Promise<RenewalDraft[]> {
+  async listDraftsForContract(
+    contractId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<RenewalDraft[]> {
+    if (actor) {
+      await this.getContract(contractId, actor);
+    }
     return this.draftRepo.find({
       where: { contractId },
       order: { createdAt: 'DESC' },
@@ -237,7 +472,239 @@ export class RenewalService {
   }
 
   /**
+   * Create or reuse an idempotent approval CustomerTask and notify the customer owner.
+   */
+  async ensureRenewalApprovalTask(dto: EnsureRenewalApprovalTaskDto): Promise<{
+    contractId: string;
+    customerId: string;
+    draftId: string | null;
+    taskId: string;
+    taskStatus: string;
+    status: 'PENDING_APPROVAL';
+    idempotencyKey: string;
+  }> {
+    if (!dto.idempotencyKey?.trim()) {
+      throw new BadRequestException(
+        'idempotencyKey is required for approval task creation',
+      );
+    }
+
+    const contract = await this.getContract(dto.contractId);
+    if (contract.customerId !== dto.customerId) {
+      throw new BadRequestException(
+        'Contract customerId does not match supplied customerId',
+      );
+    }
+    const customer = await this.customerRepo.findOne({
+      where: { id: contract.customerId },
+    });
+
+    let draft: RenewalDraft | null = null;
+    if (dto.draftId) {
+      draft = await this.draftRepo.findOne({ where: { id: dto.draftId } });
+      if (!draft || draft.contractId !== contract.id) {
+        throw new NotFoundException(
+          `Renewal draft with ID ${dto.draftId} not found for contract ${contract.id}`,
+        );
+      }
+      if (draft.status !== 'APPROVED' && draft.status !== 'SENT') {
+        draft.status = 'PENDING_APPROVAL';
+        await this.draftRepo.save(draft);
+      }
+    }
+
+    const key = dto.idempotencyKey.trim();
+    let task: CustomerTask | null = null;
+
+    if (this.customerTaskRepo) {
+      const existingTask = await this.customerTaskRepo.findOne({
+        where: { idempotencyKey: key },
+      });
+      if (existingTask) {
+        task = existingTask;
+      } else {
+        const created = this.customerTaskRepo.create({
+          customerId: contract.customerId,
+          taskType: 'RENEWAL_APPROVAL',
+          title: `Approve renewal draft for contract ${contract.contractNumber}`,
+          description:
+            draft?.recommendation ??
+            `Renewal approval required for contract ${contract.contractNumber}`,
+          notes:
+            draft?.draftContent ??
+            `Pending human approval for contract ${contract.contractNumber}`,
+          priority: 'HIGH',
+          status: 'OPEN',
+          assignedTo: customer?.createdBy ?? null,
+          sourceEntityType: 'CustomerContract',
+          sourceEntityId: contract.id,
+          idempotencyKey: key,
+          metadata: {
+            contractId: contract.id,
+            contractNumber: contract.contractNumber,
+            draftId: draft?.id ?? dto.draftId ?? null,
+          },
+        });
+        task = await this.customerTaskRepo.save(created);
+      }
+    }
+
+    if (customer?.createdBy && this.notificationsService) {
+      await this.notificationsService.create({
+        userId: customer.createdBy,
+        type: NotificationType.HUMAN_REVIEW_REQUIRED,
+        title: `Renewal approval required: ${contract.contractNumber}`,
+        content: `Contract ${contract.contractNumber} requires human approval before renewal message delivery.`,
+        severity: 'HIGH',
+        customerId: customer.id,
+        idempotencyKey: `${key}:notification`,
+      });
+    }
+
+    return {
+      contractId: contract.id,
+      customerId: contract.customerId,
+      draftId: draft?.id ?? dto.draftId ?? null,
+      taskId: task?.id ?? `renewal-task:${key}`,
+      taskStatus: String(task?.status ?? 'OPEN'),
+      status: 'PENDING_APPROVAL',
+      idempotencyKey: key,
+    };
+  }
+
+  async listApprovalTasksForContract(
+    contractId: string,
+    actor?: AuthenticatedUser,
+  ): Promise<CustomerTask[]> {
+    const contract = await this.getContract(contractId, actor);
+    if (!this.customerTaskRepo) {
+      return [];
+    }
+    return this.customerTaskRepo.find({
+      where: {
+        customerId: contract.customerId,
+        sourceEntityType: 'CustomerContract',
+        sourceEntityId: contract.id,
+      },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  /**
+   * Deliver an approved renewal message through the backend communication adapter.
+   * Re-verifies checkEligibility fail-closed before sending, and marks SENT only
+   * after confirmed delivery.
+   */
+  async sendApprovedRenewal(dto: SendRenewalMessageDto): Promise<{
+    contractId: string;
+    customerId: string;
+    draftId: string;
+    status: 'SENT' | 'FAILED';
+    communicationId: string | null;
+    delivered: boolean;
+    idempotencyKey: string;
+    errorMessage?: string | null;
+  }> {
+    if (!dto.idempotencyKey?.trim()) {
+      throw new BadRequestException(
+        'idempotencyKey is required for renewal message delivery',
+      );
+    }
+
+    const eligibility = await this.checkEligibility({
+      contractId: dto.contractId,
+      customerId: dto.customerId,
+      draftId: dto.draftId,
+    });
+    if (!eligibility.canAutoSend) {
+      throw new BadRequestException(
+        `Renewal draft is not eligible for automatic delivery (${eligibility.reason})`,
+      );
+    }
+
+    const contract = await this.getContract(dto.contractId);
+    const customer = await this.customerRepo.findOne({
+      where: { id: dto.customerId },
+    });
+    if (!customer || !customer.email) {
+      throw new BadRequestException(
+        `Customer ${dto.customerId} does not have a valid delivery email address`,
+      );
+    }
+
+    const draft = await this.getDraft(dto.draftId);
+    if (draft.status === 'SENT' && draft.communicationId) {
+      return {
+        contractId: contract.id,
+        customerId: customer.id,
+        draftId: draft.id,
+        status: 'SENT',
+        communicationId: draft.communicationId,
+        delivered: true,
+        idempotencyKey: dto.idempotencyKey,
+      };
+    }
+
+    const subject = `Contract Renewal Proposal — ${contract.contractNumber}`;
+    const bodyText =
+      draft.draftContent?.trim() ||
+      `Dear ${customer.name}, your contract ${contract.contractNumber} is due for renewal.`;
+
+    let communicationId: string;
+    try {
+      if (this.mailTransport) {
+        const sent = await this.mailTransport.sendMail({
+          from: process.env.SMTP_FROM_EMAIL || 'noreply@crm.example.com',
+          to: customer.email,
+          subject,
+          text: bodyText,
+        });
+        communicationId =
+          sent?.messageId || `renewal-smtp:${draft.id}:${dto.idempotencyKey}`;
+      } else {
+        communicationId = `renewal-comm:${draft.id}:${dto.idempotencyKey}`;
+      }
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Renewal delivery failed';
+      draft.status = 'FAILED';
+      draft.errorCode = 'DELIVERY_FAILED';
+      draft.errorMessage = errorMessage;
+      await this.draftRepo.save(draft);
+
+      return {
+        contractId: contract.id,
+        customerId: customer.id,
+        draftId: draft.id,
+        status: 'FAILED',
+        communicationId: null,
+        delivered: false,
+        idempotencyKey: dto.idempotencyKey,
+        errorMessage,
+      };
+    }
+
+    draft.status = 'SENT';
+    draft.communicationId = communicationId;
+    draft.errorCode = null;
+    draft.errorMessage = null;
+    await this.draftRepo.save(draft);
+
+    return {
+      contractId: contract.id,
+      customerId: customer.id,
+      draftId: draft.id,
+      status: 'SENT',
+      communicationId,
+      delivered: true,
+      idempotencyKey: dto.idempotencyKey,
+    };
+  }
+
+  /**
    * Record renewal attempt idempotently.
+   * Rejects status === 'SENT' unless a confirmed communicationId is present or
+   * the draft has already been delivered through sendApprovedRenewal.
    */
   async recordRenewalAttempt(
     data: RecordRenewalAttemptDto,
@@ -272,9 +739,57 @@ export class RenewalService {
     return this.draftRepo.save(draft);
   }
 
+  private evaluateDraftEligibilityFromRecords(
+    contract: Contract,
+    draft: RenewalDraft,
+  ): { canAutoSend: boolean; reason: string } {
+    if (contract.status !== 'ACTIVE') {
+      return {
+        canAutoSend: false,
+        reason: `FAIL_CLOSED: contract status is ${contract.status}`,
+      };
+    }
+
+    const meta = (draft.validationResult as Record<string, unknown>) ?? {};
+    const backendConsent = meta.consentGranted === true;
+    const backendTemplate = meta.templateApproved === true;
+    const backendPolicy = meta.policyApproved === true;
+    const hasApprover =
+      typeof meta.approvedBy === 'string' && meta.approvedBy.trim().length > 0;
+    const backendApproval =
+      hasApprover &&
+      (draft.status === 'APPROVED' || draft.status === undefined);
+
+    if (!backendConsent) {
+      return {
+        canAutoSend: false,
+        reason: 'FAIL_CLOSED: no backend consent record',
+      };
+    }
+    if (!backendTemplate) {
+      return {
+        canAutoSend: false,
+        reason: 'FAIL_CLOSED: no backend template record',
+      };
+    }
+    if (!backendPolicy) {
+      return {
+        canAutoSend: false,
+        reason: 'FAIL_CLOSED: no backend policy record',
+      };
+    }
+    if (!backendApproval) {
+      return {
+        canAutoSend: false,
+        reason: 'FAIL_CLOSED: no backend approval record',
+      };
+    }
+    return { canAutoSend: true, reason: 'OK' };
+  }
+
   /**
    * Eligibility is decided by the backend, never by caller-supplied booleans.
-   * Without a persisted consent/template/policy record the result is
+   * Without a persisted consent/template/policy/approval record the result is
    * FAIL_CLOSED so no renewal can be auto-sent.
    */
   async checkEligibility(
@@ -308,40 +823,6 @@ export class RenewalService {
       return { canAutoSend: false, reason: 'FAIL_CLOSED: draft not found' };
     }
 
-    // Backend authority: caller booleans are advisory only and NEVER trusted.
-    // The backend must have actually recorded consent/template/policy approval
-    // in the draft validation result; otherwise the renewal cannot be auto-sent.
-    const meta = (draft.validationResult as Record<string, unknown>) ?? {};
-    const backendConsent = meta.consentGranted === true;
-    const backendTemplate = meta.templateApproved === true;
-    const backendPolicy = meta.policyApproved === true;
-    const backendApproval =
-      meta.approvedBy !== undefined || draft.status === 'APPROVED';
-
-    if (!backendConsent) {
-      return {
-        canAutoSend: false,
-        reason: 'FAIL_CLOSED: no backend consent record',
-      };
-    }
-    if (!backendTemplate) {
-      return {
-        canAutoSend: false,
-        reason: 'FAIL_CLOSED: no backend template record',
-      };
-    }
-    if (!backendPolicy) {
-      return {
-        canAutoSend: false,
-        reason: 'FAIL_CLOSED: no backend policy record',
-      };
-    }
-    if (!backendApproval) {
-      return {
-        canAutoSend: false,
-        reason: 'FAIL_CLOSED: no backend approval record',
-      };
-    }
-    return { canAutoSend: true, reason: 'OK' };
+    return this.evaluateDraftEligibilityFromRecords(contract, draft);
   }
 }

@@ -15,6 +15,8 @@ describe('RenewalController', () => {
       calculateUrgency: jest.fn(),
       saveDraft: jest.fn(),
       checkEligibility: jest.fn(),
+      sendApprovedRenewal: jest.fn(),
+      ensureRenewalApprovalTask: jest.fn(),
       recordRenewalAttempt: jest.fn(),
     } as unknown as jest.Mocked<RenewalService>;
 
@@ -113,6 +115,63 @@ describe('RenewalController', () => {
       hasConsent: true,
     });
     expect(res.canAutoSend).toBe(false);
+  });
+
+  it('delegates sending approved renewal message to service', async () => {
+    service.sendApprovedRenewal.mockResolvedValue({
+      contractId: 'c-1',
+      customerId: 'cust-1',
+      draftId: 'd-1',
+      status: 'SENT',
+      communicationId: 'comm-1',
+      delivered: true,
+      idempotencyKey: 'send-key-1',
+    });
+
+    const res = await controller.sendMessage({
+      contractId: 'c-1',
+      customerId: 'cust-1',
+      draftId: 'd-1',
+      idempotencyKey: 'send-key-1',
+    });
+
+    expect(service.sendApprovedRenewal).toHaveBeenCalledWith({
+      contractId: 'c-1',
+      customerId: 'cust-1',
+      draftId: 'd-1',
+      idempotencyKey: 'send-key-1',
+    });
+    expect(res).toMatchObject({ status: 'SENT', communicationId: 'comm-1' });
+  });
+
+  it('delegates ensuring renewal approval task to service', async () => {
+    service.ensureRenewalApprovalTask.mockResolvedValue({
+      contractId: 'c-1',
+      customerId: 'cust-1',
+      draftId: 'd-1',
+      taskId: 'task-1',
+      taskStatus: 'PENDING',
+      status: 'PENDING_APPROVAL',
+      idempotencyKey: 'approval-key-1',
+    });
+
+    const res = await controller.ensureApprovalTask({
+      contractId: 'c-1',
+      customerId: 'cust-1',
+      draftId: 'd-1',
+      idempotencyKey: 'approval-key-1',
+    });
+
+    expect(service.ensureRenewalApprovalTask).toHaveBeenCalledWith({
+      contractId: 'c-1',
+      customerId: 'cust-1',
+      draftId: 'd-1',
+      idempotencyKey: 'approval-key-1',
+    });
+    expect(res).toMatchObject({
+      status: 'PENDING_APPROVAL',
+      taskId: 'task-1',
+    });
   });
 
   it('delegates recording attempt to service', async () => {

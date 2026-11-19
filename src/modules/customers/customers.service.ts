@@ -97,4 +97,28 @@ export class CustomersService {
       }),
     );
   }
+
+  async findOneInternal(id: string): Promise<CustomerResponseDto> {
+    const customer = await this.customersRepository.findOne({
+      where: { id },
+      relations: {
+        creator: true,
+        convertedLeads: true,
+        customerSegments: {
+          segment: true,
+          assignedByUser: true,
+        },
+      },
+    });
+
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${id}' not found`);
+    }
+
+    return CustomerMapper.toResponseDto(
+      Object.assign(customer, {
+        segmentCount: customer.customerSegments?.length ?? 0,
+      }),
+    );
+  }
 }

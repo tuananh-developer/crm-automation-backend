@@ -182,26 +182,26 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/validate-draft' }}",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.GEMINI_MODEL || 'gemini-2.5-flash') + ':generateContent' }}",
         "options": {
-          "timeout": 15000
+          "timeout": 20000
         },
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
-              "name": "Accept",
+              "name": "Content-Type",
               "value": "application/json"
             },
             {
-              "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY }}"
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { contractId: $json.id, customerId: $json.customerId, renewalDate: $json.renewalDate, urgency: $json.urgency, sourceContractId: $json.id, sourceCustomerId: $json.customerId, recommendation: 'Standard renewal terms review for ' + $json.contractNumber, draftContent: 'Dear customer, your contract ' + $json.contractNumber + ' is scheduled for renewal on ' + $json.renewalDate + '. Please review our proposed renewal options.' } }}"
+        "jsonBody": "={{ { contents: [{ role: 'user', parts: [{ text: 'Generate a grounded B2B contract renewal recommendation and customer email draft as strict JSON with keys recommendation, draftContent, citedContractNumber, citedRenewalDate. Contract number: ' + $json.contractNumber + ', customerId: ' + $json.customerId + ', renewalDate: ' + String($json.renewalDate).substring(0, 10) + ', urgency: ' + $json.urgency + ', value: ' + ($json.value || '0') + ' ' + ($json.currency || 'USD') + '. Do not invent discounts or dates outside the provided contract.' }] }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } } }}"
       },
       "id": "e6047c3e-324f-4d92-9111-c11100000006",
       "name": "HTTP Request: AI Renewal Recommendation",
@@ -218,7 +218,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const contract = $node['Code: Calculate Renewal Urgency'].json;\nconst validation = $json;\nconst contractId = contract.id;\nconst customerId = contract.customerId;\nconst isGrounded = Boolean(contractId && customerId && validation.valid !== false);\nreturn {\n  contractId,\n  customerId,\n  renewalDate: contract.renewalDate,\n  urgency: contract.urgency,\n  recommendation: 'Standard renewal terms review for ' + contract.contractNumber,\n  draftContent: 'Dear customer, your contract ' + contract.contractNumber + ' is scheduled for renewal on ' + contract.renewalDate + '. Please review our proposed renewal options.',\n  validationResult: {\n    grounded: isGrounded,\n    consentGranted: false,\n    templateApproved: false,\n    policyApproved: false\n  },\n  canAutoSend: false,\n  idempotencyKey: 'renewal-draft-' + contractId + '-' + (contract.renewalDate ? String(contract.renewalDate).substring(0, 10) : 'cycle')\n};"
+        "jsCode": "const contract = $node['Code: Calculate Renewal Urgency'].json;\nconst rawResponse = $json || {};\nconst contractId = contract.id;\nconst customerId = contract.customerId;\nconst canonicalDate = contract.renewalDate ? String(contract.renewalDate).substring(0, 10) : '';\nlet parsed = null;\ntry {\n  const candidateText = rawResponse?.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (typeof candidateText === 'string' && candidateText.trim()) {\n    parsed = JSON.parse(candidateText.trim());\n  } else if (typeof rawResponse.recommendation === 'string' || typeof rawResponse.draftContent === 'string') {\n    parsed = rawResponse;\n  }\n} catch {\n  parsed = null;\n}\nconst aiRecommendation = parsed && typeof parsed.recommendation === 'string' && parsed.recommendation.trim() ? parsed.recommendation.trim() : '';\nconst aiDraftContent = parsed && typeof parsed.draftContent === 'string' && parsed.draftContent.trim() ? parsed.draftContent.trim() : '';\nconst citedContractNumber = parsed && typeof parsed.citedContractNumber === 'string' ? parsed.citedContractNumber.trim() : String(contract.contractNumber || '');\nconst citedRenewalDate = parsed && typeof parsed.citedRenewalDate === 'string' ? parsed.citedRenewalDate.trim().substring(0, 10) : canonicalDate;\nconst contractMatches = Boolean(contract.contractNumber && citedContractNumber === contract.contractNumber);\nconst dateMatches = Boolean(canonicalDate && citedRenewalDate === canonicalDate);\nconst draftMentionsContract = Boolean(aiDraftContent && contract.contractNumber && aiDraftContent.includes(contract.contractNumber));\nconst isGrounded = Boolean(contractId && customerId && aiRecommendation && aiDraftContent && contractMatches && dateMatches && draftMentionsContract);\nconst recommendation = isGrounded ? aiRecommendation : ('Standard renewal terms review for ' + contract.contractNumber);\nconst draftContent = isGrounded ? aiDraftContent : ('Dear customer, your contract ' + contract.contractNumber + ' is scheduled for renewal on ' + canonicalDate + '. Please review our proposed renewal options.');\nreturn {\n  contractId,\n  customerId,\n  renewalDate: contract.renewalDate,\n  urgency: contract.urgency,\n  recommendation,\n  draftContent,\n  aiModel: (typeof $env !== 'undefined' && $env.GEMINI_MODEL) ? $env.GEMINI_MODEL : 'gemini-2.5-flash',\n  validationResult: {\n    grounded: isGrounded,\n    sourceContractId: contractId,\n    sourceCustomerId: customerId,\n    citedContractNumber,\n    citedRenewalDate\n  },\n  idempotencyKey: 'renewal-draft-' + contractId + '-' + (canonicalDate || 'cycle')\n};"
       },
       "id": "e6047c3e-324f-4d92-9111-c11100000007",
       "name": "Code: Validate Draft",
@@ -251,7 +251,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { contractId: $json.contractId, customerId: $json.customerId, renewalDate: $json.renewalDate, urgency: $json.urgency, recommendation: $json.recommendation, draftContent: $json.draftContent, validationResult: $json.validationResult, idempotencyKey: $json.idempotencyKey } }}"
+        "jsonBody": "={{ { contractId: $json.contractId, customerId: $json.customerId, renewalDate: $json.renewalDate, urgency: $json.urgency, recommendation: $json.recommendation, draftContent: $json.draftContent, aiModel: $json.aiModel, validationResult: $json.validationResult, idempotencyKey: $json.idempotencyKey } }}"
       },
       "id": "e6047c3e-324f-4d92-9111-c11100000008",
       "name": "HTTP Request: Save Renewal Draft",
@@ -292,7 +292,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/record-attempt' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/send-message' }}",
         "options": {
           "timeout": 15000
         },
@@ -311,7 +311,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { contractId: $node['HTTP Request: Save Renewal Draft'].json.contractId, customerId: $node['HTTP Request: Save Renewal Draft'].json.customerId, status: 'SENT', idempotencyKey: 'attempt-' + $node['HTTP Request: Save Renewal Draft'].json.idempotencyKey } }}"
+        "jsonBody": "={{ { contractId: $node['HTTP Request: Save Renewal Draft'].json.contractId, customerId: $node['HTTP Request: Save Renewal Draft'].json.customerId, draftId: $node['HTTP Request: Save Renewal Draft'].json.id, idempotencyKey: 'send-' + $node['HTTP Request: Save Renewal Draft'].json.idempotencyKey } }}"
       },
       "id": "e6047c3e-324f-4d92-9111-c11100000010",
       "name": "HTTP Request: Backend Send Message",
@@ -328,7 +328,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/record-attempt' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://localhost:3000') + '/api/v1/internal/n8n/renewal/approval-tasks' }}",
         "options": {
           "timeout": 15000
         },
@@ -347,7 +347,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { contractId: $node['HTTP Request: Save Renewal Draft'].json.contractId, customerId: $node['HTTP Request: Save Renewal Draft'].json.customerId, status: 'PENDING_APPROVAL', idempotencyKey: 'approval-' + $node['HTTP Request: Save Renewal Draft'].json.idempotencyKey } }}"
+        "jsonBody": "={{ { contractId: $node['HTTP Request: Save Renewal Draft'].json.contractId, customerId: $node['HTTP Request: Save Renewal Draft'].json.customerId, draftId: $node['HTTP Request: Save Renewal Draft'].json.id, idempotencyKey: 'approval-' + $node['HTTP Request: Save Renewal Draft'].json.idempotencyKey } }}"
       },
       "id": "e6047c3e-324f-4d92-9111-c11100000011",
       "name": "HTTP Request: Create/Ensure Renewal Approval Task",
@@ -383,7 +383,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { contractId: $json.contractId, customerId: $json.customerId, status: $json.status, idempotencyKey: 'audit-' + $json.idempotencyKey } }}"
+        "jsonBody": "={{ { contractId: $json.contractId, customerId: $json.customerId, draftId: $json.draftId, status: $json.status, communicationId: $json.communicationId || null, idempotencyKey: 'audit-' + $json.idempotencyKey } }}"
       },
       "id": "e6047c3e-324f-4d92-9111-c11100000012",
       "name": "HTTP Request: Record Renewal Attempt",

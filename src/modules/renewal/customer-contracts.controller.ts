@@ -20,9 +20,12 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { RenewalAuthGuard } from './guards/renewal-auth.guard.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { RenewalService } from './renewal.service.js';
 import {
+  ApproveRenewalDraftDto,
   CreateContractDto,
   SaveRenewalDraftDto,
   UpdateContractDto,
@@ -31,7 +34,7 @@ import {
 @ApiTags('Customer Contracts & Renewal')
 @ApiBearerAuth()
 @Controller()
-@UseGuards(RenewalAuthGuard)
+@UseGuards(JwtAuthGuard)
 export class CustomerContractsController {
   constructor(private readonly renewalService: RenewalService) {}
 
@@ -41,10 +44,11 @@ export class CustomerContractsController {
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiResponse({ status: 200, description: 'Contracts list' })
   listContracts(
+    @CurrentUser() actor: AuthenticatedUser,
     @Query('customerId') customerId?: string,
     @Query('status') status?: string,
   ) {
-    return this.renewalService.listContracts({ customerId, status });
+    return this.renewalService.listContracts({ customerId, status }, actor);
   }
 
   @Post('customer-contracts')
@@ -58,8 +62,11 @@ export class CustomerContractsController {
   })
   @ApiResponse({ status: 404, description: 'Customer not found' })
   @ApiResponse({ status: 409, description: 'Contract number already exists' })
-  createContract(@Body() dto: CreateContractDto) {
-    return this.renewalService.createContract(dto);
+  createContract(
+    @Body() dto: CreateContractDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.renewalService.createContract(dto, actor);
   }
 
   @Get('customer-contracts/due-for-renewal')
@@ -68,9 +75,12 @@ export class CustomerContractsController {
   })
   @ApiQuery({ name: 'days', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Contracts due for renewal' })
-  getDueContracts(@Query('days') days?: string) {
+  getDueContracts(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query('days') days?: string,
+  ) {
     const d = days ? parseInt(days, 10) : 30;
-    return this.renewalService.findRenewalContracts(d);
+    return this.renewalService.findRenewalContracts(d, actor);
   }
 
   @Get('customer-contracts/:contractId')
@@ -78,8 +88,11 @@ export class CustomerContractsController {
   @ApiParam({ name: 'contractId', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Contract found' })
   @ApiResponse({ status: 404, description: 'Contract not found' })
-  getContract(@Param('contractId', ParseUUIDPipe) contractId: string) {
-    return this.renewalService.getContract(contractId);
+  getContract(
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.renewalService.getContract(contractId, actor);
   }
 
   @Patch('customer-contracts/:contractId')
@@ -91,16 +104,20 @@ export class CustomerContractsController {
   updateContract(
     @Param('contractId', ParseUUIDPipe) contractId: string,
     @Body() dto: UpdateContractDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.renewalService.updateContract(contractId, dto);
+    return this.renewalService.updateContract(contractId, dto, actor);
   }
 
   @Get('customer-contracts/:contractId/renewal-attempts')
   @ApiOperation({ summary: 'List renewal attempts / drafts for a contract' })
   @ApiParam({ name: 'contractId', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Renewal attempts list' })
-  listRenewalAttempts(@Param('contractId', ParseUUIDPipe) contractId: string) {
-    return this.renewalService.listDraftsForContract(contractId);
+  listRenewalAttempts(
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.renewalService.listDraftsForContract(contractId, actor);
   }
 
   @Post('customer-contracts/:contractId/renewal-attempts')
@@ -114,9 +131,23 @@ export class CustomerContractsController {
   createRenewalAttempt(
     @Param('contractId', ParseUUIDPipe) contractId: string,
     @Body() dto: SaveRenewalDraftDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
     dto.contractId = contractId;
-    return this.renewalService.saveDraft(dto);
+    return this.renewalService.saveDraft(dto, actor);
+  }
+
+  @Get('customer-contracts/:contractId/approval-tasks')
+  @ApiOperation({
+    summary: 'List human approval tasks for a customer contract',
+  })
+  @ApiParam({ name: 'contractId', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Approval tasks list' })
+  listApprovalTasks(
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.renewalService.listApprovalTasksForContract(contractId, actor);
   }
 
   @Get('renewal-attempts/:attemptId')
@@ -124,7 +155,27 @@ export class CustomerContractsController {
   @ApiParam({ name: 'attemptId', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Renewal attempt found' })
   @ApiResponse({ status: 404, description: 'Renewal attempt not found' })
-  getRenewalAttempt(@Param('attemptId', ParseUUIDPipe) attemptId: string) {
-    return this.renewalService.getDraft(attemptId);
+  getRenewalAttempt(
+    @Param('attemptId', ParseUUIDPipe) attemptId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.renewalService.getDraft(attemptId, actor);
+  }
+
+  @Post('renewal-attempts/:attemptId/approve')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Explicitly approve a renewal draft with audited consent, template, and policy flags',
+  })
+  @ApiParam({ name: 'attemptId', format: 'uuid' })
+  @ApiBody({ type: ApproveRenewalDraftDto })
+  @ApiResponse({ status: 200, description: 'Renewal draft approved' })
+  approveRenewalAttempt(
+    @Param('attemptId', ParseUUIDPipe) attemptId: string,
+    @Body() dto: ApproveRenewalDraftDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.renewalService.approveDraft(attemptId, dto, actor);
   }
 }
