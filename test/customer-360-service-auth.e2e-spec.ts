@@ -384,10 +384,28 @@ describe('Customer 360 Service-Key Authentication (E2E)', () => {
           customerId: VALID_CUSTOMER_ID,
           status: 'SUCCESS',
           summary: 'Executive summary from AI',
+          n8nExecutionId: 'exec-n8n-wf05-001',
         });
 
       expect(res.status).toBe(200);
       expect(customersServiceMock.handleCustomer360Callback).toHaveBeenCalled();
+    });
+
+    it('rejects callback with 400 when n8nExecutionId is missing', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/customers/${VALID_CUSTOMER_ID}/360/callback`)
+        .set('x-n8n-api-key', N8N_KEY)
+        .send({
+          workflowRunId: 'a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d',
+          customerId: VALID_CUSTOMER_ID,
+          status: 'SUCCESS',
+          summary: 'Missing execution ID',
+        });
+
+      expect(res.status).toBe(400);
+      expect(
+        customersServiceMock.handleCustomer360Callback,
+      ).not.toHaveBeenCalled();
     });
 
     it('rejects callback with 401 when called without n8n service key', async () => {

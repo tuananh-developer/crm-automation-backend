@@ -894,15 +894,16 @@ export class CustomersService {
       const isActive =
         workflowRun.status === WorkflowStatus.PENDING ||
         workflowRun.status === WorkflowStatus.RUNNING;
+      const callbackExecutionId =
+        typeof dto.n8nExecutionId === 'string' ? dto.n8nExecutionId.trim() : '';
 
       if (!isActive) {
         if (
           workflowRun.n8nExecutionId &&
-          dto.n8nExecutionId &&
-          workflowRun.n8nExecutionId !== dto.n8nExecutionId
+          callbackExecutionId !== workflowRun.n8nExecutionId
         ) {
           throw new ConflictException(
-            `Conflict: WorkflowRun '${workflowRun.id}' belongs to execution '${workflowRun.n8nExecutionId}', not '${dto.n8nExecutionId}'`,
+            `Conflict: WorkflowRun '${workflowRun.id}' belongs to execution '${workflowRun.n8nExecutionId}', not '${callbackExecutionId || 'none'}'`,
           );
         }
 
@@ -949,23 +950,31 @@ export class CustomersService {
         };
       }
 
-      if (workflowRun.n8nExecutionId) {
-        if (
-          !dto.n8nExecutionId ||
-          workflowRun.n8nExecutionId !== dto.n8nExecutionId
-        ) {
-          throw new ConflictException(
-            `Conflict: WorkflowRun '${workflowRun.id}' is claimed by execution '${workflowRun.n8nExecutionId}'`,
-          );
-        }
-        if (
-          workflowRun.claimExpiresAt &&
-          workflowRun.claimExpiresAt.getTime() <= Date.now()
-        ) {
-          throw new ConflictException(
-            `Conflict: WorkflowRun '${workflowRun.id}' lease has expired for execution '${workflowRun.n8nExecutionId}'`,
-          );
-        }
+      if (!workflowRun.n8nExecutionId) {
+        throw new ConflictException(
+          `Conflict: WorkflowRun '${workflowRun.id}' has not been claimed by an n8n execution`,
+        );
+      }
+
+      if (!callbackExecutionId) {
+        throw new BadRequestException(
+          'n8nExecutionId is required to finalize a claimed Customer 360 WorkflowRun',
+        );
+      }
+
+      if (workflowRun.n8nExecutionId !== callbackExecutionId) {
+        throw new ConflictException(
+          `Conflict: WorkflowRun '${workflowRun.id}' is claimed by execution '${workflowRun.n8nExecutionId}'`,
+        );
+      }
+
+      if (
+        !workflowRun.claimExpiresAt ||
+        workflowRun.claimExpiresAt.getTime() <= Date.now()
+      ) {
+        throw new ConflictException(
+          `Conflict: WorkflowRun '${workflowRun.id}' lease is missing or has expired for execution '${workflowRun.n8nExecutionId}'`,
+        );
       }
 
       // Transition from active state to terminal state

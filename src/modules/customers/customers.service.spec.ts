@@ -687,7 +687,7 @@ describe('CustomersService', () => {
   });
 
   describe('handleCustomer360Callback', () => {
-    it('successfully processes callback and marks WorkflowRun as SUCCESS', async () => {
+    it('successfully processes callback and marks WorkflowRun as SUCCESS when claimed with live lease', async () => {
       (customersRepository.findOne as jest.Mock).mockResolvedValue(
         mockCustomer,
       );
@@ -695,7 +695,9 @@ describe('CustomersService', () => {
         id: 'run-1',
         customerId: 'customer-1',
         workflowName: 't12-wf05-customer-360',
-        status: WorkflowStatus.PENDING,
+        status: WorkflowStatus.RUNNING,
+        n8nExecutionId: 'exec-123',
+        claimExpiresAt: new Date(Date.now() + 60_000),
       };
       (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(mockRun);
       (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
@@ -705,14 +707,68 @@ describe('CustomersService', () => {
         workflowRunId: 'run-1',
         status: Customer360Status.SUCCESS,
         summary: 'Excellent enterprise profile',
+        n8nExecutionId: 'exec-123',
       });
 
       expect(result.success).toBe(true);
       expect(result.customerId).toBe('customer-1');
       expect(mockRun.status).toBe(WorkflowStatus.SUCCESS);
+      expect(mockRun.claimExpiresAt).toBeNull();
       expect(mockRun.outputPayload.summary).toBe(
         'Excellent enterprise profile',
       );
+    });
+
+    it('rejects callback when WorkflowRun has not been claimed (null n8nExecutionId)', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockRun: any = {
+        id: 'run-unclaimed-1',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.PENDING,
+        n8nExecutionId: null,
+        claimExpiresAt: null,
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(mockRun);
+
+      await expect(
+        service.handleCustomer360Callback({
+          customerId: 'customer-1',
+          workflowRunId: 'run-unclaimed-1',
+          status: Customer360Status.SUCCESS,
+          summary: 'Bypassed claim',
+          n8nExecutionId: 'exec-123',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects callback when dto.n8nExecutionId is missing or whitespace on a claimed WorkflowRun', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue(
+        mockCustomer,
+      );
+      const mockRun: any = {
+        id: 'run-claimed-missing-exec',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.RUNNING,
+        n8nExecutionId: 'exec-123',
+        claimExpiresAt: new Date(Date.now() + 60_000),
+      };
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(mockRun);
+
+      await expect(
+        service.handleCustomer360Callback({
+          customerId: 'customer-1',
+          workflowRunId: 'run-claimed-missing-exec',
+          status: Customer360Status.SUCCESS,
+          summary: 'Missing execution ID',
+          n8nExecutionId: '   ',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(workflowRunsRepository.save).not.toHaveBeenCalled();
     });
 
     it('enforces n8nExecutionId fencing and clears claimExpiresAt on valid active lease callback', async () => {
@@ -753,7 +809,7 @@ describe('CustomersService', () => {
       expect(mockRun.claimExpiresAt).toBeNull();
     });
 
-    it('rejects callback when WorkflowRun claim lease has expired', async () => {
+    it('rejects callback when WorkflowRun claim lease has expired or is missing', async () => {
       (customersRepository.findOne as jest.Mock).mockResolvedValue(
         mockCustomer,
       );
@@ -775,6 +831,25 @@ describe('CustomersService', () => {
           n8nExecutionId: 'exec-123',
         }),
       ).rejects.toBeInstanceOf(ConflictException);
+
+      (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue({
+        id: 'run-missing-lease-1',
+        customerId: 'customer-1',
+        workflowName: 't12-wf05-customer-360',
+        status: WorkflowStatus.RUNNING,
+        n8nExecutionId: 'exec-123',
+        claimExpiresAt: null,
+      });
+
+      await expect(
+        service.handleCustomer360Callback({
+          customerId: 'customer-1',
+          workflowRunId: 'run-missing-lease-1',
+          status: Customer360Status.SUCCESS,
+          summary: 'Missing lease expiry synthesis',
+          n8nExecutionId: 'exec-123',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('rejects unknown workflowRunId without creating arbitrary runs', async () => {
@@ -788,6 +863,7 @@ describe('CustomersService', () => {
           customerId: 'customer-1',
           workflowRunId: 'unknown-run',
           status: Customer360Status.SUCCESS,
+          n8nExecutionId: 'exec-123',
         }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
@@ -807,6 +883,7 @@ describe('CustomersService', () => {
           customerId: 'customer-1',
           workflowRunId: 'run-1',
           status: Customer360Status.SUCCESS,
+          n8nExecutionId: 'exec-123',
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
@@ -826,6 +903,7 @@ describe('CustomersService', () => {
           customerId: 'customer-1',
           workflowRunId: 'run-1',
           status: Customer360Status.SUCCESS,
+          n8nExecutionId: 'exec-123',
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
@@ -838,7 +916,9 @@ describe('CustomersService', () => {
         id: 'run-1',
         customerId: 'customer-1',
         workflowName: 't12-wf05-customer-360',
-        status: WorkflowStatus.PENDING,
+        status: WorkflowStatus.RUNNING,
+        n8nExecutionId: 'exec-123',
+        claimExpiresAt: new Date(Date.now() + 60_000),
       };
       (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(mockRun);
       (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
@@ -848,6 +928,7 @@ describe('CustomersService', () => {
         workflowRunId: 'run-1',
         status: Customer360Status.FAILED,
         errorMessage: 'Gemini AI rate limit exceeded',
+        n8nExecutionId: 'exec-123',
       });
 
       expect(result.success).toBe(false);
@@ -864,6 +945,8 @@ describe('CustomersService', () => {
         customerId: 'customer-1',
         workflowName: 't12-wf05-customer-360',
         status: WorkflowStatus.RUNNING,
+        n8nExecutionId: 'exec-123',
+        claimExpiresAt: new Date(Date.now() + 60_000),
       };
       (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(mockRun);
       (workflowRunsRepository.save as jest.Mock).mockResolvedValue(mockRun);
@@ -873,6 +956,7 @@ describe('CustomersService', () => {
         workflowRunId: 'run-running',
         status: Customer360Status.SUCCESS,
         summary: 'Running to success profile',
+        n8nExecutionId: 'exec-123',
       });
 
       expect(result.success).toBe(true);
@@ -885,7 +969,9 @@ describe('CustomersService', () => {
         id: 'run-locked',
         customerId: 'customer-1',
         workflowName: 't12-wf05-customer-360',
-        status: WorkflowStatus.PENDING,
+        status: WorkflowStatus.RUNNING,
+        n8nExecutionId: 'exec-123',
+        claimExpiresAt: new Date(Date.now() + 60_000),
       };
       const mockRunsRepo = {
         findOne: jest.fn().mockResolvedValue(mockRun),
@@ -928,6 +1014,7 @@ describe('CustomersService', () => {
         workflowRunId: 'run-locked',
         status: Customer360Status.SUCCESS,
         summary: 'Transaction locked summary',
+        n8nExecutionId: 'exec-123',
       });
 
       expect(result.success).toBe(true);
@@ -939,7 +1026,7 @@ describe('CustomersService', () => {
       expect(mockRunsRepo.save).toHaveBeenCalled();
     });
 
-    it('returns idempotent response for duplicate SUCCESS callback with matching payload', async () => {
+    it('returns idempotent response for duplicate SUCCESS callback with matching execution ID and payload', async () => {
       (customersRepository.findOne as jest.Mock).mockResolvedValue(
         mockCustomer,
       );
@@ -948,6 +1035,7 @@ describe('CustomersService', () => {
         customerId: 'customer-1',
         workflowName: 't12-wf05-customer-360',
         status: WorkflowStatus.SUCCESS,
+        n8nExecutionId: 'exec-123',
         outputPayload: {
           summary: 'Original executive summary',
         },
@@ -961,11 +1049,22 @@ describe('CustomersService', () => {
         workflowRunId: 'run-success',
         status: Customer360Status.SUCCESS,
         summary: 'Original executive summary',
+        n8nExecutionId: 'exec-123',
       });
 
       expect(result.success).toBe(true);
       expect(result.workflowRunId).toBe('run-success');
       expect(workflowRunsRepository.save).not.toHaveBeenCalled();
+
+      await expect(
+        service.handleCustomer360Callback({
+          customerId: 'customer-1',
+          workflowRunId: 'run-success',
+          status: Customer360Status.SUCCESS,
+          summary: 'Original executive summary',
+          n8nExecutionId: 'exec-other',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('throws ConflictException when duplicate SUCCESS callback arrives with conflicting summary payload', async () => {
@@ -977,6 +1076,7 @@ describe('CustomersService', () => {
         customerId: 'customer-1',
         workflowName: 't12-wf05-customer-360',
         status: WorkflowStatus.SUCCESS,
+        n8nExecutionId: 'exec-123',
         outputPayload: {
           summary: 'Original executive summary',
         },
@@ -991,6 +1091,7 @@ describe('CustomersService', () => {
           workflowRunId: 'run-success-conflict',
           status: Customer360Status.SUCCESS,
           summary: 'Conflicting new executive summary',
+          n8nExecutionId: 'exec-123',
         }),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(workflowRunsRepository.save).not.toHaveBeenCalled();
@@ -1005,6 +1106,7 @@ describe('CustomersService', () => {
         customerId: 'customer-1',
         workflowName: 't12-wf05-customer-360',
         status: WorkflowStatus.FAILED,
+        n8nExecutionId: 'exec-123',
         errorMessage: 'Initial provider failure',
       };
       (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
@@ -1016,6 +1118,7 @@ describe('CustomersService', () => {
         workflowRunId: 'run-failed-dup',
         status: Customer360Status.FAILED,
         errorMessage: 'Initial provider failure',
+        n8nExecutionId: 'exec-123',
       });
 
       expect(result.success).toBe(false);
@@ -1032,6 +1135,7 @@ describe('CustomersService', () => {
         customerId: 'customer-1',
         workflowName: 't12-wf05-customer-360',
         status: WorkflowStatus.FAILED,
+        n8nExecutionId: 'exec-123',
         errorMessage: 'Initial provider failure',
       };
       (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
@@ -1044,6 +1148,7 @@ describe('CustomersService', () => {
           workflowRunId: 'run-failed-err-conflict',
           status: Customer360Status.FAILED,
           errorMessage: 'Completely different error reason',
+          n8nExecutionId: 'exec-123',
         }),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(workflowRunsRepository.save).not.toHaveBeenCalled();
@@ -1058,6 +1163,7 @@ describe('CustomersService', () => {
         customerId: 'customer-1',
         workflowName: 't12-wf05-customer-360',
         status: WorkflowStatus.SUCCESS,
+        n8nExecutionId: 'exec-123',
         outputPayload: {
           summary: 'Original executive summary',
         },
@@ -1072,6 +1178,7 @@ describe('CustomersService', () => {
           workflowRunId: 'run-already-success',
           status: Customer360Status.FAILED,
           errorMessage: 'Late timeout or error',
+          n8nExecutionId: 'exec-123',
         }),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(mockCompletedRun.status).toBe(WorkflowStatus.SUCCESS);
@@ -1087,6 +1194,7 @@ describe('CustomersService', () => {
         customerId: 'customer-1',
         workflowName: 't12-wf05-customer-360',
         status: WorkflowStatus.FAILED,
+        n8nExecutionId: 'exec-123',
         errorMessage: 'Timeout error',
       };
       (workflowRunsRepository.findOne as jest.Mock).mockResolvedValue(
@@ -1099,6 +1207,7 @@ describe('CustomersService', () => {
           workflowRunId: 'run-already-failed',
           status: Customer360Status.SUCCESS,
           summary: 'Late success summary',
+          n8nExecutionId: 'exec-123',
         }),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(mockFailedRun.status).toBe(WorkflowStatus.FAILED);

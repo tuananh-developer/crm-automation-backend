@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
 } from 'class-validator';
 
 export enum Customer360Status {
@@ -79,12 +80,14 @@ export class Customer360CallbackDto {
   @IsString()
   errorMessage?: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: 'n8n execution ID used for claim fencing',
+    example: 'exec-n8n-wf05-001',
   })
-  @IsOptional()
   @IsString()
-  n8nExecutionId?: string;
+  @IsNotEmpty()
+  @Matches(/\S/, { message: 'n8nExecutionId must not be blank' })
+  n8nExecutionId!: string;
 }
 
 export class Customer360CallbackResponseDto {
