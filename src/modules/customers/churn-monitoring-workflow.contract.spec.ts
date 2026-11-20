@@ -11,6 +11,11 @@ import type { CustomerSegment } from './entities/customer-segment.entity.js';
 import type { Segment } from './entities/segment.entity.js';
 import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
 import { CustomerTask } from './entities/customer-task.entity.js';
+import { Lead } from '../leads/entities/lead.entity.js';
+import { Interaction } from '../leads/entities/interaction.entity.js';
+import { LeadFollowUpEnrollment } from '../follow-up/entities/lead-follow-up-enrollment.entity.js';
+import { FollowUpExecution } from '../follow-up/entities/follow-up-execution.entity.js';
+import { ExecutionStatus } from '../follow-up/enums/follow-up.enum.js';
 
 type WorkflowNode = {
   name: string;
@@ -78,6 +83,7 @@ describe('T12-WF06 Churn Monitoring Workflow Contract & Controller Integration',
   let service: CustomersService;
   let churnController: InternalChurnController;
   let tasksController: InternalCustomerTasksController;
+  let customersRepository: jest.Mocked<Partial<Repository<Customer>>>;
   let persistedAssessments: Map<string, CustomerChurnAssessment>;
   let persistedTasks: Map<string, CustomerTask>;
 
@@ -108,7 +114,7 @@ describe('T12-WF06 Churn Monitoring Workflow Contract & Controller Integration',
     persistedAssessments = new Map();
     persistedTasks = new Map();
 
-    const customersRepository: Partial<Repository<Customer>> = {
+    customersRepository = {
       findOne: jest.fn().mockResolvedValue(mockCustomer),
     };
     const churnAssessmentsRepository = {
@@ -224,31 +230,37 @@ describe('T12-WF06 Churn Monitoring Workflow Contract & Controller Integration',
     });
     expect(prepared?.json.customerId).toBe(customerId);
 
-    const highRiskContext = {
-      customer: { id: customerId, name: mockCustomer.name },
-      evidence: [
-        {
-          source: 'interactions',
-          signal: 'recorded_interaction_count',
-          value: 1,
-          observedAt: '2026-07-01T00:00:00.000Z',
-        },
-        {
-          source: 'follow_up_executions',
-          signal: 'failed_or_retrying_execution_count',
-          value: 2,
-        },
+    (customersRepository.findOne as jest.Mock).mockResolvedValue({
+      ...mockCustomer,
+      convertedLeads: [
+        Object.assign(new Lead(), {
+          id: 'lead-high-1',
+          interactions: [
+            Object.assign(new Interaction(), {
+              id: 'int-stale-1',
+              occurredAt: new Date('2026-07-01T00:00:00.000Z'),
+            }),
+          ],
+          enrollments: [
+            Object.assign(new LeadFollowUpEnrollment(), {
+              id: 'enr-1',
+              executions: [
+                Object.assign(new FollowUpExecution(), {
+                  id: 'exec-f1',
+                  status: ExecutionStatus.FAILED,
+                }),
+                Object.assign(new FollowUpExecution(), {
+                  id: 'exec-f2',
+                  status: ExecutionStatus.RETRYING,
+                }),
+              ],
+            }),
+          ],
+        }),
       ],
-      coverage: {
-        customerProfile: 'AVAILABLE',
-        interactions: 'AVAILABLE',
-        followUps: 'AVAILABLE',
-      },
-      signals: {
-        interactionCount: 1,
-        failedOrRetryingFollowUpCount: 2,
-      },
-    };
+    });
+
+    const highRiskContext = await churnController.getChurnContext(customerId);
 
     const [normalized] = runCodeNode(normalizeNode, highRiskContext, {
       '4. Prepare Customer Context': prepared?.json ?? {},
@@ -333,35 +345,76 @@ describe('T12-WF06 Churn Monitoring Workflow Contract & Controller Integration',
     expect(replayedTask?.id).toBe(createdTask?.id);
   });
 
-  it('classifies LOW, MEDIUM, and INSUFFICIENT_DATA through InternalChurnController without reaching the retention task gate', async () => {
+  it('classifies LOW, MEDIUM, and INSUFFICIENT_DATA through InternalChurnController from canonical DB records without allowing caller overrides', async () => {
+    (customersRepository.findOne as jest.Mock).mockResolvedValueOnce({
+      ...mockCustomer,
+      convertedLeads: [
+        Object.assign(new Lead(), {
+          id: 'lead-low',
+          interactions: [
+            Object.assign(new Interaction(), {
+              id: 'i1',
+              occurredAt: new Date('2026-11-09T00:00:00.000Z'),
+            }),
+            Object.assign(new Interaction(), {
+              id: 'i2',
+              occurredAt: new Date('2026-11-08T00:00:00.000Z'),
+            }),
+            Object.assign(new Interaction(), {
+              id: 'i3',
+              occurredAt: new Date('2026-11-07T00:00:00.000Z'),
+            }),
+            Object.assign(new Interaction(), {
+              id: 'i4',
+              occurredAt: new Date('2026-11-06T00:00:00.000Z'),
+            }),
+          ],
+          enrollments: [],
+        }),
+      ],
+    });
     const low = await churnController.createChurnAssessment(customerId, {
       asOfDate: '2026-11-10',
-      evidence: [
-        {
-          source: 'interactions',
-          signal: 'recorded_interaction_count',
-          value: 4,
-          observedAt: '2026-11-09T00:00:00.000Z',
-        },
-      ],
+      score: 99, // caller override ignored
     });
     expect(low.riskLevel).toBe('LOW');
     expect(low.score).toBeLessThanOrEqual(39);
 
+    (customersRepository.findOne as jest.Mock).mockResolvedValueOnce({
+      ...mockCustomer,
+      convertedLeads: [
+        Object.assign(new Lead(), {
+          id: 'lead-med',
+          interactions: [],
+          enrollments: [
+            Object.assign(new LeadFollowUpEnrollment(), {
+              id: 'enr-med',
+              executions: [
+                Object.assign(new FollowUpExecution(), {
+                  id: 'ex-1',
+                  status: ExecutionStatus.FAILED,
+                }),
+                Object.assign(new FollowUpExecution(), {
+                  id: 'ex-2',
+                  status: ExecutionStatus.RETRYING,
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
     const medium = await churnController.createChurnAssessment(customerId, {
       asOfDate: '2026-11-11',
-      evidence: [
-        {
-          source: 'follow_up_executions',
-          signal: 'failed_or_retrying_execution_count',
-          value: 2,
-        },
-      ],
     });
     expect(medium.riskLevel).toBe('MEDIUM');
     expect(medium.score).toBeGreaterThanOrEqual(40);
     expect(medium.score).toBeLessThanOrEqual(69);
 
+    (customersRepository.findOne as jest.Mock).mockResolvedValueOnce({
+      ...mockCustomer,
+      convertedLeads: [],
+    });
     const insufficient = await churnController.createChurnAssessment(
       customerId,
       {

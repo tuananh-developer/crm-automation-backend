@@ -342,10 +342,7 @@ describe('CustomersService', () => {
       );
     });
 
-    it('derives LOW, MEDIUM, and HIGH churn scores from sourced evidence when score is omitted', async () => {
-      (customersRepository.findOne as jest.Mock).mockResolvedValue(
-        mockCustomer,
-      );
+    it('derives LOW, MEDIUM, and HIGH churn scores from persisted customer context when score is omitted', async () => {
       (churnAssessmentsRepository.create as jest.Mock).mockImplementation(
         (input) =>
           Object.assign(new CustomerChurnAssessment(), {
@@ -357,74 +354,275 @@ describe('CustomersService', () => {
         (assessment) => Promise.resolve(assessment),
       );
 
-      // 1. LOW risk: recent interaction, zero failed follow-ups
+      // 1. LOW risk: recent interactions, zero failed follow-ups in persisted customer context
+      (customersRepository.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockCustomer,
+        convertedLeads: [
+          Object.assign(new Lead(), {
+            id: 'lead-low-1',
+            interactions: [
+              Object.assign(new Interaction(), {
+                id: 'int-1',
+                occurredAt: new Date('2026-11-08T10:00:00.000Z'),
+              }),
+              Object.assign(new Interaction(), {
+                id: 'int-2',
+                occurredAt: new Date('2026-11-07T10:00:00.000Z'),
+              }),
+              Object.assign(new Interaction(), {
+                id: 'int-3',
+                occurredAt: new Date('2026-11-06T10:00:00.000Z'),
+              }),
+            ],
+            enrollments: [
+              Object.assign(new LeadFollowUpEnrollment(), {
+                id: 'enr-1',
+                executions: [
+                  Object.assign(new FollowUpExecution(), {
+                    id: 'exec-1',
+                    status: ExecutionStatus.SUCCESS,
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      });
       const lowAssessment = await service.createChurnAssessment('customer-1', {
         asOfDate: '2026-11-10',
-        evidence: [
-          {
-            source: 'interactions',
-            signal: 'recorded_interaction_count',
-            value: 3,
-            observedAt: '2026-11-08T10:00:00.000Z',
-          },
-          {
-            source: 'follow_up_executions',
-            signal: 'failed_or_retrying_execution_count',
-            value: 0,
-          },
-        ],
       });
       expect(lowAssessment.score).toBe(0);
       expect(lowAssessment.riskLevel).toBe('LOW');
 
-      // 2. MEDIUM risk: 2 failed follow-up executions with recent interactions
+      // 2. MEDIUM risk: 2 failed follow-up executions with recent interactions in persisted customer context
+      (customersRepository.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockCustomer,
+        convertedLeads: [
+          Object.assign(new Lead(), {
+            id: 'lead-med-1',
+            interactions: [
+              Object.assign(new Interaction(), {
+                id: 'int-1',
+                occurredAt: new Date('2026-11-08T10:00:00.000Z'),
+              }),
+              Object.assign(new Interaction(), {
+                id: 'int-2',
+                occurredAt: new Date('2026-11-07T10:00:00.000Z'),
+              }),
+              Object.assign(new Interaction(), {
+                id: 'int-3',
+                occurredAt: new Date('2026-11-06T10:00:00.000Z'),
+              }),
+            ],
+            enrollments: [
+              Object.assign(new LeadFollowUpEnrollment(), {
+                id: 'enr-1',
+                executions: [
+                  Object.assign(new FollowUpExecution(), {
+                    id: 'exec-1',
+                    status: ExecutionStatus.FAILED,
+                  }),
+                  Object.assign(new FollowUpExecution(), {
+                    id: 'exec-2',
+                    status: ExecutionStatus.RETRYING,
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      });
       const mediumAssessment = await service.createChurnAssessment(
         'customer-1',
         {
           asOfDate: '2026-11-10',
-          evidence: [
-            {
-              source: 'interactions',
-              signal: 'recorded_interaction_count',
-              value: 3,
-              observedAt: '2026-11-08T10:00:00.000Z',
-            },
-            {
-              source: 'follow_up_executions',
-              signal: 'failed_or_retrying_execution_count',
-              value: 2,
-            },
-          ],
         },
       );
       expect(mediumAssessment.score).toBe(50);
       expect(mediumAssessment.riskLevel).toBe('MEDIUM');
 
-      // 3. HIGH risk: stale interaction (>60 days) + failed follow-up execution
+      // 3. HIGH risk: stale interaction (>60 days) + failed follow-up execution in persisted customer context
+      (customersRepository.findOne as jest.Mock).mockResolvedValueOnce({
+        ...mockCustomer,
+        convertedLeads: [
+          Object.assign(new Lead(), {
+            id: 'lead-high-1',
+            interactions: [
+              Object.assign(new Interaction(), {
+                id: 'int-stale-1',
+                occurredAt: new Date('2026-08-01T10:00:00.000Z'),
+              }),
+            ],
+            enrollments: [
+              Object.assign(new LeadFollowUpEnrollment(), {
+                id: 'enr-1',
+                executions: [
+                  Object.assign(new FollowUpExecution(), {
+                    id: 'exec-fail-1',
+                    status: ExecutionStatus.FAILED,
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      });
       const highAssessment = await service.createChurnAssessment('customer-1', {
         asOfDate: '2026-11-10',
-        evidence: [
-          {
-            source: 'interactions',
-            signal: 'recorded_interaction_count',
-            value: 1,
-            observedAt: '2026-08-01T10:00:00.000Z',
-          },
-          {
-            source: 'follow_up_executions',
-            signal: 'failed_or_retrying_execution_count',
-            value: 1,
-          },
-        ],
       });
       expect(highAssessment.score).toBe(95);
       expect(highAssessment.riskLevel).toBe('HIGH');
     });
 
-    it('reaches the retention-task path when WF06 submits high-risk evidence without an explicit score', async () => {
-      (customersRepository.findOne as jest.Mock).mockResolvedValue(
-        mockCustomer,
+    it('ignores caller-supplied score and fabricated evidence values in favor of persisted customer records', async () => {
+      (churnAssessmentsRepository.create as jest.Mock).mockImplementation(
+        (input) =>
+          Object.assign(new CustomerChurnAssessment(), {
+            id: 'assessment-authoritative',
+            ...input,
+          }),
       );
+      (churnAssessmentsRepository.save as jest.Mock).mockImplementation(
+        (assessment) => Promise.resolve(assessment),
+      );
+
+      // Persisted DB state: customer has 3 recent interactions and 0 failed follow-ups (authoritative score = 0, LOW)
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        convertedLeads: [
+          Object.assign(new Lead(), {
+            id: 'lead-owned-1',
+            interactions: [
+              Object.assign(new Interaction(), {
+                id: 'int-1',
+                occurredAt: new Date('2026-11-09T10:00:00.000Z'),
+              }),
+              Object.assign(new Interaction(), {
+                id: 'int-2',
+                occurredAt: new Date('2026-11-08T10:00:00.000Z'),
+              }),
+              Object.assign(new Interaction(), {
+                id: 'int-3',
+                occurredAt: new Date('2026-11-07T10:00:00.000Z'),
+              }),
+            ],
+            enrollments: [
+              Object.assign(new LeadFollowUpEnrollment(), {
+                id: 'enr-1',
+                executions: [
+                  Object.assign(new FollowUpExecution(), {
+                    id: 'exec-1',
+                    status: ExecutionStatus.SUCCESS,
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      });
+
+      // Caller attempts to override score=95 and fabricate failed_or_retrying_execution_count=10
+      const assessment = await service.createChurnAssessment('customer-1', {
+        asOfDate: '2026-11-10',
+        score: 95,
+        evidence: [
+          {
+            source: 'follow_up_executions',
+            signal: 'failed_or_retrying_execution_count',
+            value: 10,
+          },
+        ],
+      });
+
+      expect(assessment.score).toBe(0);
+      expect(assessment.riskLevel).toBe('LOW');
+      expect(assessment.evidence).toEqual([
+        expect.objectContaining({
+          source: 'interactions',
+          signal: 'recorded_interaction_count',
+          value: 3,
+        }),
+        expect.objectContaining({
+          source: 'follow_up_executions',
+          signal: 'failed_or_retrying_execution_count',
+          value: 0,
+        }),
+      ]);
+    });
+
+    it('rejects cross-customer evidence references with BadRequestException', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        convertedLeads: [
+          Object.assign(new Lead(), {
+            id: 'lead-owned-1',
+            interactions: [
+              Object.assign(new Interaction(), {
+                id: 'int-owned-1',
+                occurredAt: new Date('2026-11-09T10:00:00.000Z'),
+              }),
+            ],
+            enrollments: [],
+          }),
+        ],
+      });
+
+      await expect(
+        service.createChurnAssessment('customer-1', {
+          evidence: [
+            {
+              customerId: 'customer-other-2',
+              source: 'interactions',
+              signal: 'recorded_interaction_count',
+              value: 1,
+            },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      await expect(
+        service.createChurnAssessment('customer-1', {
+          evidence: [
+            {
+              interactionId: 'int-foreign-999',
+              source: 'interactions',
+              signal: 'recorded_interaction_count',
+              value: 1,
+            },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('reaches the retention-task path when WF06 evaluates a customer with high-risk persisted context', async () => {
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        convertedLeads: [
+          Object.assign(new Lead(), {
+            id: 'lead-high-risk',
+            interactions: [],
+            enrollments: [
+              Object.assign(new LeadFollowUpEnrollment(), {
+                id: 'enr-high-1',
+                executions: [
+                  Object.assign(new FollowUpExecution(), {
+                    id: 'exec-f1',
+                    status: ExecutionStatus.FAILED,
+                  }),
+                  Object.assign(new FollowUpExecution(), {
+                    id: 'exec-f2',
+                    status: ExecutionStatus.FAILED,
+                  }),
+                  Object.assign(new FollowUpExecution(), {
+                    id: 'exec-f3',
+                    status: ExecutionStatus.RETRYING,
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      });
       (churnAssessmentsRepository.create as jest.Mock).mockImplementation(
         (input) =>
           Object.assign(new CustomerChurnAssessment(), {

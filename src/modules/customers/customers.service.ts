@@ -11,6 +11,7 @@ import { CustomerSegment } from './entities/customer-segment.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
 import { CustomerTask } from './entities/customer-task.entity.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { QueryCustomerDto } from './dto/index.js';
 import { QueryCustomerTaskDto } from './dto/query-customer-task.dto.js';
 import { CustomerResponseDto } from './dto/customer-response.dto.js';
@@ -43,6 +44,9 @@ export class CustomersService {
 
     @InjectRepository(CustomerTask)
     private readonly customerTasksRepository?: Repository<CustomerTask>,
+
+    @InjectRepository(WorkflowRun)
+    private readonly workflowRunsRepository?: Repository<WorkflowRun>,
   ) {}
 
   async findAll(
@@ -287,6 +291,135 @@ export class CustomersService {
     return Math.min(100, Math.max(0, Math.round(totalScore)));
   }
 
+  private buildCanonicalChurnContextFromCustomer(customer: Customer) {
+    const leads = customer.convertedLeads ?? [];
+    const leadIds = new Set(
+      leads
+        .map((lead) => lead.id)
+        .filter((id): id is string => typeof id === 'string'),
+    );
+    const interactions = leads
+      .flatMap((lead) => lead.interactions ?? [])
+      .sort(
+        (left, right) => right.occurredAt.getTime() - left.occurredAt.getTime(),
+      );
+    const interactionIds = new Set(
+      interactions
+        .map((interaction) => interaction.id)
+        .filter((id): id is string => typeof id === 'string'),
+    );
+    const enrollments = leads.flatMap((lead) => lead.enrollments ?? []);
+    const enrollmentIds = new Set(
+      enrollments
+        .map((enrollment) => enrollment.id)
+        .filter((id): id is string => typeof id === 'string'),
+    );
+    const executions = enrollments.flatMap(
+      (enrollment) => enrollment.executions ?? [],
+    );
+    const executionIds = new Set(
+      executions
+        .map((execution) => execution.id)
+        .filter((id): id is string => typeof id === 'string'),
+    );
+    const failedFollowUps = executions.filter((execution) =>
+      ['FAILED', 'RETRYING'].includes(execution.status),
+    ).length;
+
+    const evidence: Array<Record<string, unknown>> = [];
+    if (interactions.length > 0) {
+      evidence.push({
+        source: 'interactions',
+        signal: 'recorded_interaction_count',
+        value: interactions.length,
+        observedAt: interactions[0].occurredAt.toISOString(),
+      });
+    }
+    if (executions.length > 0) {
+      evidence.push({
+        source: 'follow_up_executions',
+        signal: 'failed_or_retrying_execution_count',
+        value: failedFollowUps,
+      });
+    }
+
+    return {
+      evidence,
+      signals: {
+        interactionCount: interactions.length,
+        latestInteractionAt: interactions[0]?.occurredAt ?? null,
+        followUpExecutionCount: executions.length,
+        failedOrRetryingFollowUpCount: failedFollowUps,
+      },
+      coverage: {
+        customerProfile: 'AVAILABLE',
+        interactions: interactions.length > 0 ? 'AVAILABLE' : 'NO_RECORDS',
+        followUps: executions.length > 0 ? 'AVAILABLE' : 'NO_RECORDS',
+        feedback: 'NOT_CONNECTED',
+        issues: 'NOT_CONNECTED',
+        renewals: 'NOT_CONNECTED',
+      },
+      leadIds,
+      interactionIds,
+      enrollmentIds,
+      executionIds,
+    };
+  }
+
+  private validateSubmittedChurnEvidenceScope(
+    customerId: string,
+    submittedEvidence: Array<Record<string, unknown>>,
+    canonical: {
+      leadIds: Set<string>;
+      interactionIds: Set<string>;
+      enrollmentIds: Set<string>;
+      executionIds: Set<string>;
+    },
+  ): void {
+    for (const item of submittedEvidence) {
+      if (
+        typeof item.customerId === 'string' &&
+        item.customerId !== customerId
+      ) {
+        throw new BadRequestException(
+          `Submitted churn evidence customerId '${item.customerId}' does not match target customer '${customerId}'`,
+        );
+      }
+      if (
+        typeof item.leadId === 'string' &&
+        !canonical.leadIds.has(item.leadId)
+      ) {
+        throw new BadRequestException(
+          `Submitted churn evidence leadId '${item.leadId}' does not belong to customer '${customerId}'`,
+        );
+      }
+      if (
+        typeof item.interactionId === 'string' &&
+        !canonical.interactionIds.has(item.interactionId)
+      ) {
+        throw new BadRequestException(
+          `Submitted churn evidence interactionId '${item.interactionId}' does not belong to customer '${customerId}'`,
+        );
+      }
+      if (
+        typeof item.enrollmentId === 'string' &&
+        !canonical.enrollmentIds.has(item.enrollmentId)
+      ) {
+        throw new BadRequestException(
+          `Submitted churn evidence enrollmentId '${item.enrollmentId}' does not belong to customer '${customerId}'`,
+        );
+      }
+      if (
+        typeof item.executionId === 'string' &&
+        !canonical.executionIds.has(item.executionId)
+      ) {
+        throw new BadRequestException(
+          `Submitted churn evidence executionId '${item.executionId}' does not belong to customer '${customerId}'`,
+        );
+      }
+    }
+  }
+
   async createChurnAssessment(
     customerId: string,
     input: {
@@ -302,31 +435,65 @@ export class CustomersService {
   ): Promise<CustomerChurnAssessment> {
     const customer = await this.customersRepository.findOne({
       where: { id: customerId },
+      relations: {
+        convertedLeads: {
+          interactions: true,
+          enrollments: { executions: true },
+        },
+      },
     });
 
     if (!customer) {
       throw new NotFoundException(`Customer with ID '${customerId}' not found`);
     }
 
-    const evidence = Array.isArray(input.evidence)
+    if (input.score !== undefined && input.score !== null) {
+      // Validate range if supplied, but never allow caller-supplied score to override canonical derivation
+      this.classifyChurnScore(input.score);
+    }
+
+    if (input.workflowRunId && this.workflowRunsRepository) {
+      const workflowRun = await this.workflowRunsRepository.findOne({
+        where: { id: input.workflowRunId },
+      });
+      if (!workflowRun) {
+        throw new NotFoundException(
+          `WorkflowRun with ID '${input.workflowRunId}' not found`,
+        );
+      }
+      const payloadCustomerId = (
+        workflowRun.inputPayload as Record<string, unknown> | null
+      )?.customerId;
+      if (
+        typeof payloadCustomerId === 'string' &&
+        payloadCustomerId !== customerId
+      ) {
+        throw new BadRequestException(
+          `WorkflowRun '${input.workflowRunId}' belongs to a different customer`,
+        );
+      }
+    }
+
+    const submittedEvidence = Array.isArray(input.evidence)
       ? input.evidence.filter(
           (item) =>
             item !== null && typeof item === 'object' && !Array.isArray(item),
         )
       : [];
-    const hasEvidence = evidence.some(
-      (item) =>
-        typeof item.source === 'string' &&
-        typeof item.signal === 'string' &&
-        item.value !== null &&
-        item.value !== undefined,
+
+    const canonical = this.buildCanonicalChurnContextFromCustomer(customer);
+    this.validateSubmittedChurnEvidenceScope(
+      customerId,
+      submittedEvidence,
+      canonical,
     );
+
+    const evidence = canonical.evidence;
     const asOfDate = input.asOfDate ?? new Date().toISOString().slice(0, 10);
-    const score = hasEvidence
-      ? input.score !== null && input.score !== undefined
-        ? input.score
-        : this.deriveChurnScoreFromEvidence(evidence, asOfDate)
-      : null;
+    const score =
+      evidence.length > 0
+        ? this.deriveChurnScoreFromEvidence(evidence, asOfDate)
+        : null;
     const derivedRisk = this.classifyChurnScore(score);
 
     if (input.riskLevel && input.riskLevel.toUpperCase() !== derivedRisk) {
@@ -348,7 +515,7 @@ export class CustomersService {
       asOfDate,
       policyVersion: input.policyVersion ?? 'v1',
       evidence,
-      coverage: input.coverage ?? { availableSignals: evidence.length },
+      coverage: canonical.coverage,
       workflowRunId: input.workflowRunId ?? null,
       metadata: input.metadata ?? {},
     });
@@ -430,36 +597,7 @@ export class CustomersService {
       throw new NotFoundException(`Customer with ID '${customerId}' not found`);
     }
 
-    const leads = customer.convertedLeads ?? [];
-    const interactions = leads
-      .flatMap((lead) => lead.interactions ?? [])
-      .sort(
-        (left, right) => right.occurredAt.getTime() - left.occurredAt.getTime(),
-      );
-    const executions = leads.flatMap((lead) =>
-      (lead.enrollments ?? []).flatMap(
-        (enrollment) => enrollment.executions ?? [],
-      ),
-    );
-    const failedFollowUps = executions.filter((execution) =>
-      ['FAILED', 'RETRYING'].includes(execution.status),
-    ).length;
-    const evidence: Array<Record<string, unknown>> = [];
-    if (interactions.length > 0) {
-      evidence.push({
-        source: 'interactions',
-        signal: 'recorded_interaction_count',
-        value: interactions.length,
-        observedAt: interactions[0].occurredAt.toISOString(),
-      });
-    }
-    if (executions.length > 0) {
-      evidence.push({
-        source: 'follow_up_executions',
-        signal: 'failed_or_retrying_execution_count',
-        value: failedFollowUps,
-      });
-    }
+    const canonical = this.buildCanonicalChurnContextFromCustomer(customer);
 
     return {
       customer: {
@@ -470,21 +608,9 @@ export class CustomersService {
         createdAt: customer.createdAt,
         updatedAt: customer.updatedAt,
       },
-      evidence,
-      signals: {
-        interactionCount: interactions.length,
-        latestInteractionAt: interactions[0]?.occurredAt ?? null,
-        followUpExecutionCount: executions.length,
-        failedOrRetryingFollowUpCount: failedFollowUps,
-      },
-      coverage: {
-        customerProfile: 'AVAILABLE',
-        interactions: interactions.length > 0 ? 'AVAILABLE' : 'NO_RECORDS',
-        followUps: executions.length > 0 ? 'AVAILABLE' : 'NO_RECORDS',
-        feedback: 'NOT_CONNECTED',
-        issues: 'NOT_CONNECTED',
-        renewals: 'NOT_CONNECTED',
-      },
+      evidence: canonical.evidence,
+      signals: canonical.signals,
+      coverage: canonical.coverage,
     };
   }
 
