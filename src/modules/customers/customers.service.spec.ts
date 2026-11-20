@@ -343,6 +343,11 @@ describe('CustomersService', () => {
     });
 
     it('derives LOW, MEDIUM, and HIGH churn scores from persisted customer context when score is omitted', async () => {
+      const recent1 = new Date(Date.now() - 1 * 86_400_000);
+      const recent2 = new Date(Date.now() - 2 * 86_400_000);
+      const recent3 = new Date(Date.now() - 3 * 86_400_000);
+      const stale90 = new Date(Date.now() - 90 * 86_400_000);
+
       (churnAssessmentsRepository.create as jest.Mock).mockImplementation(
         (input) =>
           Object.assign(new CustomerChurnAssessment(), {
@@ -363,15 +368,15 @@ describe('CustomersService', () => {
             interactions: [
               Object.assign(new Interaction(), {
                 id: 'int-1',
-                occurredAt: new Date('2026-11-08T10:00:00.000Z'),
+                occurredAt: recent1,
               }),
               Object.assign(new Interaction(), {
                 id: 'int-2',
-                occurredAt: new Date('2026-11-07T10:00:00.000Z'),
+                occurredAt: recent2,
               }),
               Object.assign(new Interaction(), {
                 id: 'int-3',
-                occurredAt: new Date('2026-11-06T10:00:00.000Z'),
+                occurredAt: recent3,
               }),
             ],
             enrollments: [
@@ -388,9 +393,10 @@ describe('CustomersService', () => {
           }),
         ],
       });
-      const lowAssessment = await service.createChurnAssessment('customer-1', {
-        asOfDate: '2026-11-10',
-      });
+      const lowAssessment = await service.createChurnAssessment(
+        'customer-1',
+        {},
+      );
       expect(lowAssessment.score).toBe(0);
       expect(lowAssessment.riskLevel).toBe('LOW');
 
@@ -403,15 +409,15 @@ describe('CustomersService', () => {
             interactions: [
               Object.assign(new Interaction(), {
                 id: 'int-1',
-                occurredAt: new Date('2026-11-08T10:00:00.000Z'),
+                occurredAt: recent1,
               }),
               Object.assign(new Interaction(), {
                 id: 'int-2',
-                occurredAt: new Date('2026-11-07T10:00:00.000Z'),
+                occurredAt: recent2,
               }),
               Object.assign(new Interaction(), {
                 id: 'int-3',
-                occurredAt: new Date('2026-11-06T10:00:00.000Z'),
+                occurredAt: recent3,
               }),
             ],
             enrollments: [
@@ -434,9 +440,7 @@ describe('CustomersService', () => {
       });
       const mediumAssessment = await service.createChurnAssessment(
         'customer-1',
-        {
-          asOfDate: '2026-11-10',
-        },
+        {},
       );
       expect(mediumAssessment.score).toBe(50);
       expect(mediumAssessment.riskLevel).toBe('MEDIUM');
@@ -450,7 +454,7 @@ describe('CustomersService', () => {
             interactions: [
               Object.assign(new Interaction(), {
                 id: 'int-stale-1',
-                occurredAt: new Date('2026-08-01T10:00:00.000Z'),
+                occurredAt: stale90,
               }),
             ],
             enrollments: [
@@ -467,14 +471,19 @@ describe('CustomersService', () => {
           }),
         ],
       });
-      const highAssessment = await service.createChurnAssessment('customer-1', {
-        asOfDate: '2026-11-10',
-      });
+      const highAssessment = await service.createChurnAssessment(
+        'customer-1',
+        {},
+      );
       expect(highAssessment.score).toBe(95);
       expect(highAssessment.riskLevel).toBe('HIGH');
     });
 
     it('ignores caller-supplied score and fabricated evidence values in favor of persisted customer records', async () => {
+      const recent1 = new Date(Date.now() - 1 * 86_400_000);
+      const recent2 = new Date(Date.now() - 2 * 86_400_000);
+      const recent3 = new Date(Date.now() - 3 * 86_400_000);
+
       (churnAssessmentsRepository.create as jest.Mock).mockImplementation(
         (input) =>
           Object.assign(new CustomerChurnAssessment(), {
@@ -495,15 +504,15 @@ describe('CustomersService', () => {
             interactions: [
               Object.assign(new Interaction(), {
                 id: 'int-1',
-                occurredAt: new Date('2026-11-09T10:00:00.000Z'),
+                occurredAt: recent1,
               }),
               Object.assign(new Interaction(), {
                 id: 'int-2',
-                occurredAt: new Date('2026-11-08T10:00:00.000Z'),
+                occurredAt: recent2,
               }),
               Object.assign(new Interaction(), {
                 id: 'int-3',
-                occurredAt: new Date('2026-11-07T10:00:00.000Z'),
+                occurredAt: recent3,
               }),
             ],
             enrollments: [
@@ -523,7 +532,6 @@ describe('CustomersService', () => {
 
       // Caller attempts to override score=95 and fabricate failed_or_retrying_execution_count=10
       const assessment = await service.createChurnAssessment('customer-1', {
-        asOfDate: '2026-11-10',
         score: 95,
         evidence: [
           {
@@ -548,6 +556,78 @@ describe('CustomersService', () => {
           value: 0,
         }),
       ]);
+    });
+
+    it('ignores caller-supplied future or past asOfDate so callers cannot manipulate inactivity scoring or bypass the daily uniqueness constraint', async () => {
+      const serverToday = new Date().toISOString().slice(0, 10);
+      const recent1 = new Date(Date.now() - 1 * 86_400_000);
+      const recent2 = new Date(Date.now() - 2 * 86_400_000);
+      const recent3 = new Date(Date.now() - 3 * 86_400_000);
+
+      let storedForToday: CustomerChurnAssessment | null = null;
+      (churnAssessmentsRepository.create as jest.Mock).mockImplementation(
+        (input) =>
+          Object.assign(new CustomerChurnAssessment(), {
+            id: 'assessment-clock-safe',
+            ...input,
+          }),
+      );
+      (churnAssessmentsRepository.save as jest.Mock).mockImplementation(
+        (assessment: CustomerChurnAssessment) => {
+          storedForToday = assessment;
+          return Promise.resolve(assessment);
+        },
+      );
+      (churnAssessmentsRepository.findOne as jest.Mock).mockImplementation(
+        ({ where }: { where: { customerId: string; asOfDate: string } }) =>
+          Promise.resolve(
+            storedForToday &&
+              storedForToday.customerId === where.customerId &&
+              storedForToday.asOfDate === where.asOfDate
+              ? storedForToday
+              : null,
+          ),
+      );
+
+      (customersRepository.findOne as jest.Mock).mockResolvedValue({
+        ...mockCustomer,
+        convertedLeads: [
+          Object.assign(new Lead(), {
+            id: 'lead-recent-1',
+            interactions: [
+              Object.assign(new Interaction(), {
+                id: 'int-1',
+                occurredAt: recent1,
+              }),
+              Object.assign(new Interaction(), {
+                id: 'int-2',
+                occurredAt: recent2,
+              }),
+              Object.assign(new Interaction(), {
+                id: 'int-3',
+                occurredAt: recent3,
+              }),
+            ],
+            enrollments: [],
+          }),
+        ],
+      });
+
+      // Caller passes a far-future date ('2099-12-31') attempting to make recent interactions look >60 days stale
+      const futureAttempt = await service.createChurnAssessment('customer-1', {
+        asOfDate: '2099-12-31',
+      });
+      expect(futureAttempt.asOfDate).toBe(serverToday);
+      expect(futureAttempt.score).toBe(0);
+      expect(futureAttempt.riskLevel).toBe('LOW');
+
+      // Caller passes a historical date ('2020-01-01') attempting to create a second daily snapshot
+      const pastAttempt = await service.createChurnAssessment('customer-1', {
+        asOfDate: '2020-01-01',
+      });
+      expect(pastAttempt.id).toBe(futureAttempt.id);
+      expect(pastAttempt.asOfDate).toBe(serverToday);
+      expect(churnAssessmentsRepository.save).toHaveBeenCalledTimes(1);
     });
 
     it('rejects cross-customer evidence references with BadRequestException', async () => {
@@ -726,10 +806,11 @@ describe('CustomersService', () => {
     });
 
     it('reuses an assessment after a duplicate customer/date insert', async () => {
+      const serverToday = new Date().toISOString().slice(0, 10);
       const existing = Object.assign(new CustomerChurnAssessment(), {
         id: 'assessment-existing',
         customerId: 'customer-1',
-        asOfDate: '2026-11-09',
+        asOfDate: serverToday,
         score: null,
         riskLevel: 'INSUFFICIENT_DATA',
       });
@@ -742,9 +823,9 @@ describe('CustomersService', () => {
       (churnAssessmentsRepository.save as jest.Mock).mockRejectedValue(
         Object.assign(new Error('unique violation'), { code: '23505' }),
       );
-      (churnAssessmentsRepository.findOne as jest.Mock).mockResolvedValue(
-        existing,
-      );
+      (churnAssessmentsRepository.findOne as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(existing);
 
       const result = await service.createChurnAssessment('customer-1', {
         score: null,
@@ -753,7 +834,7 @@ describe('CustomersService', () => {
 
       expect(result).toBe(existing);
       expect(churnAssessmentsRepository.findOne).toHaveBeenCalledWith({
-        where: { customerId: 'customer-1', asOfDate: '2026-11-09' },
+        where: { customerId: 'customer-1', asOfDate: serverToday },
       });
     });
 

@@ -489,7 +489,8 @@ export class CustomersService {
     );
 
     const evidence = canonical.evidence;
-    const asOfDate = input.asOfDate ?? new Date().toISOString().slice(0, 10);
+    // Server-authoritative UTC assessment date: never trust caller-supplied asOfDate
+    const asOfDate = new Date().toISOString().slice(0, 10);
     const score =
       evidence.length > 0
         ? this.deriveChurnScoreFromEvidence(evidence, asOfDate)
@@ -506,6 +507,13 @@ export class CustomersService {
       throw new BadRequestException(
         'Churn assessment repository is not configured',
       );
+    }
+
+    const existingDaily = await this.churnAssessmentsRepository.findOne({
+      where: { customerId, asOfDate },
+    });
+    if (existingDaily) {
+      return existingDaily;
     }
 
     const assessment = this.churnAssessmentsRepository.create({

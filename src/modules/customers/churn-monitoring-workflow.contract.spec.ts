@@ -346,42 +346,52 @@ describe('T12-WF06 Churn Monitoring Workflow Contract & Controller Integration',
   });
 
   it('classifies LOW, MEDIUM, and INSUFFICIENT_DATA through InternalChurnController from canonical DB records without allowing caller overrides', async () => {
+    const recent1 = new Date(Date.now() - 1 * 86_400_000);
+    const recent2 = new Date(Date.now() - 2 * 86_400_000);
+    const recent3 = new Date(Date.now() - 3 * 86_400_000);
+    const recent4 = new Date(Date.now() - 4 * 86_400_000);
+    const lowCustomerId = '11111111-1111-4111-8111-111111111112';
+    const medCustomerId = '11111111-1111-4111-8111-111111111113';
+    const emptyCustomerId = '11111111-1111-4111-8111-111111111114';
+
     (customersRepository.findOne as jest.Mock).mockResolvedValueOnce({
       ...mockCustomer,
+      id: lowCustomerId,
       convertedLeads: [
         Object.assign(new Lead(), {
           id: 'lead-low',
           interactions: [
             Object.assign(new Interaction(), {
               id: 'i1',
-              occurredAt: new Date('2026-11-09T00:00:00.000Z'),
+              occurredAt: recent1,
             }),
             Object.assign(new Interaction(), {
               id: 'i2',
-              occurredAt: new Date('2026-11-08T00:00:00.000Z'),
+              occurredAt: recent2,
             }),
             Object.assign(new Interaction(), {
               id: 'i3',
-              occurredAt: new Date('2026-11-07T00:00:00.000Z'),
+              occurredAt: recent3,
             }),
             Object.assign(new Interaction(), {
               id: 'i4',
-              occurredAt: new Date('2026-11-06T00:00:00.000Z'),
+              occurredAt: recent4,
             }),
           ],
           enrollments: [],
         }),
       ],
     });
-    const low = await churnController.createChurnAssessment(customerId, {
-      asOfDate: '2026-11-10',
-      score: 99, // caller override ignored
+    const low = await churnController.createChurnAssessment(lowCustomerId, {
+      asOfDate: '2099-12-31', // caller future date override ignored
+      score: 99, // caller score override ignored
     });
     expect(low.riskLevel).toBe('LOW');
     expect(low.score).toBeLessThanOrEqual(39);
 
     (customersRepository.findOne as jest.Mock).mockResolvedValueOnce({
       ...mockCustomer,
+      id: medCustomerId,
       convertedLeads: [
         Object.assign(new Lead(), {
           id: 'lead-med',
@@ -404,7 +414,7 @@ describe('T12-WF06 Churn Monitoring Workflow Contract & Controller Integration',
         }),
       ],
     });
-    const medium = await churnController.createChurnAssessment(customerId, {
+    const medium = await churnController.createChurnAssessment(medCustomerId, {
       asOfDate: '2026-11-11',
     });
     expect(medium.riskLevel).toBe('MEDIUM');
@@ -413,10 +423,11 @@ describe('T12-WF06 Churn Monitoring Workflow Contract & Controller Integration',
 
     (customersRepository.findOne as jest.Mock).mockResolvedValueOnce({
       ...mockCustomer,
+      id: emptyCustomerId,
       convertedLeads: [],
     });
     const insufficient = await churnController.createChurnAssessment(
-      customerId,
+      emptyCustomerId,
       {
         asOfDate: '2026-11-12',
         evidence: [],
