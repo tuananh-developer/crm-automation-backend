@@ -58,6 +58,7 @@ describe('LeadsController', () => {
         },
       }),
       findOne: jest.fn().mockResolvedValue(mockLead),
+      findOneInternal: jest.fn().mockResolvedValue(mockLead),
       update: jest.fn().mockResolvedValue({ ...mockLead, firstName: 'Jane' }),
       remove: jest
         .fn()
@@ -92,6 +93,13 @@ describe('LeadsController', () => {
     const result = await controller.findOne('lead-123', actor);
 
     expect(service.findOne).toHaveBeenCalledWith('lead-123', actor);
+    expect(result).toEqual(mockLead);
+  });
+
+  it('should call service.findOneInternal with id', async () => {
+    const result = await controller.findOneInternal('lead-123');
+
+    expect(service.findOneInternal).toHaveBeenCalledWith('lead-123');
     expect(result).toEqual(mockLead);
   });
 

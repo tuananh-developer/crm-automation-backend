@@ -1,5 +1,6 @@
 import {
   IsEnum,
+  IsIn,
   IsNumber,
   IsObject,
   IsOptional,
@@ -23,7 +24,7 @@ export class ScoringCallbackDto {
    * Defaults to 'SUCCESS' if omitted.
    */
   @IsOptional()
-  @IsString()
+  @IsIn(['SUCCESS', 'FAILED'])
   status?: 'SUCCESS' | 'FAILED';
 
   @ValidateIf((o: ScoringCallbackDto) => !o.status || o.status === 'SUCCESS')
@@ -51,6 +52,10 @@ export class ScoringCallbackDto {
   @IsOptional()
   @IsString()
   modelVersion?: string;
+
+  @IsOptional()
+  @IsString()
+  policyVersion?: string;
 
   /** Comprehensive model details (name, version, tokens, prompt latency, etc.) */
   @IsOptional()
