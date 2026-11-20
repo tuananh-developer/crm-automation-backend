@@ -284,6 +284,51 @@ describe('WF15 Account Management Workflow Contract', () => {
       expect(outputMultipleIssues.openIssues).toBe(25); // 100 - 3 * 25
     });
 
+    it('excludes WF15-created RETENTION tasks and operational workflow tasks from openIssues so weekly runs do not feedback-degrade health', () => {
+      const baselineWithoutRetentionTask = executeNode6({
+        customer: { id: 'cust-1' },
+        interactions: [{ id: 'i1' }],
+        feedback: [{ score: 85 }],
+        issues: [
+          {
+            id: 'iss-real-1',
+            taskType: 'FEEDBACK_ESCALATION',
+            status: 'OPEN',
+          },
+        ],
+        followUps: [{ id: 'e1', status: 'COMPLETED' }],
+      });
+
+      const withWf15RetentionTasks = executeNode6({
+        customer: { id: 'cust-1' },
+        interactions: [{ id: 'i1' }],
+        feedback: [{ score: 85 }],
+        issues: [
+          {
+            id: 'iss-real-1',
+            taskType: 'FEEDBACK_ESCALATION',
+            status: 'OPEN',
+          },
+          {
+            id: 'wf15-ret-1',
+            taskType: 'RETENTION',
+            status: 'OPEN',
+            sourceEntityType: 'AccountHealthSnapshot',
+            idempotencyKey: 'cust-1:account-health:snap-1',
+          },
+          {
+            id: 'wf13-ren-1',
+            taskType: 'RENEWAL_APPROVAL',
+            status: 'OPEN',
+          },
+        ],
+        followUps: [{ id: 'e1', status: 'COMPLETED' }],
+      });
+
+      expect(baselineWithoutRetentionTask.openIssues).toBe(75);
+      expect(withWf15RetentionTasks.openIssues).toBe(75);
+    });
+
     it('propagates null for missing data and marks hasSufficientData as false', () => {
       const output = executeNode6({
         customer: { id: 'cust-missing' },

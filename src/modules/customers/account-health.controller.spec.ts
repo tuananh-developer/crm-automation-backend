@@ -192,6 +192,54 @@ describe('AccountHealthController', () => {
     });
   });
 
+  describe('getCustomerAccountHealthContext', () => {
+    it('excludes workflow-generated RETENTION and operational tasks from issues collection', async () => {
+      const customerTaskRepo = {
+        find: jest.fn().mockResolvedValue([
+          {
+            id: 'task-issue-1',
+            customerId: mockCustomer.id,
+            taskType: 'FEEDBACK_ESCALATION',
+            status: 'OPEN',
+          },
+          {
+            id: 'task-wf15-retention',
+            customerId: mockCustomer.id,
+            taskType: 'RETENTION',
+            status: 'OPEN',
+            sourceEntityType: 'AccountHealthSnapshot',
+            idempotencyKey: `${mockCustomer.id}:account-health:snap-1`,
+          },
+          {
+            id: 'task-wf13-approval',
+            customerId: mockCustomer.id,
+            taskType: 'RENEWAL_APPROVAL',
+            status: 'OPEN',
+          },
+        ]),
+      };
+
+      const controllerWithTasks = new AccountHealthController(
+        service,
+        snapshotRepo as Repository<AccountHealthSnapshot>,
+        customerRepo as Repository<Customer>,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        customerTaskRepo as unknown as Repository<never>,
+      );
+
+      const context = await controllerWithTasks.getCustomerAccountHealthContext(
+        mockCustomer.id,
+      );
+
+      expect(context.issues).toHaveLength(1);
+      expect(context.issues[0]?.id).toBe('task-issue-1');
+    });
+  });
+
   describe('validateActions', () => {
     it('accepts allowed actions with matching customerId and snapshotId evidence', () => {
       const result = controller.validateActions({

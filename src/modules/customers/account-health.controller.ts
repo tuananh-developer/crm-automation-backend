@@ -125,12 +125,25 @@ export class AccountHealthController {
         })
       : [];
 
-    const issues = this.customerTaskRepo
+    const excludedOperationalTaskTypes = new Set([
+      'RETENTION',
+      'RENEWAL_APPROVAL',
+      'CHURN_RETENTION',
+      'ACCOUNT_HEALTH_REVIEW',
+    ]);
+    const allTasks = this.customerTaskRepo
       ? await this.customerTaskRepo.find({
           where: { customerId },
           order: { createdAt: 'DESC' },
         })
       : [];
+    const issues = allTasks.filter((task) => {
+      const taskType = (task.taskType ?? '').toUpperCase();
+      if (excludedOperationalTaskTypes.has(taskType)) return false;
+      if (task.sourceEntityType === 'AccountHealthSnapshot') return false;
+      if (task.idempotencyKey?.includes(':account-health:')) return false;
+      return true;
+    });
 
     return {
       customer: {
