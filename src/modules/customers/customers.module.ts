@@ -11,6 +11,7 @@ import { LeadFollowUpEnrollment } from '../follow-up/entities/lead-follow-up-enr
 import { FollowUpExecution } from '../follow-up/entities/follow-up-execution.entity.js';
 import { CustomerFeedback } from '../feedback/entities/customer-feedback.entity.js';
 import { User } from '../users/entities/user.entity.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { SegmentsService } from './segments.service.js';
 import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
@@ -19,6 +20,7 @@ import { AccountHealthService } from './account-health.service.js';
 import { AccountHealthController } from './account-health.controller.js';
 import { AccountHealthSnapshot } from './entities/account-health-snapshot.entity.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { InternalSegmentsWorkflowController } from './internal-segments-workflow.controller.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 
 @Module({
@@ -35,6 +37,7 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
       FollowUpExecution,
       CustomerFeedback,
       User,
+      WorkflowRun,
       AccountHealthSnapshot,
     ]),
     AuthModule,
@@ -43,6 +46,7 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
     AccountHealthController,
     SegmentsController,
     CustomersController,
+    InternalSegmentsWorkflowController,
   ],
   providers: [
     SegmentsService,

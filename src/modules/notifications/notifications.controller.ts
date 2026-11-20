@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -17,7 +18,7 @@ import {
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service.js';
 import {
-  CreateNotificationDto,
+  CreateInternalNotificationDto,
   MarkNotificationReadDto,
   QueryNotificationsDto,
   NotificationResponseDto,
@@ -99,7 +100,7 @@ export class NotificationsController {
     description:
       'Canonical route: /api/v1/notifications/internal/create. n8n workflows request an idempotent backend notification through this endpoint. The backend validates the target user, type and resource references.',
   })
-  @ApiBody({ type: CreateNotificationDto })
+  @ApiBody({ type: CreateInternalNotificationDto })
   @ApiResponse({
     status: 200,
     description: 'Notification created.',
@@ -107,8 +108,11 @@ export class NotificationsController {
   })
   @ApiResponse({ status: 401, description: 'Unauthorized n8n callback.' })
   async createInternal(
-    @Body() dto: CreateNotificationDto,
+    @Body() dto: CreateInternalNotificationDto,
   ): Promise<NotificationResponseDto> {
+    if (dto.userId === '00000000-0000-0000-0000-000000000000') {
+      throw new BadRequestException('userId is required');
+    }
     const notification = await this.notificationsService.create({
       userId: dto.userId,
       type: dto.type,
