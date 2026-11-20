@@ -1,7 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
 import { FollowUpExecution } from '../follow-up/entities/follow-up-execution.entity.js';
@@ -44,9 +41,7 @@ describe('CommunicationService', () => {
   let deliveryRepository: jest.Mocked<
     Partial<Repository<CommunicationDelivery>>
   >;
-  let executionRepository: jest.Mocked<
-    Partial<Repository<FollowUpExecution>>
-  >;
+  let executionRepository: jest.Mocked<Partial<Repository<FollowUpExecution>>>;
   let enrollmentRepository: jest.Mocked<
     Partial<Repository<LeadFollowUpEnrollment>>
   >;
@@ -83,15 +78,18 @@ describe('CommunicationService', () => {
     };
     deliveryRepository = {
       findOne: jest.fn().mockImplementation(() => Promise.resolve(delivery)),
-      find: jest.fn().mockImplementation(() =>
-        Promise.resolve(delivery ? [delivery] : []),
+      find: jest
+        .fn()
+        .mockImplementation(() => Promise.resolve(delivery ? [delivery] : [])),
+      create: jest.fn(
+        (value: Partial<CommunicationDelivery>) =>
+          ({
+            id: 'delivery-1',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            ...value,
+          }) as CommunicationDelivery,
       ),
-      create: jest.fn((value: Partial<CommunicationDelivery>) => ({
-        id: 'delivery-1',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        ...value,
-      }) as CommunicationDelivery),
       save: jest.fn().mockImplementation((value: CommunicationDelivery) => {
         delivery = {
           ...value,
@@ -137,7 +135,10 @@ describe('CommunicationService', () => {
   });
 
   it('sends only the persisted email content and persists the provider receipt', async () => {
-    const result = await service.sendFollowUpExecution(executionId, executionId);
+    const result = await service.sendFollowUpExecution(
+      executionId,
+      executionId,
+    );
 
     expect(result).toEqual(
       expect.objectContaining({
@@ -174,7 +175,10 @@ describe('CommunicationService', () => {
     execution.status = ExecutionStatus.SUCCESS;
     enrollmentStatus = EnrollmentStatus.CANCELLED;
 
-    const replay = await service.sendFollowUpExecution(executionId, executionId);
+    const replay = await service.sendFollowUpExecution(
+      executionId,
+      executionId,
+    );
 
     expect(replay.success).toBe(true);
     expect(replay.idempotencyStatus).toBe('replayed');
@@ -200,7 +204,10 @@ describe('CommunicationService', () => {
     delivery.status = CommunicationDeliveryStatus.PROCESSING;
     delivery.startedAt = new Date(Date.now() - 3 * 60_000);
 
-    const result = await service.sendFollowUpExecution(executionId, executionId);
+    const result = await service.sendFollowUpExecution(
+      executionId,
+      executionId,
+    );
 
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(false);
@@ -228,6 +235,70 @@ describe('CommunicationService', () => {
     );
   });
 
+  it('reconciles a process interruption after SMTP acceptance without duplicating the email or leaving a permanent in-progress row', async () => {
+    let saveCalls = 0;
+    (deliveryRepository.findOne as jest.Mock).mockImplementation(() =>
+      Promise.resolve(delivery ? { ...delivery } : null),
+    );
+    const baseSave = deliveryRepository.save as jest.Mock;
+    baseSave.mockImplementation((value: CommunicationDelivery) => {
+      saveCalls += 1;
+      if (saveCalls === 2) {
+        return Promise.reject(
+          new Error('Process interrupted before persisting SENT status'),
+        );
+      }
+      delivery = {
+        ...value,
+        updatedAt: new Date(),
+      };
+      return Promise.resolve({ ...delivery });
+    });
+
+    await expect(
+      service.sendFollowUpExecution(executionId, executionId),
+    ).rejects.toThrow('Process interrupted before persisting SENT status');
+
+    expect(transport.sendMail).toHaveBeenCalledTimes(1);
+    expect(delivery?.status).toBe(CommunicationDeliveryStatus.PROCESSING);
+
+    // Replay while the 2-minute processing lease is still active returns in-progress without resending
+    const activeLeaseReplay = await service.sendFollowUpExecution(
+      executionId,
+      executionId,
+    );
+    expect(activeLeaseReplay).toEqual(
+      expect.objectContaining({
+        success: false,
+        retryable: true,
+        deliveryStatus: CommunicationDeliveryStatus.PROCESSING,
+        error: 'DELIVERY_ALREADY_PROCESSING',
+        idempotencyStatus: 'replayed',
+      }),
+    );
+    expect(transport.sendMail).toHaveBeenCalledTimes(1);
+
+    // Once the lease expires, replay reconciles the interrupted delivery to UNKNOWN and never resends
+    if (!delivery) throw new Error('Expected delivery row');
+    delivery.startedAt = new Date(Date.now() - 3 * 60_000);
+
+    const expiredLeaseReplay = await service.sendFollowUpExecution(
+      executionId,
+      executionId,
+    );
+    expect(expiredLeaseReplay).toEqual(
+      expect.objectContaining({
+        success: false,
+        retryable: false,
+        deliveryStatus: CommunicationDeliveryStatus.UNKNOWN,
+        error: 'DELIVERY_OUTCOME_UNKNOWN',
+        idempotencyStatus: 'replayed',
+      }),
+    );
+    expect(delivery.status).toBe(CommunicationDeliveryStatus.UNKNOWN);
+    expect(transport.sendMail).toHaveBeenCalledTimes(1);
+  });
+
   it('marks an SMTP connection timeout UNKNOWN and never retries it automatically', async () => {
     const timeout = Object.assign(new Error('socket timed out'), {
       code: 'ETIMEDOUT',
@@ -235,7 +306,10 @@ describe('CommunicationService', () => {
     transport.sendMail.mockRejectedValueOnce(timeout);
 
     const first = await service.sendFollowUpExecution(executionId, executionId);
-    const second = await service.sendFollowUpExecution(executionId, executionId);
+    const second = await service.sendFollowUpExecution(
+      executionId,
+      executionId,
+    );
 
     expect(first.deliveryStatus).toBe(CommunicationDeliveryStatus.UNKNOWN);
     expect(first.retryable).toBe(false);
@@ -252,7 +326,10 @@ describe('CommunicationService', () => {
       .mockResolvedValueOnce({ messageId: 'smtp-message-2' });
 
     const first = await service.sendFollowUpExecution(executionId, executionId);
-    const second = await service.sendFollowUpExecution(executionId, executionId);
+    const second = await service.sendFollowUpExecution(
+      executionId,
+      executionId,
+    );
 
     expect(first.deliveryStatus).toBe(
       CommunicationDeliveryStatus.RETRYABLE_FAILURE,

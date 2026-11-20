@@ -4,9 +4,9 @@ import { Customer } from './entities/customer.entity.js';
 import { CustomerTask } from './entities/customer-task.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
-import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import { User } from '../users/entities/user.entity.js';
+import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
 import { SegmentsService } from './segments.service.js';
 import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
@@ -17,6 +17,7 @@ import {
 } from './internal-churn.controller.js';
 import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { InternalSegmentsWorkflowController } from './internal-segments-workflow.controller.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 
 @Module({
@@ -38,6 +39,7 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
     CustomersController,
     InternalChurnController,
     InternalCustomerTasksController,
+    InternalSegmentsWorkflowController,
   ],
   providers: [SegmentsService, CustomersService, N8nAuthGuard],
   exports: [TypeOrmModule, SegmentsService, CustomersService],

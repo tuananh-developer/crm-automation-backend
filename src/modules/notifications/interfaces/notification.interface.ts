@@ -1,12 +1,15 @@
-import type { NotificationType } from '../enums/notification.enum.js';
+import type {
+  NotificationSeverity,
+  NotificationType,
+} from '../enums/notification.enum.js';
 
 export interface CreateNotificationInput {
-  userId: string;
+  userId?: string | null;
   type: NotificationType | string;
   title: string;
   content?: string | null;
   message?: string | null;
-  severity?: string | null;
+  severity?: NotificationSeverity | string | null;
   leadId?: string | null;
   customerId?: string | null;
   reviewTaskId?: string | null;
