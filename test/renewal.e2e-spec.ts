@@ -182,7 +182,7 @@ describe('Renewal Management Module (e2e)', () => {
         renewalDate: new Date().toISOString(),
         urgency: 'HIGH',
         recommendation: 'Renew with 5% discount',
-        draftContent: 'Proposal draft content',
+        draftContent: `Dear customer, your contract CTR-E2E-${uniqueSuffix} is scheduled for renewal. Please review our proposal.`,
         idempotencyKey,
         validationResult: {
           grounded: true,

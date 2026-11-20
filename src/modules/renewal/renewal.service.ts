@@ -1,11 +1,13 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Contract } from './entities/contract.entity.js';
@@ -27,6 +29,8 @@ import type {
   SendRenewalMessageDto,
   UpdateContractDto,
 } from './dto/renewal.dto.js';
+
+export const RENEWAL_MAIL_TRANSPORT = 'RENEWAL_MAIL_TRANSPORT';
 
 export interface RenewalMailTransport {
   sendMail(message: {
@@ -62,6 +66,7 @@ export class RenewalService {
     @Optional()
     private readonly notificationsService?: NotificationsService,
     @Optional()
+    @Inject(RENEWAL_MAIL_TRANSPORT)
     private readonly mailTransport?: RenewalMailTransport,
   ) {}
 
@@ -371,6 +376,9 @@ export class RenewalService {
   /**
    * Authoritative backend-owned approval transition for a renewal draft.
    * Only an authenticated Admin or the Sales owner of the customer can approve a draft.
+   * Independently verifies persisted customer outreach eligibility, template grounding
+   * and placeholder safety, and active contract policy before recording an audited
+   * human attestation.
    */
   async approveDraft(
     draftId: string,
@@ -381,6 +389,10 @@ export class RenewalService {
   > {
     const draft = await this.getDraft(draftId, actor);
     const contract = await this.getContract(draft.contractId, actor);
+    const customer = await this.assertCustomerAccess(
+      contract.customerId,
+      actor,
+    );
 
     if (contract.status !== 'ACTIVE') {
       throw new BadRequestException(
@@ -393,11 +405,83 @@ export class RenewalService {
       );
     }
 
+    // 1. Independently verify customer consent & contactability from persisted Customer record
+    const customerEmail = customer.email?.trim() ?? '';
+    const customerStatus = (customer.status ?? 'ACTIVE').toUpperCase();
+    const customerNotes = (customer.notes ?? '').toUpperCase();
+    const hasOptOutMarker =
+      ['INACTIVE', 'CHURNED', 'OPTED_OUT', 'UNSUBSCRIBED'].includes(
+        customerStatus,
+      ) ||
+      customerNotes.includes('OPT_OUT') ||
+      customerNotes.includes('DO_NOT_CONTACT');
+    if (!customerEmail || !customerEmail.includes('@') || hasOptOutMarker) {
+      throw new BadRequestException(
+        'Customer consent verification failed: customer record is opted out, inactive, or lacks a valid email address',
+      );
+    }
+
+    // 2. Independently verify template compliance & grounding from persisted RenewalDraft & Contract
+    const draftContent = draft.draftContent?.trim() ?? '';
+    const existingMeta = draft.validationResult ?? {};
+    if (existingMeta.grounded === false) {
+      throw new BadRequestException(
+        'Template verification failed: draft failed contract grounding validation',
+      );
+    }
+    if (!draftContent || draftContent.length < 10) {
+      throw new BadRequestException(
+        'Template verification failed: draftContent is missing or too short for renewal outreach',
+      );
+    }
+    if (/\{\{.*?\}\}/.test(draftContent)) {
+      throw new BadRequestException(
+        'Template verification failed: draftContent contains unresolved template placeholders',
+      );
+    }
+    if (
+      contract.contractNumber &&
+      !draftContent.includes(contract.contractNumber)
+    ) {
+      throw new BadRequestException(
+        `Template verification failed: draftContent must reference contract number ${contract.contractNumber}`,
+      );
+    }
+
+    // 3. Independently verify commercial policy from persisted Contract dates
+    if (
+      contract.startDate &&
+      contract.endDate &&
+      new Date(contract.startDate).getTime() >
+        new Date(contract.endDate).getTime()
+    ) {
+      throw new BadRequestException(
+        'Policy verification failed: contract startDate is after endDate',
+      );
+    }
+
+    const templateContentHash = createHash('sha256')
+      .update(draftContent)
+      .digest('hex');
+
     const previousStatus = draft.status;
     const approvedAt = new Date().toISOString();
+    const attestationEvidence = {
+      consentVerifiedFromCustomerId: customer.id,
+      consentVerifiedEmail: customerEmail,
+      consentCustomerStatus: customerStatus,
+      templateVerifiedContractNumber: contract.contractNumber,
+      templateContentHash,
+      policyVersion: 'wf13-v1',
+      policyContractStatus: contract.status,
+      attestedByUserId: actor.id,
+      attestedByRole: actor.role,
+      attestedAt: approvedAt,
+    };
+
     draft.status = 'APPROVED';
     draft.validationResult = {
-      ...(draft.validationResult ?? {}),
+      ...existingMeta,
       grounded: true,
       consentGranted: true,
       templateApproved: true,
@@ -405,9 +489,27 @@ export class RenewalService {
       approvedBy: actor.id,
       approvedAt,
       comment: dto.comment ?? null,
+      attestationEvidence,
     };
 
     const saved = await this.draftRepo.save(draft);
+
+    // Complete any open RENEWAL_APPROVAL task for this contract
+    if (this.customerTaskRepo?.find) {
+      const openTasks = await this.customerTaskRepo.find({
+        where: {
+          customerId: contract.customerId,
+          sourceEntityType: 'CustomerContract',
+          sourceEntityId: contract.id,
+        },
+      });
+      for (const task of openTasks) {
+        if (task.status === 'OPEN') {
+          task.status = 'COMPLETED';
+          await this.customerTaskRepo.save(task);
+        }
+      }
+    }
 
     if (this.auditLogRepo) {
       await this.auditLogRepo.save(
@@ -421,11 +523,13 @@ export class RenewalService {
             status: saved.status,
             approvedBy: actor.id,
             approvedAt,
+            attestationEvidence,
           },
           metadata: {
             contractId: contract.id,
             customerId: contract.customerId,
             comment: dto.comment ?? null,
+            templateContentHash,
           },
           ipAddress: null,
           userAgent: null,
@@ -650,20 +754,42 @@ export class RenewalService {
       draft.draftContent?.trim() ||
       `Dear ${customer.name}, your contract ${contract.contractNumber} is due for renewal.`;
 
+    if (!this.mailTransport) {
+      const errorMessage =
+        'FAIL_CLOSED: mail transport is not configured; cannot deliver renewal message';
+      draft.status = 'FAILED';
+      draft.errorCode = 'MAIL_TRANSPORT_UNAVAILABLE';
+      draft.errorMessage = errorMessage;
+      await this.draftRepo.save(draft);
+
+      return {
+        contractId: contract.id,
+        customerId: customer.id,
+        draftId: draft.id,
+        status: 'FAILED',
+        communicationId: null,
+        delivered: false,
+        idempotencyKey: dto.idempotencyKey,
+        errorMessage,
+      };
+    }
+
     let communicationId: string;
     try {
-      if (this.mailTransport) {
-        const sent = await this.mailTransport.sendMail({
-          from: process.env.SMTP_FROM_EMAIL || 'noreply@crm.example.com',
-          to: customer.email,
-          subject,
-          text: bodyText,
-        });
-        communicationId =
-          sent?.messageId || `renewal-smtp:${draft.id}:${dto.idempotencyKey}`;
-      } else {
-        communicationId = `renewal-comm:${draft.id}:${dto.idempotencyKey}`;
+      const sent = await this.mailTransport.sendMail({
+        from: process.env.SMTP_FROM_EMAIL || 'noreply@crm.example.com',
+        to: customer.email,
+        subject,
+        text: bodyText,
+      });
+      const confirmedMessageId =
+        typeof sent?.messageId === 'string' && sent.messageId.trim()
+          ? sent.messageId.trim()
+          : null;
+      if (!confirmedMessageId) {
+        throw new Error('SMTP_PROVIDER_MISSING_MESSAGE_ID');
       }
+      communicationId = confirmedMessageId;
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : 'Renewal delivery failed';

@@ -605,6 +605,8 @@ describe('RenewalService', () => {
         contractId: 'c-1',
         customerId: 'cust-1',
         status: 'DRAFT',
+        draftContent:
+          'Dear customer, your contract CTR-2026-100 is scheduled for renewal.',
         validationResult: {
           grounded: true,
           consentGranted: false,
@@ -617,12 +619,16 @@ describe('RenewalService', () => {
       contractRepo.findOne.mockResolvedValue({
         id: 'c-1',
         customerId: 'cust-1',
+        contractNumber: 'CTR-2026-100',
         status: 'ACTIVE',
       } as unknown as Contract);
       customerRepo.findOne.mockResolvedValue({
         id: 'cust-1',
+        email: 'client@acme.example.com',
+        status: 'ACTIVE',
         createdBy: 'sales-owner-1',
       } as unknown as Customer);
+      customerTaskRepo.find.mockResolvedValue([]);
 
       const approved = await service.approveDraft(
         'd-1',
@@ -643,8 +649,85 @@ describe('RenewalService', () => {
         templateApproved: true,
         policyApproved: true,
         approvedBy: 'sales-owner-1',
+        attestationEvidence: expect.objectContaining({
+          consentVerifiedFromCustomerId: 'cust-1',
+          consentVerifiedEmail: 'client@acme.example.com',
+          templateVerifiedContractNumber: 'CTR-2026-100',
+        }),
       });
       expect(auditLogRepo.save).toHaveBeenCalled();
+    });
+
+    it('12b. Rejects approveDraft when persisted customer is opted-out or draft template is ungrounded despite caller booleans', async () => {
+      const salesActor = {
+        id: 'sales-owner-1',
+        email: 'owner@example.com',
+        name: 'Sales Owner',
+        role: UserRole.SALES,
+      } as AuthenticatedUser;
+
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'DRAFT',
+        draftContent: 'Dear customer, your contract CTR-2026-100 is due.',
+        validationResult: { grounded: true },
+      } as unknown as RenewalDraft);
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-100',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+
+      // Opted-out customer record must reject approval even with consentGranted: true
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        status: 'OPTED_OUT',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+
+      await expect(
+        service.approveDraft(
+          'd-1',
+          {
+            consentGranted: true,
+            templateApproved: true,
+            policyApproved: true,
+          },
+          salesActor,
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      // Active customer, but draft content does not cite contract number -> rejects templateApproved: true
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        status: 'ACTIVE',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+      draftRepo.findOne.mockResolvedValueOnce({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'DRAFT',
+        draftContent: 'Generic renewal email without contract reference.',
+        validationResult: { grounded: true },
+      } as unknown as RenewalDraft);
+
+      await expect(
+        service.approveDraft(
+          'd-1',
+          {
+            consentGranted: true,
+            templateApproved: true,
+            policyApproved: true,
+          },
+          salesActor,
+        ),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('13. Enforces Sales actor ownership on contract and draft operations', async () => {
@@ -778,6 +861,56 @@ describe('RenewalService', () => {
       );
       expect(sent.status).toBe('SENT');
       expect(sent.communicationId).toBe('<msg-renewal-1>');
+    });
+
+    it('16. Fails closed and never synthesizes a communicationId when mailTransport is missing or returns no messageId', async () => {
+      const serviceWithoutTransport = new RenewalService(
+        contractRepo,
+        draftRepo,
+        customerRepo,
+        customerTaskRepo,
+        auditLogRepo,
+        notificationsService,
+        undefined,
+      );
+
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-777',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-approved',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'APPROVED',
+        draftContent:
+          'Dear customer, your contract CTR-2026-777 renewal proposal is ready.',
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'sales-owner-1',
+        },
+      } as unknown as RenewalDraft);
+
+      const missingTransportResult =
+        await serviceWithoutTransport.sendApprovedRenewal({
+          contractId: 'c-1',
+          customerId: 'cust-1',
+          draftId: 'd-approved',
+          idempotencyKey: 'send-no-transport-1',
+        });
+
+      expect(missingTransportResult.status).toBe('FAILED');
+      expect(missingTransportResult.delivered).toBe(false);
+      expect(missingTransportResult.communicationId).toBeNull();
     });
   });
 });
