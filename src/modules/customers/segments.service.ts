@@ -823,6 +823,7 @@ export class SegmentsService {
             WorkflowStatus.SUCCESS,
             WorkflowStatus.PARTIAL,
             WorkflowStatus.FAILED,
+            WorkflowStatus.CANCELLED,
           ].includes(workflowRun.status)
         ) {
           return {

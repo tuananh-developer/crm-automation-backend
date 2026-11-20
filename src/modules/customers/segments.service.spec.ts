@@ -953,6 +953,51 @@ describe('SegmentsService', () => {
       );
     });
 
+    it.each(['SUCCESS', 'PARTIAL', 'FAILED'] as const)(
+      'does not overwrite a CANCELLED workflow run when a late %s callback arrives',
+      async (lateCallbackStatus) => {
+        const cancelledRun = Object.assign(new WorkflowRun(), {
+          id: 'workflow-run-cancelled-1',
+          workflowName: 'WF07_CUSTOMER_SEGMENTATION',
+          inputPayload: { segmentId: 'segment-1' },
+          outputPayload: { cancellationReason: 'Cancelled by operator' },
+          status: WorkflowStatus.CANCELLED,
+          finishedAt: new Date('2026-11-19T12:00:00.000Z'),
+          errorMessage: 'Cancelled by operator',
+        });
+
+        (workflowRunRepository.findOne as jest.Mock).mockResolvedValue(
+          cancelledRun,
+        );
+
+        const result = await service.handleWorkflowCallback({
+          workflowRunId: cancelledRun.id,
+          segmentId: 'segment-1',
+          segmentName: 'Enterprise Tech',
+          status: lateCallbackStatus,
+          statistics: {
+            total: 5,
+            processed: 5,
+            matched: 2,
+            unmatched: 3,
+            matchRate: '40%',
+          },
+          aiInsights: [],
+          rejectedInsights: 0,
+          errorMessage:
+            lateCallbackStatus === 'FAILED' ? 'Late failure' : undefined,
+        });
+
+        expect(result).toEqual({
+          success: true,
+          workflowRunId: cancelledRun.id,
+          status: WorkflowStatus.CANCELLED,
+        });
+        expect(cancelledRun.status).toBe(WorkflowStatus.CANCELLED);
+        expect(workflowRunRepository.save).not.toHaveBeenCalled();
+      },
+    );
+
     it('rejects an empty run idempotency key', async () => {
       await expect(
         service.createWorkflowRun('segment-1', ' '),
