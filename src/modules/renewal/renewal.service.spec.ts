@@ -912,5 +912,146 @@ describe('RenewalService', () => {
       expect(missingTransportResult.delivered).toBe(false);
       expect(missingTransportResult.communicationId).toBeNull();
     });
+
+    it('17. Prevents duplicate renewal emails on concurrent sendApprovedRenewal calls with atomic PROCESSING claim', async () => {
+      const persistedDraft = {
+        id: 'd-concurrent-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'APPROVED',
+        draftContent:
+          'Dear customer, your contract CTR-2026-777 renewal proposal is ready.',
+        communicationId: null,
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'sales-owner-1',
+        },
+      } as unknown as RenewalDraft;
+
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-777',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+
+      draftRepo.findOne.mockImplementation(() =>
+        Promise.resolve(persistedDraft),
+      );
+      draftRepo.save.mockImplementation((updated) => {
+        Object.assign(persistedDraft, updated);
+        return Promise.resolve(persistedDraft);
+      });
+      mailTransportService.sendMail.mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return { messageId: '<msg-concurrent-once>' };
+      });
+
+      const payload = {
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-concurrent-1',
+        idempotencyKey: 'send-concurrent-key-1',
+      };
+
+      const [first, second] = await Promise.all([
+        service.sendApprovedRenewal(payload),
+        service.sendApprovedRenewal(payload),
+      ]);
+
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
+      expect(first.status).toBe('SENT');
+      expect(first.communicationId).toBe('<msg-concurrent-once>');
+      expect(['PROCESSING', 'SENT']).toContain(second.status);
+      expect(second.idempotencyStatus).toBe('replayed');
+    });
+
+    it('18. Holds delivery in PROCESSING and reconciles stale lease to UNKNOWN without resending when DB ack fails after SMTP accepts', async () => {
+      const persistedDraft = {
+        id: 'd-ack-lost-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'APPROVED',
+        draftContent:
+          'Dear customer, your contract CTR-2026-777 renewal proposal is ready.',
+        communicationId: null,
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'sales-owner-1',
+        },
+      } as unknown as RenewalDraft;
+
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-777',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+
+      draftRepo.findOne.mockImplementation(() =>
+        Promise.resolve(persistedDraft),
+      );
+
+      let saveCallCount = 0;
+      draftRepo.save.mockImplementation((updated) => {
+        saveCallCount += 1;
+        // 1st save is the pre-SMTP PROCESSING claim (succeeds)
+        // 2nd save is the post-SMTP SENT acknowledgement (simulates DB crash)
+        if (saveCallCount === 2) {
+          return Promise.reject(
+            new Error('PostgreSQL connection lost after SMTP acceptance'),
+          );
+        }
+        Object.assign(persistedDraft, updated);
+        return Promise.resolve(persistedDraft);
+      });
+
+      const payload = {
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-ack-lost-1',
+        idempotencyKey: 'send-ack-lost-key-1',
+      };
+
+      await expect(service.sendApprovedRenewal(payload)).rejects.toThrow(
+        'PostgreSQL connection lost after SMTP acceptance',
+      );
+
+      // SMTP was called once, and the durable DB state remained PROCESSING (never reverted to APPROVED)
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
+      expect(persistedDraft.status).toBe('PROCESSING');
+
+      // Immediate retry while lease is active returns PROCESSING without calling SMTP again
+      const activeLeaseRetry = await service.sendApprovedRenewal(payload);
+      expect(activeLeaseRetry.status).toBe('PROCESSING');
+      expect(activeLeaseRetry.delivered).toBe(false);
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
+
+      // Simulate lease expiration (> 2 minutes) and retry: reconciles to UNKNOWN without calling SMTP again
+      const meta = persistedDraft.validationResult as Record<string, unknown>;
+      const claim = meta.deliveryClaim as Record<string, unknown>;
+      claim.startedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+
+      const staleLeaseRetry = await service.sendApprovedRenewal(payload);
+      expect(staleLeaseRetry.status).toBe('UNKNOWN');
+      expect(staleLeaseRetry.delivered).toBe(false);
+      expect(staleLeaseRetry.errorMessage).toBe('DELIVERY_OUTCOME_UNKNOWN');
+      expect(persistedDraft.status).toBe('UNKNOWN');
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -31,6 +31,36 @@ import type {
 } from './dto/renewal.dto.js';
 
 export const RENEWAL_MAIL_TRANSPORT = 'RENEWAL_MAIL_TRANSPORT';
+const RENEWAL_PROCESSING_LEASE_MS = 2 * 60_000;
+const MAX_RENEWAL_DELIVERY_ATTEMPTS = 4;
+
+export interface RenewalDeliveryClaim {
+  idempotencyKey: string;
+  requestHash: string;
+  status:
+    | 'PROCESSING'
+    | 'SENT'
+    | 'RETRYABLE_FAILURE'
+    | 'PERMANENT_FAILURE'
+    | 'UNKNOWN';
+  attempts: number;
+  providerMessageId: string | null;
+  startedAt: string;
+  sentAt: string | null;
+  lastError: string | null;
+}
+
+export interface SendRenewalOutcome {
+  contractId: string;
+  customerId: string;
+  draftId: string;
+  status: 'SENT' | 'FAILED' | 'UNKNOWN' | 'PROCESSING';
+  communicationId: string | null;
+  delivered: boolean;
+  idempotencyKey: string;
+  errorMessage?: string | null;
+  idempotencyStatus?: 'new' | 'replayed';
+}
 
 export interface RenewalMailTransport {
   sendMail(message: {
@@ -49,6 +79,7 @@ export interface RenewalMailTransport {
 @Injectable()
 export class RenewalService {
   private readonly logger = new Logger(RenewalService.name);
+  private readonly deliveryLocks = new Map<string, Promise<void>>();
 
   constructor(
     @InjectRepository(Contract)
@@ -696,135 +727,597 @@ export class RenewalService {
 
   /**
    * Deliver an approved renewal message through the backend communication adapter.
-   * Re-verifies checkEligibility fail-closed before sending, and marks SENT only
-   * after confirmed delivery.
+   * Claims a durable PROCESSING lease on the RenewalDraft row before contacting SMTP,
+   * reconciles stale/interrupted claims to UNKNOWN so ambiguous outcomes are never
+   * automatically resent, and persists SENT only after confirmed provider delivery.
    */
-  async sendApprovedRenewal(dto: SendRenewalMessageDto): Promise<{
-    contractId: string;
-    customerId: string;
-    draftId: string;
-    status: 'SENT' | 'FAILED';
-    communicationId: string | null;
-    delivered: boolean;
-    idempotencyKey: string;
-    errorMessage?: string | null;
-  }> {
-    if (!dto.idempotencyKey?.trim()) {
+  async sendApprovedRenewal(
+    dto: SendRenewalMessageDto,
+  ): Promise<SendRenewalOutcome> {
+    const idempotencyKey = dto.idempotencyKey?.trim();
+    if (!idempotencyKey) {
       throw new BadRequestException(
         'idempotencyKey is required for renewal message delivery',
       );
     }
 
-    const eligibility = await this.checkEligibility({
-      contractId: dto.contractId,
-      customerId: dto.customerId,
-      draftId: dto.draftId,
-    });
-    if (!eligibility.canAutoSend) {
-      throw new BadRequestException(
-        `Renewal draft is not eligible for automatic delivery (${eligibility.reason})`,
-      );
+    const claimOutcome = await this.withDeliveryLock(dto.draftId, () =>
+      this.claimRenewalDelivery(dto, idempotencyKey),
+    );
+    if (claimOutcome.kind === 'result') {
+      return claimOutcome.result;
     }
 
-    const contract = await this.getContract(dto.contractId);
-    const customer = await this.customerRepo.findOne({
-      where: { id: dto.customerId },
-    });
-    if (!customer || !customer.email) {
-      throw new BadRequestException(
-        `Customer ${dto.customerId} does not have a valid delivery email address`,
-      );
-    }
+    const {
+      contract,
+      customer,
+      draftId,
+      recipientEmail,
+      subject,
+      bodyText,
+      attempts,
+    } = claimOutcome.claim;
 
-    const draft = await this.getDraft(dto.draftId);
-    if (draft.status === 'SENT' && draft.communicationId) {
-      return {
-        contractId: contract.id,
-        customerId: customer.id,
-        draftId: draft.id,
-        status: 'SENT',
-        communicationId: draft.communicationId,
-        delivered: true,
-        idempotencyKey: dto.idempotencyKey,
-      };
-    }
-
-    const subject = `Contract Renewal Proposal — ${contract.contractNumber}`;
-    const bodyText =
-      draft.draftContent?.trim() ||
-      `Dear ${customer.name}, your contract ${contract.contractNumber} is due for renewal.`;
-
-    if (!this.mailTransport) {
-      const errorMessage =
-        'FAIL_CLOSED: mail transport is not configured; cannot deliver renewal message';
-      draft.status = 'FAILED';
-      draft.errorCode = 'MAIL_TRANSPORT_UNAVAILABLE';
-      draft.errorMessage = errorMessage;
-      await this.draftRepo.save(draft);
-
-      return {
-        contractId: contract.id,
-        customerId: customer.id,
-        draftId: draft.id,
-        status: 'FAILED',
-        communicationId: null,
-        delivered: false,
-        idempotencyKey: dto.idempotencyKey,
-        errorMessage,
-      };
-    }
-
-    let communicationId: string;
+    let confirmedMessageId: string;
     try {
-      const sent = await this.mailTransport.sendMail({
+      const transport = this.mailTransport;
+      if (!transport) {
+        throw new Error('MAIL_TRANSPORT_UNAVAILABLE');
+      }
+      const sent = await transport.sendMail({
         from: process.env.SMTP_FROM_EMAIL || 'noreply@crm.example.com',
-        to: customer.email,
+        to: recipientEmail,
         subject,
         text: bodyText,
       });
-      const confirmedMessageId =
+      const msgId =
         typeof sent?.messageId === 'string' && sent.messageId.trim()
           ? sent.messageId.trim()
           : null;
-      if (!confirmedMessageId) {
+      if (!msgId) {
         throw new Error('SMTP_PROVIDER_MISSING_MESSAGE_ID');
       }
-      communicationId = confirmedMessageId;
+      confirmedMessageId = msgId;
     } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Renewal delivery failed';
-      draft.status = 'FAILED';
-      draft.errorCode = 'DELIVERY_FAILED';
-      draft.errorMessage = errorMessage;
-      await this.draftRepo.save(draft);
-
+      const classification = this.classifySmtpError(error, attempts);
+      const updated = await this.withDeliveryLock(draftId, () =>
+        this.finishRenewalDelivery(
+          draftId,
+          classification.claimStatus,
+          null,
+          classification.errorCode,
+          classification.errorMessage,
+        ),
+      );
+      const outStatus =
+        updated.status === 'UNKNOWN'
+          ? ('UNKNOWN' as const)
+          : ('FAILED' as const);
       return {
         contractId: contract.id,
         customerId: customer.id,
-        draftId: draft.id,
-        status: 'FAILED',
+        draftId,
+        status: outStatus,
         communicationId: null,
         delivered: false,
-        idempotencyKey: dto.idempotencyKey,
-        errorMessage,
+        idempotencyKey,
+        errorMessage: classification.errorMessage,
+        idempotencyStatus: claimOutcome.claim.idempotencyStatus,
       };
     }
 
-    draft.status = 'SENT';
-    draft.communicationId = communicationId;
-    draft.errorCode = null;
-    draft.errorMessage = null;
-    await this.draftRepo.save(draft);
+    // Keep database acknowledgement outside the SMTP try/catch.
+    // If SMTP accepted the email but PostgreSQL fails to persist the acknowledgement,
+    // the row stays in PROCESSING (never reverted to APPROVED) and transitions to UNKNOWN
+    // on stale-lease reconciliation rather than resending a duplicate email.
+    const completed = await this.withDeliveryLock(draftId, () =>
+      this.finishRenewalDelivery(
+        draftId,
+        'SENT',
+        confirmedMessageId,
+        null,
+        null,
+      ),
+    );
+
+    if (completed.status !== 'SENT') {
+      return {
+        contractId: contract.id,
+        customerId: customer.id,
+        draftId,
+        status: 'UNKNOWN',
+        communicationId: completed.communicationId,
+        delivered: false,
+        idempotencyKey,
+        errorMessage: 'DELIVERY_OUTCOME_UNKNOWN',
+        idempotencyStatus: claimOutcome.claim.idempotencyStatus,
+      };
+    }
 
     return {
       contractId: contract.id,
       customerId: customer.id,
-      draftId: draft.id,
+      draftId,
       status: 'SENT',
-      communicationId,
+      communicationId: confirmedMessageId,
       delivered: true,
-      idempotencyKey: dto.idempotencyKey,
+      idempotencyKey,
+      idempotencyStatus: claimOutcome.claim.idempotencyStatus,
     };
+  }
+
+  private async claimRenewalDelivery(
+    dto: SendRenewalMessageDto,
+    idempotencyKey: string,
+  ): Promise<
+    | { kind: 'result'; result: SendRenewalOutcome }
+    | {
+        kind: 'send';
+        claim: {
+          contract: Contract;
+          customer: Customer;
+          draftId: string;
+          recipientEmail: string;
+          subject: string;
+          bodyText: string;
+          attempts: number;
+          idempotencyStatus: 'new' | 'replayed';
+        };
+      }
+  > {
+    return this.runInDraftTransaction(async (draftRepo) => {
+      const contract = await this.contractRepo.findOne({
+        where: { id: dto.contractId },
+      });
+      if (!contract || contract.customerId !== dto.customerId) {
+        throw new BadRequestException(
+          'Renewal draft is not eligible for automatic delivery (FAIL_CLOSED: contract not found)',
+        );
+      }
+
+      const draft = await draftRepo.findOne({
+        where: { id: dto.draftId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!draft || draft.contractId !== contract.id) {
+        throw new BadRequestException(
+          'Renewal draft is not eligible for automatic delivery (FAIL_CLOSED: draft not found)',
+        );
+      }
+
+      const customer = await this.customerRepo.findOne({
+        where: { id: dto.customerId },
+      });
+      if (!customer || !customer.email) {
+        throw new BadRequestException(
+          `Customer ${dto.customerId} does not have a valid delivery email address`,
+        );
+      }
+
+      const subject = `Contract Renewal Proposal — ${contract.contractNumber}`;
+      const bodyText =
+        draft.draftContent?.trim() ||
+        `Dear ${customer.name}, your contract ${contract.contractNumber} is due for renewal.`;
+      const requestHash = createHash('sha256')
+        .update(
+          JSON.stringify({
+            contractId: contract.id,
+            customerId: customer.id,
+            draftId: draft.id,
+            recipient: customer.email.trim().toLowerCase(),
+            subject,
+            bodyText,
+          }),
+        )
+        .digest('hex');
+
+      const meta = draft.validationResult ?? {};
+      const existingClaim = meta.deliveryClaim as
+        RenewalDeliveryClaim | undefined;
+
+      if (existingClaim) {
+        if (
+          existingClaim.idempotencyKey !== idempotencyKey ||
+          existingClaim.requestHash !== requestHash
+        ) {
+          throw new ConflictException(
+            'Renewal delivery payload or idempotencyKey changed after delivery was claimed',
+          );
+        }
+
+        if (draft.status === 'SENT' || existingClaim.status === 'SENT') {
+          return {
+            kind: 'result',
+            result: {
+              contractId: contract.id,
+              customerId: customer.id,
+              draftId: draft.id,
+              status: 'SENT',
+              communicationId:
+                draft.communicationId ?? existingClaim.providerMessageId,
+              delivered: true,
+              idempotencyKey,
+              idempotencyStatus: 'replayed',
+            },
+          };
+        }
+
+        if (draft.status === 'UNKNOWN' || existingClaim.status === 'UNKNOWN') {
+          return {
+            kind: 'result',
+            result: {
+              contractId: contract.id,
+              customerId: customer.id,
+              draftId: draft.id,
+              status: 'UNKNOWN',
+              communicationId: null,
+              delivered: false,
+              idempotencyKey,
+              errorMessage:
+                draft.errorMessage ??
+                existingClaim.lastError ??
+                'DELIVERY_OUTCOME_UNKNOWN',
+              idempotencyStatus: 'replayed',
+            },
+          };
+        }
+
+        if (existingClaim.status === 'PERMANENT_FAILURE') {
+          return {
+            kind: 'result',
+            result: {
+              contractId: contract.id,
+              customerId: customer.id,
+              draftId: draft.id,
+              status: 'FAILED',
+              communicationId: null,
+              delivered: false,
+              idempotencyKey,
+              errorMessage:
+                draft.errorMessage ??
+                existingClaim.lastError ??
+                'DELIVERY_PERMANENT_FAILURE',
+              idempotencyStatus: 'replayed',
+            },
+          };
+        }
+
+        if (
+          draft.status === 'PROCESSING' ||
+          existingClaim.status === 'PROCESSING'
+        ) {
+          const startedAtMs = Date.parse(existingClaim.startedAt);
+          const isStale =
+            Number.isFinite(startedAtMs) &&
+            Date.now() - startedAtMs > RENEWAL_PROCESSING_LEASE_MS;
+          if (isStale) {
+            const unknownClaim: RenewalDeliveryClaim = {
+              ...existingClaim,
+              status: 'UNKNOWN',
+              lastError: 'DELIVERY_OUTCOME_UNKNOWN',
+            };
+            draft.status = 'UNKNOWN';
+            draft.errorCode = 'DELIVERY_OUTCOME_UNKNOWN';
+            draft.errorMessage = 'DELIVERY_OUTCOME_UNKNOWN';
+            draft.validationResult = {
+              ...meta,
+              deliveryClaim: unknownClaim,
+            };
+            await draftRepo.save(draft);
+
+            return {
+              kind: 'result',
+              result: {
+                contractId: contract.id,
+                customerId: customer.id,
+                draftId: draft.id,
+                status: 'UNKNOWN',
+                communicationId: null,
+                delivered: false,
+                idempotencyKey,
+                errorMessage: 'DELIVERY_OUTCOME_UNKNOWN',
+                idempotencyStatus: 'replayed',
+              },
+            };
+          }
+
+          return {
+            kind: 'result',
+            result: {
+              contractId: contract.id,
+              customerId: customer.id,
+              draftId: draft.id,
+              status: 'PROCESSING',
+              communicationId: null,
+              delivered: false,
+              idempotencyKey,
+              errorMessage: 'DELIVERY_ALREADY_PROCESSING',
+              idempotencyStatus: 'replayed',
+            },
+          };
+        }
+      }
+
+      if (draft.status === 'SENT' && draft.communicationId) {
+        return {
+          kind: 'result',
+          result: {
+            contractId: contract.id,
+            customerId: customer.id,
+            draftId: draft.id,
+            status: 'SENT',
+            communicationId: draft.communicationId,
+            delivered: true,
+            idempotencyKey,
+            idempotencyStatus: 'replayed',
+          },
+        };
+      }
+
+      const eligibility = this.evaluateDraftEligibilityFromRecords(
+        contract,
+        draft,
+      );
+      if (!eligibility.canAutoSend) {
+        throw new BadRequestException(
+          `Renewal draft is not eligible for automatic delivery (${eligibility.reason})`,
+        );
+      }
+
+      if (!this.mailTransport) {
+        const errorMessage =
+          'FAIL_CLOSED: mail transport is not configured; cannot deliver renewal message';
+        const failedClaim: RenewalDeliveryClaim = {
+          idempotencyKey,
+          requestHash,
+          status: 'PERMANENT_FAILURE',
+          attempts: (existingClaim?.attempts ?? 0) + 1,
+          providerMessageId: null,
+          startedAt: new Date().toISOString(),
+          sentAt: null,
+          lastError: errorMessage,
+        };
+        draft.status = 'FAILED';
+        draft.errorCode = 'MAIL_TRANSPORT_UNAVAILABLE';
+        draft.errorMessage = errorMessage;
+        draft.validationResult = {
+          ...meta,
+          deliveryClaim: failedClaim,
+        };
+        await draftRepo.save(draft);
+
+        return {
+          kind: 'result',
+          result: {
+            contractId: contract.id,
+            customerId: customer.id,
+            draftId: draft.id,
+            status: 'FAILED',
+            communicationId: null,
+            delivered: false,
+            idempotencyKey,
+            errorMessage,
+          },
+        };
+      }
+
+      const attempts = (existingClaim?.attempts ?? 0) + 1;
+      if (attempts > MAX_RENEWAL_DELIVERY_ATTEMPTS) {
+        const exhaustedClaim: RenewalDeliveryClaim = {
+          idempotencyKey,
+          requestHash,
+          status: 'PERMANENT_FAILURE',
+          attempts: existingClaim?.attempts ?? MAX_RENEWAL_DELIVERY_ATTEMPTS,
+          providerMessageId: null,
+          startedAt: existingClaim?.startedAt ?? new Date().toISOString(),
+          sentAt: null,
+          lastError: 'DELIVERY_ATTEMPTS_EXHAUSTED',
+        };
+        draft.status = 'FAILED';
+        draft.errorCode = 'DELIVERY_ATTEMPTS_EXHAUSTED';
+        draft.errorMessage = 'DELIVERY_ATTEMPTS_EXHAUSTED';
+        draft.validationResult = {
+          ...meta,
+          deliveryClaim: exhaustedClaim,
+        };
+        await draftRepo.save(draft);
+
+        return {
+          kind: 'result',
+          result: {
+            contractId: contract.id,
+            customerId: customer.id,
+            draftId: draft.id,
+            status: 'FAILED',
+            communicationId: null,
+            delivered: false,
+            idempotencyKey,
+            errorMessage: 'DELIVERY_ATTEMPTS_EXHAUSTED',
+            idempotencyStatus: 'replayed',
+          },
+        };
+      }
+
+      const activeClaim: RenewalDeliveryClaim = {
+        idempotencyKey,
+        requestHash,
+        status: 'PROCESSING',
+        attempts,
+        providerMessageId: null,
+        startedAt: new Date().toISOString(),
+        sentAt: null,
+        lastError: null,
+      };
+      draft.status = 'PROCESSING';
+      draft.errorCode = null;
+      draft.errorMessage = null;
+      draft.validationResult = {
+        ...meta,
+        deliveryClaim: activeClaim,
+      };
+      await draftRepo.save(draft);
+
+      return {
+        kind: 'send',
+        claim: {
+          contract,
+          customer,
+          draftId: draft.id,
+          recipientEmail: customer.email.trim(),
+          subject,
+          bodyText,
+          attempts,
+          idempotencyStatus: existingClaim ? 'replayed' : 'new',
+        },
+      };
+    });
+  }
+
+  private async finishRenewalDelivery(
+    draftId: string,
+    claimStatus: 'SENT' | 'RETRYABLE_FAILURE' | 'PERMANENT_FAILURE' | 'UNKNOWN',
+    providerMessageId: string | null,
+    errorCode: string | null,
+    errorMessage: string | null,
+  ): Promise<RenewalDraft> {
+    return this.runInDraftTransaction(async (draftRepo) => {
+      const draft = await draftRepo.findOne({
+        where: { id: draftId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!draft) {
+        throw new NotFoundException(
+          `Renewal draft with ID ${draftId} not found`,
+        );
+      }
+
+      const meta = draft.validationResult ?? {};
+      const existingClaim = meta.deliveryClaim as
+        RenewalDeliveryClaim | undefined;
+
+      // Never overwrite a stale claim that has already been moved to UNKNOWN
+      if (
+        draft.status === 'UNKNOWN' ||
+        (existingClaim && existingClaim.status !== 'PROCESSING')
+      ) {
+        return draft;
+      }
+
+      const updatedClaim: RenewalDeliveryClaim | undefined = existingClaim
+        ? {
+            ...existingClaim,
+            status: claimStatus,
+            providerMessageId,
+            sentAt: claimStatus === 'SENT' ? new Date().toISOString() : null,
+            lastError: errorMessage,
+          }
+        : undefined;
+
+      const nextStatus =
+        claimStatus === 'SENT'
+          ? 'SENT'
+          : claimStatus === 'UNKNOWN'
+            ? 'UNKNOWN'
+            : 'FAILED';
+      const updatedDraft = Object.assign(new RenewalDraft(), draft, {
+        status: nextStatus,
+        communicationId: providerMessageId,
+        errorCode,
+        errorMessage,
+        validationResult: updatedClaim
+          ? {
+              ...meta,
+              deliveryClaim: updatedClaim,
+            }
+          : draft.validationResult,
+      });
+      return draftRepo.save(updatedDraft);
+    });
+  }
+
+  private classifySmtpError(
+    error: unknown,
+    attempts: number,
+  ): {
+    claimStatus: 'RETRYABLE_FAILURE' | 'PERMANENT_FAILURE' | 'UNKNOWN';
+    errorCode: string;
+    errorMessage: string;
+  } {
+    const candidate =
+      typeof error === 'object' && error !== null
+        ? (error as {
+            code?: unknown;
+            responseCode?: unknown;
+            message?: unknown;
+          })
+        : {};
+    const code = typeof candidate.code === 'string' ? candidate.code : '';
+    const responseCode =
+      typeof candidate.responseCode === 'number'
+        ? candidate.responseCode
+        : null;
+    const errorMessage =
+      error instanceof Error ? error.message : 'Renewal delivery failed';
+
+    if (['ETIMEDOUT', 'ECONNRESET', 'EPIPE', 'ESOCKET'].includes(code)) {
+      return {
+        claimStatus: 'UNKNOWN',
+        errorCode: `SMTP_OUTCOME_UNKNOWN_${code}`,
+        errorMessage: `DELIVERY_OUTCOME_UNKNOWN (${code})`,
+      };
+    }
+
+    const isRetryable =
+      ['ECONNREFUSED', 'ENOTFOUND'].includes(code) ||
+      (responseCode !== null && responseCode >= 400 && responseCode < 500);
+
+    if (isRetryable && attempts < MAX_RENEWAL_DELIVERY_ATTEMPTS) {
+      return {
+        claimStatus: 'RETRYABLE_FAILURE',
+        errorCode: code || `SMTP_${responseCode}`,
+        errorMessage,
+      };
+    }
+
+    return {
+      claimStatus: 'PERMANENT_FAILURE',
+      errorCode: code || 'DELIVERY_FAILED',
+      errorMessage,
+    };
+  }
+
+  private async runInDraftTransaction<T>(
+    work: (draftRepo: Repository<RenewalDraft>) => Promise<T>,
+  ): Promise<T> {
+    if (this.draftRepo.manager?.transaction) {
+      return this.draftRepo.manager.transaction(async (manager) =>
+        work(manager.getRepository(RenewalDraft)),
+      );
+    }
+    return work(this.draftRepo);
+  }
+
+  private async withDeliveryLock<T>(
+    draftId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.deliveryLocks.get(draftId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const chained = previous.then(() => current);
+    this.deliveryLocks.set(draftId, chained);
+
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.deliveryLocks.get(draftId) === chained) {
+        this.deliveryLocks.delete(draftId);
+      }
+    }
   }
 
   /**
