@@ -14,6 +14,7 @@ import { AddT12WorkflowDomains1793476800000 } from './database/migrations/179347
 import { AddCustomerChurnAndTasks1794300000000 } from './database/migrations/1794300000000-AddCustomerChurnAndTasks.js';
 import { AddAccountHealthSnapshot1800000000000 } from './database/migrations/1800000000000-AddAccountHealthSnapshot.js';
 import { AddCustomerIsStrategic1801000000000 } from './database/migrations/1801000000000-AddCustomerIsStrategic.js';
+import { AddRenewalTables1810000000000 } from './database/migrations/1810000000000-AddRenewalTables.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const useLocalDb = process.env.USE_LOCAL_DB === 'true';
@@ -74,6 +75,7 @@ export const AppDataSource = new DataSource({
     AddCustomerChurnAndTasks1794300000000,
     AddAccountHealthSnapshot1800000000000,
     AddCustomerIsStrategic1801000000000,
+    AddRenewalTables1810000000000,
   ],
   migrationsTableName: 'typeorm_migrations',
 });
