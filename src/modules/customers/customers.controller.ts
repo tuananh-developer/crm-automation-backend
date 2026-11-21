@@ -23,6 +23,7 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
 
 @ApiTags('Customers')
 @Controller('customers')
@@ -92,5 +93,14 @@ export class CustomersController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<CustomerResponseDto> {
     return this.customersService.findOne(id, actor);
+  }
+
+  @Get(':customerId/churn-assessments')
+  @ApiOperation({ summary: 'Get customer churn assessment history' })
+  findChurnAssessments(
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<CustomerChurnAssessment[]> {
+    return this.customersService.findChurnAssessments(customerId, actor);
   }
 }

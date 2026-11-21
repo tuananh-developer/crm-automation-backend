@@ -19,6 +19,11 @@ import { CustomersController } from './customers.controller.js';
 import { AccountHealthService } from './account-health.service.js';
 import { AccountHealthController } from './account-health.controller.js';
 import { AccountHealthSnapshot } from './entities/account-health-snapshot.entity.js';
+import {
+  InternalChurnController,
+  InternalCustomerTasksController,
+} from './internal-churn.controller.js';
+import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { InternalSegmentsWorkflowController } from './internal-segments-workflow.controller.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
@@ -39,6 +44,7 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
       User,
       WorkflowRun,
       AccountHealthSnapshot,
+      CustomerChurnAssessment,
     ]),
     AuthModule,
   ],
@@ -46,6 +52,8 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
     AccountHealthController,
     SegmentsController,
     CustomersController,
+    InternalChurnController,
+    InternalCustomerTasksController,
     InternalSegmentsWorkflowController,
   ],
   providers: [
