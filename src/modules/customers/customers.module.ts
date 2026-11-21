@@ -11,6 +11,11 @@ import { SegmentsService } from './segments.service.js';
 import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
 import { CustomersController } from './customers.controller.js';
+import {
+  InternalChurnController,
+  InternalCustomerTasksController,
+} from './internal-churn.controller.js';
+import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { InternalSegmentsWorkflowController } from './internal-segments-workflow.controller.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
@@ -25,12 +30,15 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
       LeadScore,
       User,
       WorkflowRun,
+      CustomerChurnAssessment,
     ]),
     AuthModule,
   ],
   controllers: [
     SegmentsController,
     CustomersController,
+    InternalChurnController,
+    InternalCustomerTasksController,
     InternalSegmentsWorkflowController,
   ],
   providers: [SegmentsService, CustomersService, N8nAuthGuard],

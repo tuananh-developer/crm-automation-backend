@@ -11,6 +11,7 @@ import { AddOutboxHttpDispatch1793477000000 } from './database/migrations/179347
 import { AddWorkflowExecutionClaimLease1793477100000 } from './database/migrations/1793477100000-AddWorkflowExecutionClaimLease.js';
 import { CreateCommunicationDeliveries1793477200000 } from './database/migrations/1793477200000-CreateCommunicationDeliveries.js';
 import { AddT12WorkflowDomains1793476800000 } from './database/migrations/1793476800000-AddT12WorkflowDomains.js';
+import { AddCustomerChurnAndTasks1794300000000 } from './database/migrations/1794300000000-AddCustomerChurnAndTasks.js';
 import { AddRenewalTables1810000000000 } from './database/migrations/1810000000000-AddRenewalTables.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -69,6 +70,7 @@ export const AppDataSource = new DataSource({
     AddOutboxHttpDispatch1793477000000,
     AddWorkflowExecutionClaimLease1793477100000,
     CreateCommunicationDeliveries1793477200000,
+    AddCustomerChurnAndTasks1794300000000,
     AddRenewalTables1810000000000,
   ],
   migrationsTableName: 'typeorm_migrations',

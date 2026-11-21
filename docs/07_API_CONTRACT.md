@@ -105,8 +105,11 @@ CustomerTask supports retention tasks from WF06, feedback escalation from WF14 a
 | `GET/PATCH /api/v1/customers/:customerId`                                               | Customer detail/update.                                                                                  |
 | `GET /api/v1/customers/:customerId/360`                                                 | Aggregated CRM 360 and source-coverage response.                                                         |
 | `GET /api/v1/customers/:customerId/issues`; `POST /api/v1/customers/:customerId/issues` | List/create customer issues.                                                                             |
-| `GET /api/v1/customers/:customerId/churn-assessments`                                   | Churn assessment history.                                                                                |
-| `POST /api/v1/customers/:customerId/churn-assessments`                                  | Request/run an assessment through the supported policy.                                                  |
+| `GET /api/v1/customers/:customerId/churn-assessments`                                   | JWT actor-scoped churn assessment history.                                                               |
+| `GET /api/v1/internal/n8n/customers`                                                    | N8N-authenticated bounded customer cohort for WF06; does not claim an unsupported active-customer filter. |
+| `GET /api/v1/internal/n8n/customers/:customerId/churn-context`                         | N8N-authenticated sourced interaction/follow-up signals and explicit unavailable-source coverage.         |
+| `POST /api/v1/internal/n8n/customers/:customerId/churn-assessments`                    | N8N-authenticated backend validation/persistence; insufficient evidence yields `INSUFFICIENT_DATA`.      |
+| `GET/POST /api/v1/internal/n8n/customer-tasks`                                          | N8N-authenticated, idempotent retention task list/create.                                                 |
 | `GET /api/v1/customers/:customerId/health-assessments`                                  | Health history.                                                                                          |
 | `POST /api/v1/customers/:customerId/health-assessments`                                 | Request/run health assessment.                                                                           |
 | `PATCH /api/v1/customers/:customerId/strategic-status`                                  | Admin/Sales-authorized explicit v1 strategic flag; persist marker identity.                              |

@@ -1053,5 +1053,74 @@ describe('RenewalService', () => {
       expect(persistedDraft.status).toBe('UNKNOWN');
       expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
     });
+
+    it('19. Preserves retryability after a transient SMTP failure (RETRYABLE_FAILURE) and succeeds on subsequent retry', async () => {
+      const persistedDraft = {
+        id: 'd-transient-retry-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'APPROVED',
+        draftContent:
+          'Dear customer, your contract CTR-2026-777 renewal proposal is ready.',
+        communicationId: null,
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'sales-owner-1',
+        },
+      } as unknown as RenewalDraft;
+
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-777',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+
+      draftRepo.findOne.mockImplementation(() =>
+        Promise.resolve(persistedDraft),
+      );
+      draftRepo.save.mockImplementation((updated) => {
+        Object.assign(persistedDraft, updated);
+        return Promise.resolve(persistedDraft);
+      });
+
+      mailTransportService.sendMail
+        .mockRejectedValueOnce(
+          Object.assign(new Error('Temporary SMTP connection refused'), {
+            code: 'ECONNREFUSED',
+          }),
+        )
+        .mockResolvedValueOnce({ messageId: '<msg-retry-recovered-1>' });
+
+      const payload = {
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-transient-retry-1',
+        idempotencyKey: 'send-transient-retry-key-1',
+      };
+
+      // 1st attempt fails transiently with ECONNREFUSED -> recorded as RETRYABLE_FAILURE
+      const firstAttempt = await service.sendApprovedRenewal(payload);
+      expect(firstAttempt.status).toBe('FAILED');
+      expect(firstAttempt.delivered).toBe(false);
+      expect(persistedDraft.status).toBe('RETRYABLE_FAILURE');
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
+
+      // 2nd attempt (retry with same idempotencyKey) resumes the approved draft and succeeds
+      const secondAttempt = await service.sendApprovedRenewal(payload);
+      expect(secondAttempt.status).toBe('SENT');
+      expect(secondAttempt.delivered).toBe(true);
+      expect(secondAttempt.communicationId).toBe('<msg-retry-recovered-1>');
+      expect(secondAttempt.idempotencyStatus).toBe('replayed');
+      expect(persistedDraft.status).toBe('SENT');
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(2);
+    });
   });
 });

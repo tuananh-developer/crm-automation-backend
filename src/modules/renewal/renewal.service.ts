@@ -1218,7 +1218,9 @@ export class RenewalService {
           ? 'SENT'
           : claimStatus === 'UNKNOWN'
             ? 'UNKNOWN'
-            : 'FAILED';
+            : claimStatus === 'RETRYABLE_FAILURE'
+              ? 'RETRYABLE_FAILURE'
+              : 'FAILED';
       const updatedDraft = Object.assign(new RenewalDraft(), draft, {
         status: nextStatus,
         communicationId: providerMessageId,
@@ -1370,14 +1372,22 @@ export class RenewalService {
     }
 
     const meta = (draft.validationResult as Record<string, unknown>) ?? {};
+    const existingClaim = meta.deliveryClaim as
+      RenewalDeliveryClaim | undefined;
     const backendConsent = meta.consentGranted === true;
     const backendTemplate = meta.templateApproved === true;
     const backendPolicy = meta.policyApproved === true;
     const hasApprover =
       typeof meta.approvedBy === 'string' && meta.approvedBy.trim().length > 0;
+    const isResumableRetry =
+      draft.status === 'RETRYABLE_FAILURE' ||
+      (draft.status === 'FAILED' &&
+        existingClaim?.status === 'RETRYABLE_FAILURE');
     const backendApproval =
       hasApprover &&
-      (draft.status === 'APPROVED' || draft.status === undefined);
+      (draft.status === 'APPROVED' ||
+        draft.status === undefined ||
+        isResumableRetry);
 
     if (!backendConsent) {
       return {
