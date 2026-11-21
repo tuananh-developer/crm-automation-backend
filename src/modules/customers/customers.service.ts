@@ -53,6 +53,19 @@ export class CustomersService {
     query: QueryCustomerDto,
     actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
+    return this.queryCustomers(query, actor);
+  }
+
+  async findAllInternal(
+    query: QueryCustomerDto,
+  ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
+    return this.queryCustomers(query);
+  }
+
+  private async queryCustomers(
+    query: QueryCustomerDto,
+    actor?: AuthenticatedUser,
+  ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
@@ -72,7 +85,12 @@ export class CustomersService {
     if (query.status) {
       qb.andWhere('customer.status = :status', { status: query.status });
     }
-    if (actor.role === UserRole.SALES) {
+    if (query.isStrategic !== undefined) {
+      qb.andWhere('customer.isStrategic = :isStrategic', {
+        isStrategic: query.isStrategic,
+      });
+    }
+    if (actor?.role === UserRole.SALES) {
       qb.andWhere('customer.createdBy = :actorId', { actorId: actor.id });
     }
 

@@ -134,12 +134,14 @@ export class SequencesController {
     @Query('leadId') leadId?: string,
     @Query('sequenceId') sequenceId?: string,
     @Query('status') status?: EnrollmentStatus,
+    @Query('customerId') customerId?: string,
   ): Promise<LeadFollowUpEnrollmentResponseDto[]> {
     return this.sequencesService.findAllEnrollments(
       {
         leadId,
         sequenceId,
         status,
+        customerId,
       },
       actor,
     );

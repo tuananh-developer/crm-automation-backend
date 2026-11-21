@@ -37,12 +37,32 @@ export class CustomersController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiQuery({ name: 'isStrategic', required: false, type: Boolean })
   @ApiPaginatedResponse(CustomerResponseDto)
   findAll(
     @Query() query: QueryCustomerDto,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     return this.customersService.findAll(query, actor);
+  }
+
+  @Get('internal')
+  @Public()
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary:
+      'Internal service list of customers for n8n workflows (supports isStrategic filter)',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiQuery({ name: 'isStrategic', required: false, type: Boolean })
+  @ApiPaginatedResponse(CustomerResponseDto)
+  findAllInternal(
+    @Query() query: QueryCustomerDto,
+  ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
+    return this.customersService.findAllInternal(query);
   }
 
   @Get(':id/internal')

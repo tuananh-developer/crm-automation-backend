@@ -12,6 +12,8 @@ import { AddWorkflowExecutionClaimLease1793477100000 } from './database/migratio
 import { CreateCommunicationDeliveries1793477200000 } from './database/migrations/1793477200000-CreateCommunicationDeliveries.js';
 import { AddT12WorkflowDomains1793476800000 } from './database/migrations/1793476800000-AddT12WorkflowDomains.js';
 import { AddCustomerChurnAndTasks1794300000000 } from './database/migrations/1794300000000-AddCustomerChurnAndTasks.js';
+import { AddAccountHealthSnapshot1800000000000 } from './database/migrations/1800000000000-AddAccountHealthSnapshot.js';
+import { AddCustomerIsStrategic1801000000000 } from './database/migrations/1801000000000-AddCustomerIsStrategic.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const useLocalDb = process.env.USE_LOCAL_DB === 'true';
@@ -70,6 +72,8 @@ export const AppDataSource = new DataSource({
     AddWorkflowExecutionClaimLease1793477100000,
     CreateCommunicationDeliveries1793477200000,
     AddCustomerChurnAndTasks1794300000000,
+    AddAccountHealthSnapshot1800000000000,
+    AddCustomerIsStrategic1801000000000,
   ],
   migrationsTableName: 'typeorm_migrations',
 });
