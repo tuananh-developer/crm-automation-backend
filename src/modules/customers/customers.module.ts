@@ -27,6 +27,8 @@ import { CustomerChurnAssessment } from './entities/customer-churn-assessment.en
 import { AuthModule } from '../auth/auth.module.js';
 import { InternalSegmentsWorkflowController } from './internal-segments-workflow.controller.js';
 import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { JwtOrN8nAuthGuard } from './guards/jwt-or-n8n-auth.guard.js';
 
 @Module({
   imports: [
@@ -61,6 +63,8 @@ import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
     CustomersService,
     AccountHealthService,
     N8nAuthGuard,
+    JwtAuthGuard,
+    JwtOrN8nAuthGuard,
   ],
   exports: [
     TypeOrmModule,

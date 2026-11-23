@@ -128,7 +128,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const segment = $('3. Split Segments').item.json;\nconst cohortResponse = $json;\nconst cohort = Array.isArray(cohortResponse.data) ? cohortResponse.data : [];\nconst segmentId = segment.id;\nif (!segmentId || !segment.criteria) {\n  throw new Error('Segment ID or criteria is missing');\n}\nconst baseUrl = $env.CRM_API_BASE_URL;\nconst apiKey = $env.N8N_API_KEY;\nconst executionId = String($execution.id || '');\nif (!baseUrl || !apiKey || !executionId) {\n  throw new Error('CRM_API_BASE_URL, N8N_API_KEY, and execution ID are required');\n}\nconst resp = await this.helpers.httpRequest({\n  method: 'POST',\n  url: baseUrl.replace(/\\/$/, '') + '/internal/n8n/segments/' + segmentId + '/workflow-runs',\n  headers: { 'X-N8N-API-KEY': apiKey, 'Idempotency-Key': executionId + ':' + segmentId, 'Content-Type': 'application/json' },\n  body: {},\n  json: true\n});\nif (!resp.workflowRunId) {\n  throw new Error('Backend did not return a workflowRunId');\n}\nreturn {\n  json: {\n    segmentId,\n    segmentName: segment.name,\n    criteria: segment.criteria,\n    isActive: segment.isActive,\n    cohortSize: cohort.length,\n    workflowRunId: resp.workflowRunId,\n    validatedAt: new Date().toISOString()\n  }\n};"
+        "jsCode": "const segment = $('3. Split Segments').item.json;\nconst cohortResponse = $json;\nconst cohort = Array.isArray(cohortResponse.data) ? cohortResponse.data : [];\nconst segmentId = segment.id;\nif (!segmentId || !segment.criteria) {\n  throw new Error('Segment ID or criteria is missing');\n}\nconst baseUrl = $env.CRM_API_BASE_URL;\nconst apiKey = $env.N8N_API_KEY;\nconst executionId = String($execution.id || '');\nif (!baseUrl || !apiKey || !executionId) {\n  throw new Error('CRM_API_BASE_URL, N8N_API_KEY, and execution ID are required');\n}\nconst url = baseUrl.replace(/\\/$/, '') + '/internal/n8n/segments/' + segmentId + '/workflow-runs';\nconst headers = { 'X-N8N-API-KEY': apiKey, 'Idempotency-Key': executionId + ':' + segmentId, 'Content-Type': 'application/json' };\nlet resp;\nif (this.helpers && typeof this.helpers.httpRequest === 'function') {\n  resp = await this.helpers.httpRequest({ method: 'POST', url, headers, body: {}, json: true });\n} else {\n  const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify({}) });\n  resp = await r.json();\n}\nif (!resp || !resp.workflowRunId) {\n  throw new Error('Backend did not return a workflowRunId');\n}\nreturn {\n  json: {\n    segmentId,\n    segmentName: segment.name,\n    ownerId: segment.createdBy || (segment.creator && segment.creator.id) || null,\n    executionId,\n    criteria: segment.criteria,\n    isActive: segment.isActive,\n    cohortSize: cohort.length,\n    workflowRunId: resp.workflowRunId,\n    validatedAt: new Date().toISOString()\n  }\n};"
       },
       "id": "node-5-validate",
       "name": "5. Validate Evaluation Request",
@@ -288,111 +288,40 @@
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "anomaly-check",
-              "leftValue": "={{ $('8. Normalize Statistics').first().json.matched }}",
-              "rightValue": "0",
-              "operator": {
-                "type": "number",
-                "operation": "equals"
-              }
-            }
-          ],
-          "combinator": "and"
+        "method": "POST",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000').replace(/\\/+$/, '') + '/api/v1/notifications/internal/create' }}",
+        "options": {
+          "timeout": 15000
         },
-        "options": {}
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ userId: $('5. Validate Evaluation Request').first().json.ownerId, type: $('8. Normalize Statistics').first().json.matched === 0 ? 'ANOMALY_ALERT' : 'SEGMENT_EVALUATION', title: $('8. Normalize Statistics').first().json.matched === 0 ? 'Segment evaluation anomaly detected' : 'Segment evaluation completed', content: 'Segment ' + $('5. Validate Evaluation Request').first().json.segmentName + ' matched ' + $('8. Normalize Statistics').first().json.matched + ' out of ' + $('8. Normalize Statistics').first().json.total + ' evaluated customers.', idempotencyKey: $('5. Validate Evaluation Request').first().json.executionId + ':' + $('5. Validate Evaluation Request').first().json.segmentId + ':notification' }) }}"
       },
       "id": "node-12-anomaly-check",
       "name": "12. Notify Backend on Anomaly",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         2670,
         300
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/notifications/internal/create\" }}",
-        "options": {
-          "timeout": 15000
-        },
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Accept",
-              "value": "application/json"
-            },
-            {
-              "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY }}"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ { userId: $node[\"5. Validate Evaluation Request\"].json.ownerId || \"00000000-0000-0000-0000-000000000000\", type: \"ANOMALY_ALERT\", title: \"Segment evaluation anomaly detected\", content: \"Segment \" + $node[\"2. Get Active Segments\"].json[0].name + \" produced \" + $node[\"8. Normalize Statistics\"].json.matched + \" anomalies out of \" + $node[\"8. Normalize Statistics\"].json.total + \" evaluated customers.\", idempotencyKey: $node[\"5. Validate Evaluation Request\"].json.executionId + \":\" + $node[\"2. Get Active Segments\"].json[0].id + \":anomaly-notification\" } }}"
-      },
-      "id": "node-13-anomaly-notification",
-      "name": "13. Create Anomaly Notification",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [
-        2900,
-        300
       ],
+      "onError": "continueRegularOutput",
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 5000,
-      "notes": "Canonical route: /api/v1/notifications/internal/create. Protected by N8nAuthGuard; backend validates userId/type and applies idempotency.",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || $env.CRM_API_BASE_URL || \"http://localhost:3000\") + \"/api/v1/notifications/internal/create\" }}",
-        "options": {
-          "timeout": 15000
-        },
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Accept",
-              "value": "application/json"
-            },
-            {
-              "name": "X-N8N-API-KEY",
-              "value": "={{ $env.N8N_API_KEY }}"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ { userId: $node[\"5. Validate Evaluation Request\"].json.ownerId || \"00000000-0000-0000-0000-000000000000\", type: \"ANOMALY_ALERT\", title: \"WF07 segment evaluation failed\", content: \"Segment \" + $node[\"2. Get Active Segments\"].json[0].name + \" evaluation failed: \" + ($json.error || \"unknown error\"), idempotencyKey: $node[\"5. Validate Evaluation Request\"].json.executionId + \":\" + $node[\"2. Get Active Segments\"].json[0].id + \":error\" } }}"
-      },
-      "id": "node-14-error-notification",
-      "name": "14. Notify on Evaluation Failure",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [
-        2900,
-        450
-      ],
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 5000,
-      "notes": "Error branch: reports failed segment evaluation to the backend notifications service.",
-      "notesInFlow": true
+      "waitBetweenTries": 1000
     }
   ],
   "connections": {
@@ -511,24 +440,6 @@
         [
           {
             "node": "12. Notify Backend on Anomaly",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "12. Notify Backend on Anomaly": {
-      "main": [
-        [
-          {
-            "node": "13. Create Anomaly Notification",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "14. Notify on Evaluation Failure",
             "type": "main",
             "index": 0
           }
