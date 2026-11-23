@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.CRM_API_BASE_URL }}/segments",
+        "url": "={{ $env.CRM_API_BASE_URL }}/internal/n8n/segments",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -45,8 +45,8 @@
         "headerParameters": {
           "parameters": [
             {
-              "name": "Authorization",
-              "value": "={{ 'Bearer ' + $env.CRM_API_TOKEN }}"
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -84,7 +84,7 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.CRM_API_BASE_URL }}/segments/{{ $json.id }}/customers",
+        "url": "={{ $env.CRM_API_BASE_URL }}/internal/n8n/segments/{{ $json.id }}/customers",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -102,8 +102,8 @@
         "headerParameters": {
           "parameters": [
             {
-              "name": "Authorization",
-              "value": "={{ 'Bearer ' + $env.CRM_API_TOKEN }}"
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },
@@ -142,7 +142,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CRM_API_BASE_URL }}/segments/{{ $json.segmentId }}/evaluate-all",
+        "url": "={{ $env.CRM_API_BASE_URL }}/internal/n8n/segments/{{ $json.segmentId }}/evaluate-all",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ assignmentType: 'RULE' }) }}",
@@ -150,8 +150,8 @@
         "headerParameters": {
           "parameters": [
             {
-              "name": "Authorization",
-              "value": "={{ 'Bearer ' + $env.CRM_API_TOKEN }}"
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
             }
           ]
         },

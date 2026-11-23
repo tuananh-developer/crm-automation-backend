@@ -38,7 +38,6 @@ import {
 } from './dto/segment-response.dto.js';
 import { CustomerResponseDto } from './dto/customer-response.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
-import { JwtOrN8nAuthGuard } from './guards/jwt-or-n8n-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
@@ -47,12 +46,11 @@ import { UserRole } from '../users/enums/user.enum.js';
 
 @ApiTags('Segments')
 @Controller('segments')
-@UseGuards(JwtOrN8nAuthGuard)
+@UseGuards(JwtAuthGuard)
 export class SegmentsController {
   constructor(private readonly segmentsService: SegmentsService) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: 'Create a new segment',
     description: 'Creates a new customer segment with the specified criteria.',
@@ -100,13 +98,12 @@ export class SegmentsController {
   @ApiPaginatedResponse(SegmentResponseDto, 'Paginated list of segments.')
   findAll(
     @Query() query: QuerySegmentDto,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
     return this.segmentsService.findAll(query, actor);
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get segment details by ID' })
   @ApiParam({ name: 'id', description: 'UUID of the segment' })
   @ApiResponse({
@@ -123,7 +120,6 @@ export class SegmentsController {
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Update an existing segment' })
   @ApiParam({ name: 'id', description: 'UUID of the segment to update' })
   @ApiBody({ type: UpdateSegmentDto })
@@ -142,7 +138,7 @@ export class SegmentsController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Delete a segment' })
   @ApiParam({ name: 'id', description: 'UUID of the segment to delete' })
@@ -180,13 +176,12 @@ export class SegmentsController {
   getCustomers(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: QuerySegmentDto,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     return this.segmentsService.getCustomers(id, query, actor);
   }
 
   @Post(':id/evaluate')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: 'Evaluate a customer against a segment',
     description:
@@ -236,7 +231,7 @@ export class SegmentsController {
   evaluateAll(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: EvaluateSegmentBulkDto,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<EvaluateSegmentBulkResponseDto> {
     return this.segmentsService.evaluateAll(id, dto, actor);
   }
