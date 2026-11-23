@@ -156,7 +156,7 @@
     },
     {
       "parameters": {
-        "resource": "chat",
+        "resource": "text",
         "operation": "message",
         "modelId": "={{ $env.AI_MODEL || 'gpt-4o-mini' }}",
         "messages": {
@@ -181,6 +181,7 @@
       "type": "@n8n/n8n-nodes-langchain.openAi",
       "typeVersion": 1.8,
       "position": [2010, 300],
+      "onError": "continueRegularOutput",
       "credentials": {
         "openAiApi": {
           "id": "CONFIGURE_AFTER_IMPORT",
