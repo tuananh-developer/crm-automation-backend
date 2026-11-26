@@ -100,7 +100,7 @@ if [[ "$api_domain" == *example.com* || "$n8n_webhook_domain" == *example.com* ]
   echo "Replace example.com hostnames with real DNS names." >&2
   exit 1
 fi
-if [[ "$editor_base_url" != "https://${tailscale_dns_name}/" ]]; then
+if [[ "$editor_base_url" != "https://${tailscale_dns_name}:8443/" ]]; then
   echo "N8N_EDITOR_BASE_URL must exactly match the HTTPS Tailscale DNS name, including its trailing slash." >&2
   exit 1
 fi
