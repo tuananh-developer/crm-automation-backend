@@ -1,4 +1,5 @@
 import { QueryRunner } from 'typeorm';
+import { AppDataSource } from '../../data-source.js';
 import { AddNotificationSeverityColumn1728450000000 } from './1728450000000-AddNotificationSeverityColumn.js';
 
 describe('AddNotificationSeverityColumn1728450000000', () => {
@@ -143,6 +144,27 @@ describe('AddNotificationSeverityColumn1728450000000', () => {
     expect(alterTypeDefaultIdx).toBeGreaterThan(addIdx);
     expect(backfillIdx).toBeGreaterThan(alterTypeDefaultIdx);
     expect(setNotNullIdx).toBeGreaterThan(backfillIdx);
+  });
+
+  it('is registered in AppDataSource migrations in chronological order', () => {
+    expect(Array.isArray(AppDataSource.options.migrations)).toBe(true);
+    const migrations = AppDataSource.options.migrations as unknown[];
+    const idx = migrations.indexOf(AddNotificationSeverityColumn1728450000000);
+    expect(idx).toBeGreaterThan(-1);
+
+    const names = migrations.map((m) =>
+      typeof m === 'function' ? m.name : '',
+    );
+    const prevIdx = names.indexOf(
+      'AddEnrollmentActiveUniqueIndex1728400000000',
+    );
+    const nextIdx = names.indexOf(
+      'CreateFeedbackAndCustomerTasksTables1728600000000',
+    );
+    expect(prevIdx).toBeGreaterThan(-1);
+    expect(nextIdx).toBeGreaterThan(-1);
+    expect(idx).toBeGreaterThan(prevIdx);
+    expect(idx).toBeLessThan(nextIdx);
   });
 
   it('drops notifications.severity on rollback', async () => {

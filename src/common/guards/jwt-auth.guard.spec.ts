@@ -34,6 +34,31 @@ describe('JwtAuthGuard', () => {
     expect(spy).toHaveBeenCalled();
   });
 
+  it('delegates to downstream service guard when x-n8n-api-key is present and handler has JwtOrN8nAuthGuard', () => {
+    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(false);
+
+    class MockJwtOrN8nAuthGuard {}
+    Object.defineProperty(MockJwtOrN8nAuthGuard, 'name', {
+      value: 'JwtOrN8nAuthGuard',
+    });
+
+    const handler = () => {};
+    Reflect.defineMetadata('__guards__', [MockJwtOrN8nAuthGuard], handler);
+
+    const context = {
+      getHandler: () => handler,
+      getClass: jest.fn(),
+      switchToHttp: jest.fn().mockReturnValue({
+        getRequest: jest.fn().mockReturnValue({
+          headers: { 'x-n8n-api-key': 'secret' },
+        }),
+      }),
+    } as unknown as ExecutionContext;
+
+    const result = guard.canActivate(context);
+    expect(result).toBe(true);
+  });
+
   it('handleRequest returns user when user is present and no error occurred', () => {
     const mockUser = { id: 'user-1', email: 'test@crm.local' };
     const result = guard.handleRequest(null, mockUser, null);

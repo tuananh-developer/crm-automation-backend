@@ -796,4 +796,82 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       await queryRunner.release();
     }
   });
+
+  it('requires Idempotency-Key, replays identical Customer 360 trigger, and deduplicates concurrent triggers under PostgreSQL 23505', async () => {
+    const customerId = randomUUID();
+    const idempotencyKey = `wf05-concurrent-${suffix}`;
+
+    await dataSource.query(
+      `INSERT INTO customers (id, name, email, company_name, status, created_by)
+       VALUES ($1, $2, $3, $4, 'ACTIVE', $5);`,
+      [
+        customerId,
+        `Concurrent Customer ${suffix}`,
+        `concurrent.${suffix}@example.test`,
+        'Concurrent Integrity Corp',
+        userId,
+      ],
+    );
+
+    try {
+      const missingKeyResponse = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .send({});
+      expect(missingKeyResponse.status).toBe(400);
+
+      const blankKeyResponse = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .set('Idempotency-Key', '   ')
+        .send({});
+      expect(blankKeyResponse.status).toBe(400);
+
+      const [first, second] = await Promise.all([
+        api
+          .post(`/api/v1/customers/${customerId}/360/trigger`)
+          .set('Idempotency-Key', idempotencyKey)
+          .send({}),
+        api
+          .post(`/api/v1/customers/${customerId}/360/trigger`)
+          .set('Idempotency-Key', idempotencyKey)
+          .send({}),
+      ]);
+
+      expect(first.status).toBe(202);
+      expect(second.status).toBe(202);
+      expect(first.body.workflowRunId).toBeDefined();
+      expect(second.body.workflowRunId).toBe(first.body.workflowRunId);
+      workflowRunIds.push(first.body.workflowRunId as string);
+
+      const replayResponse = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .set('Idempotency-Key', idempotencyKey)
+        .send({});
+      expect(replayResponse.status).toBe(202);
+      expect(replayResponse.body.workflowRunId).toBe(first.body.workflowRunId);
+
+      const runs = await dataSource.query(
+        'SELECT id FROM workflow_runs WHERE id = $1;',
+        [first.body.workflowRunId],
+      );
+      expect(runs).toHaveLength(1);
+
+      const outboxRows = await dataSource.query(
+        "SELECT id FROM outbox_events WHERE payload->>'workflowRunId' = $1;",
+        [first.body.workflowRunId],
+      );
+      expect(outboxRows).toHaveLength(1);
+    } finally {
+      await dataSource.query(
+        "DELETE FROM outbox_events WHERE payload->>'workflowRunId' IN (SELECT id::text FROM workflow_runs WHERE customer_id = $1);",
+        [customerId],
+      );
+      await dataSource.query(
+        'DELETE FROM workflow_runs WHERE customer_id = $1;',
+        [customerId],
+      );
+      await dataSource.query('DELETE FROM customers WHERE id = $1;', [
+        customerId,
+      ]);
+    }
+  });
 });

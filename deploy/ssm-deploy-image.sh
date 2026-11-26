@@ -54,11 +54,20 @@ if ! compose pull backend backend-migrate; then
   exit 1
 fi
 
-if ! compose up -d --no-build backend; then
-  echo "Backend deployment or database migration failed. Recent logs:" >&2
-  compose logs --tail=160 backend-migrate backend >&2 || true
+if ! compose up -d --no-build backend n8n caddy; then
+  echo "Backend deployment, database migration, or proxy/automation restart failed. Recent logs:" >&2
+  compose logs --tail=160 backend-migrate backend n8n caddy >&2 || true
   exit 1
 fi
+
+# Caddyfile is bind-mounted and the admin API is disabled; restart it to load updated config.
+if ! compose restart caddy; then
+  echo "Caddy restart failed after deployment config update." >&2
+  compose logs --tail=100 caddy >&2 || true
+  exit 1
+fi
+
+bash "$APP_DIR/deploy/configure-tailscale-serve.sh"
 
 echo "Waiting for backend health endpoint..."
 for attempt in $(seq 1 60); do

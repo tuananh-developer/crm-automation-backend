@@ -31,7 +31,6 @@ import { InternalCommunicationController } from '../../modules/communication/int
 const jwtProtectedControllers = [
   LeadsController,
   LeadSourcesController,
-  CustomersController,
   SegmentsController,
   FollowUpController,
   SequencesController,
@@ -53,6 +52,59 @@ describe('API authentication guard coverage', () => {
       expect(guards).toContain(JwtAuthGuard);
     },
   );
+
+  it('secures CustomersController user-facing browser routes with JwtAuthGuard and hybrid routes with JwtOrN8nAuthGuard', () => {
+    const classGuards = Reflect.getMetadata('__guards__', CustomersController);
+    expect(classGuards).toBeUndefined();
+
+    const userFacingMethods = ['findAll', 'triggerCustomer360'] as const;
+    for (const method of userFacingMethods) {
+      const handler = Object.getOwnPropertyDescriptor(
+        CustomersController.prototype,
+        method,
+      )?.value as object;
+      const guards = Reflect.getMetadata('__guards__', handler);
+      expect(guards).toContain(JwtAuthGuard);
+    }
+
+    const hybridMethods = [
+      'findOne',
+      'getCustomer360',
+      'getCustomerInteractions',
+      'getCustomerIntelligence',
+      'getCustomerFollowUps',
+      'getCustomerSegments',
+    ] as const;
+    for (const method of hybridMethods) {
+      const handler = Object.getOwnPropertyDescriptor(
+        CustomersController.prototype,
+        method,
+      )?.value as object;
+      const guards = Reflect.getMetadata('__guards__', handler);
+      expect(guards).toContain(JwtOrN8nAuthGuard);
+    }
+
+    const callbackHandler = Object.getOwnPropertyDescriptor(
+      CustomersController.prototype,
+      'handleCustomer360Callback',
+    )?.value as object;
+    const callbackGuards = Reflect.getMetadata('__guards__', callbackHandler);
+    expect(callbackGuards).toContain(N8nAuthGuard);
+
+    for (const internalMethod of [
+      'findOneInternal',
+      'claimAndGetCustomerProfile',
+    ] as const) {
+      const handler = Object.getOwnPropertyDescriptor(
+        CustomersController.prototype,
+        internalMethod,
+      )?.value as object;
+      expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBe(true);
+      expect(Reflect.getMetadata('__guards__', handler)).toContain(
+        N8nAuthGuard,
+      );
+    }
+  });
 
   it.each([
     [DataCleaningController, 'createScan'],

@@ -6,6 +6,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
 import { Observable } from 'rxjs';
+import type { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
 
 @Injectable()
@@ -24,6 +25,33 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
 
     if (isPublic) {
       return true;
+    }
+
+    const request = context.switchToHttp().getRequest<Request>();
+    const hasN8nHeader = Boolean(
+      request?.headers &&
+      (request.headers['x-n8n-api-key'] ||
+        request.headers['x-api-key'] ||
+        request.headers['x-webhook-secret'] ||
+        request.headers['x-n8n-webhook-secret']),
+    );
+
+    if (hasN8nHeader && context.getHandler()) {
+      const handlerGuards: unknown = Reflect.getMetadata(
+        '__guards__',
+        context.getHandler(),
+      );
+      if (Array.isArray(handlerGuards)) {
+        const hasServiceGuard = handlerGuards.some((g: unknown) => {
+          if (typeof g === 'function') {
+            return g.name === 'JwtOrN8nAuthGuard' || g.name === 'N8nAuthGuard';
+          }
+          return false;
+        });
+        if (hasServiceGuard) {
+          return true;
+        }
+      }
     }
 
     return super.canActivate(context);

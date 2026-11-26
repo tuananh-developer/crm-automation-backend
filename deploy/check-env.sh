@@ -42,7 +42,7 @@ for key in "${required_secrets[@]}"; do
   seen_secrets["$value"]="$key"
 done
 
-for key in API_DOMAIN N8N_DOMAIN FRONTEND_URL ACME_EMAIL LOCAL_RABBITMQ_USER; do
+for key in API_DOMAIN N8N_WEBHOOK_DOMAIN N8N_TAILSCALE_DNS_NAME N8N_EDITOR_BASE_URL FRONTEND_URL ACME_EMAIL LOCAL_RABBITMQ_USER; do
   value="$(read_env "$key")"
   if [[ -z "$value" ]]; then
     echo "$key must be set in $ENV_FILE." >&2
@@ -88,13 +88,20 @@ if [[ "$frontend_url" != https://* ]]; then
 fi
 
 api_domain="$(read_env API_DOMAIN)"
-n8n_domain="$(read_env N8N_DOMAIN)"
-if [[ "$api_domain" == "$n8n_domain" ]]; then
-  echo "API_DOMAIN and N8N_DOMAIN must be different hostnames." >&2
+n8n_webhook_domain="$(read_env N8N_WEBHOOK_DOMAIN)"
+tailscale_dns_name="$(read_env N8N_TAILSCALE_DNS_NAME)"
+editor_base_url="$(read_env N8N_EDITOR_BASE_URL)"
+
+if [[ "$api_domain" == "$n8n_webhook_domain" ]]; then
+  echo "API_DOMAIN and N8N_WEBHOOK_DOMAIN must be different hostnames." >&2
   exit 1
 fi
-if [[ "$api_domain" == *example.com* || "$n8n_domain" == *example.com* ]]; then
+if [[ "$api_domain" == *example.com* || "$n8n_webhook_domain" == *example.com* ]]; then
   echo "Replace example.com hostnames with real DNS names." >&2
+  exit 1
+fi
+if [[ "$editor_base_url" != "https://${tailscale_dns_name}:8443/" ]]; then
+  echo "N8N_EDITOR_BASE_URL must exactly match the HTTPS Tailscale DNS name, including its trailing slash." >&2
   exit 1
 fi
 

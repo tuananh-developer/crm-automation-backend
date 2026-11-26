@@ -17,11 +17,12 @@ cp /bundle/rabbitmq/rabbitmq.conf "$DEPLOY_DIR/rabbitmq/rabbitmq.conf"
 cp /bundle/rabbitmq/definitions.json "$DEPLOY_DIR/rabbitmq/definitions.json"
 cp /bundle/check-env.sh "$DEPLOY_DIR/check-env.sh"
 cp /bundle/ssm-deploy-image.sh "$DEPLOY_DIR/ssm-deploy-image.sh"
+cp /bundle/configure-tailscale-serve.sh "$DEPLOY_DIR/configure-tailscale-serve.sh"
 cp /bundle/bootstrap-ec2.sh "$DEPLOY_DIR/bootstrap-ec2.sh"
 cp /bundle/.env.production.example "$DEPLOY_DIR/.env.production.example"
 
 chmod 0644 "$DEPLOY_DIR/compose.production.yml" "$DEPLOY_DIR/Caddyfile" "$DEPLOY_DIR/rabbitmq/rabbitmq.conf" "$DEPLOY_DIR/rabbitmq/definitions.json" "$DEPLOY_DIR/.env.production.example"
-chmod 0755 "$DEPLOY_DIR/check-env.sh" "$DEPLOY_DIR/ssm-deploy-image.sh" "$DEPLOY_DIR/bootstrap-ec2.sh"
+chmod 0755 "$DEPLOY_DIR/check-env.sh" "$DEPLOY_DIR/ssm-deploy-image.sh" "$DEPLOY_DIR/configure-tailscale-serve.sh" "$DEPLOY_DIR/bootstrap-ec2.sh"
 
 # Never replace live production secrets or service configuration.
 if [ ! -f "$DEPLOY_DIR/.env.production" ]; then
