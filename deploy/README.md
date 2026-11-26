@@ -8,7 +8,7 @@
 - The existing Docker Hub repository `tanhisme/crm-automation-backend` stores the backend runtime image and deployment-config bundle under separate immutable tags.
 - GitHub Actions runs CI, publishes both images, and invokes AWS Systems Manager Run Command. EC2 pulls versioned images from Docker Hub; it does not clone the GitHub repository.
 - Caddy is the public ingress for the API and the n8n webhook/form endpoints only.
-- Tailscale runs on the EC2 host. Tailscale Serve exposes the n8n editor over HTTPS to authenticated devices in your tailnet only.
+- Tailscale runs on the EC2 host. Tailscale Serve exposes the n8n editor over HTTPS on tailnet port 8443 to authenticated devices only; this avoids sharing host port 443 with Caddy.
 
 This is a cost-conscious single-instance deployment. EC2 remains a single point of failure and this is not a highly available architecture.
 
@@ -23,7 +23,7 @@ This is a cost-conscious single-instance deployment. EC2 remains a single point 
 | Backend, n8n, and PostgreSQL ports | Not exposed to the public network |
 | EC2 administration | AWS Systems Manager Session Manager / Run Command; optionally SSH over Tailscale |
 
-Caddy returns 404 for the root path and every non-webhook/form path on the public n8n hostname. This keeps the editor and n8n REST API off the public ingress. The n8n container publishes port 5678 on host loopback only; Tailscale Serve proxies that loopback port over the tailnet.
+Caddy returns 404 for the root path and every non-webhook/form path on the public n8n hostname. This keeps the editor and n8n REST API off the public ingress. The n8n container publishes port 5678 on host loopback only; Tailscale Serve listens on tailnet HTTPS port 8443 and proxies to that loopback port, leaving public Caddy HTTPS on 443.
 
 The n8n editor and webhook URLs intentionally use different hostnames. This follows n8n's reverse-proxy guidance for separating the editor from public webhooks and forms. Do not add a catch-all reverse proxy for the n8n webhook hostname.
 
