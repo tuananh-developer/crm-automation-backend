@@ -9,6 +9,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import type { Customer } from './customer.entity.js';
+import type { CustomerChurnAssessment } from './customer-churn-assessment.entity.js';
 import type { User } from '../../users/entities/user.entity.js';
 import type { CustomerFeedback } from '../../feedback/entities/customer-feedback.entity.js';
 import type { WorkflowRun } from '../../workflow/entities/workflow-run.entity.js';
@@ -140,6 +141,13 @@ export class CustomerTask {
   @ManyToOne('Customer', { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'customer_id' })
   customer?: Customer;
+
+  @ManyToOne('CustomerChurnAssessment', 'tasks', {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'assessment_id' })
+  assessment?: CustomerChurnAssessment | null;
 
   @ManyToOne('User', { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'assigned_to' })

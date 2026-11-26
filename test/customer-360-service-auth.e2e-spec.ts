@@ -364,7 +364,8 @@ describe('Customer 360 Service-Key Authentication (E2E)', () => {
     it('allows POST /customers/:id/360/trigger with valid user JWT', async () => {
       const res = await request(app.getHttpServer())
         .post(`/customers/${VALID_CUSTOMER_ID}/360/trigger`)
-        .set('Authorization', 'Bearer valid-user-jwt-token');
+        .set('Authorization', 'Bearer valid-user-jwt-token')
+        .set('Idempotency-Key', 'e2e-wf05-trigger-1');
 
       expect(res.status).toBe(202);
       expect(customersServiceMock.triggerCustomer360).toHaveBeenCalled();

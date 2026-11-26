@@ -110,6 +110,30 @@ export class LeadIntelligenceController {
     return QualificationMapper.toResponseDtoList(records);
   }
 
+  @Get('qualifications/:leadId/latest/internal')
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal endpoint to get latest qualification for n8n workflows',
+  })
+  @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
+  @ApiResponse({
+    status: 200,
+    description: 'Latest qualification assessment details.',
+    type: QualificationResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized n8n request.' })
+  @ApiResponse({
+    status: 404,
+    description: 'No qualification found for this lead.',
+  })
+  async getLatestQualificationInternal(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<QualificationResponseDto | null> {
+    const record =
+      await this.leadIntelligenceService.getLatestQualification(leadId);
+    return record ? QualificationMapper.toResponseDto(record) : null;
+  }
+
   @Get('qualifications/:leadId/latest')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get latest qualification assessment for a lead' })

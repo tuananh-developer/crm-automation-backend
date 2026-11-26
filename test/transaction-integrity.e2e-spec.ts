@@ -104,10 +104,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       });
     expect(adminRegistration.status).toBe(201);
     adminUserId = adminRegistration.body.user.id;
-    await dataSource.query(
-      "UPDATE users SET role = 'ADMIN' WHERE id = $1;",
-      [adminUserId],
-    );
+    await dataSource.query("UPDATE users SET role = 'ADMIN' WHERE id = $1;", [
+      adminUserId,
+    ]);
 
     const adminLogin = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
@@ -474,17 +473,19 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
   it('returns one success and one 409 for concurrent registrations with the same email', async () => {
     const email = `register.race.${suffix}@example.test`;
     const register = () =>
-      request(app.getHttpServer())
-        .post('/api/v1/auth/register')
-        .send({
-          name: 'Concurrent Registration',
-          email,
-          password: 'E2eStrongPassword123!',
-        });
+      request(app.getHttpServer()).post('/api/v1/auth/register').send({
+        name: 'Concurrent Registration',
+        email,
+        password: 'E2eStrongPassword123!',
+      });
 
     const responses = await Promise.all([register(), register()]);
-    expect(responses.filter((response) => response.status === 201)).toHaveLength(1);
-    expect(responses.filter((response) => response.status === 409)).toHaveLength(1);
+    expect(
+      responses.filter((response) => response.status === 201),
+    ).toHaveLength(1);
+    expect(
+      responses.filter((response) => response.status === 409),
+    ).toHaveLength(1);
 
     const [users] = await dataSource.query(
       'SELECT COUNT(*)::int AS count FROM users WHERE email = $1;',
@@ -506,7 +507,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     }
 
     expect(statuses).toContain(429);
-    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(0);
+    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('preserves Lead contact edits when review resolution runs concurrently', async () => {
@@ -627,9 +630,7 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       await dataSource.query(
         `DROP TRIGGER IF EXISTS ${triggerName} ON audit_logs;`,
       );
-      await dataSource.query(
-        `DROP FUNCTION IF EXISTS ${functionName}();`,
-      );
+      await dataSource.query(`DROP FUNCTION IF EXISTS ${functionName}();`);
     }
   });
 
@@ -743,7 +744,7 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     );
   });
 
-  it('deduplicates concurrent Customer 360 triggers under PostgreSQL 23505 and creates distinct runs when Idempotency-Key is omitted', async () => {
+  it('requires Idempotency-Key, replays identical Customer 360 trigger, and deduplicates concurrent triggers under PostgreSQL 23505', async () => {
     const customerId = randomUUID();
     const idempotencyKey = `wf05-concurrent-${suffix}`;
 
@@ -760,6 +761,17 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     );
 
     try {
+      const missingKeyResponse = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .send({});
+      expect(missingKeyResponse.status).toBe(400);
+
+      const blankKeyResponse = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .set('Idempotency-Key', '   ')
+        .send({});
+      expect(blankKeyResponse.status).toBe(400);
+
       const [first, second] = await Promise.all([
         api
           .post(`/api/v1/customers/${customerId}/360/trigger`)
@@ -777,6 +789,13 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       expect(second.body.workflowRunId).toBe(first.body.workflowRunId);
       workflowRunIds.push(first.body.workflowRunId as string);
 
+      const replayResponse = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .set('Idempotency-Key', idempotencyKey)
+        .send({});
+      expect(replayResponse.status).toBe(202);
+      expect(replayResponse.body.workflowRunId).toBe(first.body.workflowRunId);
+
       const runs = await dataSource.query(
         'SELECT id FROM workflow_runs WHERE id = $1;',
         [first.body.workflowRunId],
@@ -788,26 +807,6 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
         [first.body.workflowRunId],
       );
       expect(outboxRows).toHaveLength(1);
-
-      // Omitting Idempotency-Key creates distinct WorkflowRuns
-      const unkeyedFirst = await api
-        .post(`/api/v1/customers/${customerId}/360/trigger`)
-        .send({});
-      const unkeyedSecond = await api
-        .post(`/api/v1/customers/${customerId}/360/trigger`)
-        .send({});
-
-      expect(unkeyedFirst.status).toBe(202);
-      expect(unkeyedSecond.status).toBe(202);
-      expect(unkeyedFirst.body.workflowRunId).toBeDefined();
-      expect(unkeyedSecond.body.workflowRunId).toBeDefined();
-      expect(unkeyedSecond.body.workflowRunId).not.toBe(
-        unkeyedFirst.body.workflowRunId,
-      );
-      workflowRunIds.push(
-        unkeyedFirst.body.workflowRunId as string,
-        unkeyedSecond.body.workflowRunId as string,
-      );
     } finally {
       await dataSource.query(
         "DELETE FROM outbox_events WHERE payload->>'workflowRunId' IN (SELECT id::text FROM workflow_runs WHERE customer_id = $1);",

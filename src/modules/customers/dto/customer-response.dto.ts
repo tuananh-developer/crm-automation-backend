@@ -133,6 +133,11 @@ export class CustomerResponseDto {
   industry!: string | null;
 
   @Expose()
+  @ApiPropertyOptional({ type: Boolean, default: false })
+  @IsOptional()
+  isStrategic?: boolean;
+
+  @Expose()
   @ApiProperty({ type: String, nullable: true })
   @IsString()
   @IsOptional()

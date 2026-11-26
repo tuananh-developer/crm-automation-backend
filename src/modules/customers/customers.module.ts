@@ -18,8 +18,17 @@ import { SegmentsService } from './segments.service.js';
 import { SegmentsController } from './segments.controller.js';
 import { CustomersService } from './customers.service.js';
 import { CustomersController } from './customers.controller.js';
-import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
+import { AccountHealthService } from './account-health.service.js';
+import { AccountHealthController } from './account-health.controller.js';
+import { AccountHealthSnapshot } from './entities/account-health-snapshot.entity.js';
+import {
+  InternalChurnController,
+  InternalCustomerTasksController,
+} from './internal-churn.controller.js';
+import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { InternalSegmentsWorkflowController } from './internal-segments-workflow.controller.js';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js';
 import { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispatch.service.js';
 import { WorkflowExecutionClaimsService } from '../t12-workflows/workflow-execution-claims.service.js';
@@ -37,17 +46,27 @@ import { WorkflowExecutionClaimsService } from '../t12-workflows/workflow-execut
       LeadQualification,
       LeadEnrichment,
       LeadScore,
-      WorkflowRun,
       LeadFollowUpEnrollment,
       FollowUpExecution,
       User,
+      WorkflowRun,
+      AccountHealthSnapshot,
+      CustomerChurnAssessment,
     ]),
     AuthModule,
   ],
-  controllers: [SegmentsController, CustomersController],
+  controllers: [
+    AccountHealthController,
+    SegmentsController,
+    CustomersController,
+    InternalChurnController,
+    InternalCustomerTasksController,
+    InternalSegmentsWorkflowController,
+  ],
   providers: [
     SegmentsService,
     CustomersService,
+    AccountHealthService,
     N8nWorkflowDispatchService,
     WorkflowExecutionClaimsService,
     N8nAuthGuard,
@@ -57,6 +76,7 @@ import { WorkflowExecutionClaimsService } from '../t12-workflows/workflow-execut
     TypeOrmModule,
     SegmentsService,
     CustomersService,
+    AccountHealthService,
     JwtOrN8nAuthGuard,
   ],
 })

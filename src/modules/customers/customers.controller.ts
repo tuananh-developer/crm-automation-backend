@@ -37,6 +37,7 @@ import { JwtOrN8nAuthGuard } from '../../common/guards/jwt-or-n8n-auth.guard.js'
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
 
 @ApiTags('Customers')
 @Controller('customers')
@@ -50,12 +51,32 @@ export class CustomersController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiQuery({ name: 'isStrategic', required: false, type: Boolean })
   @ApiPaginatedResponse(CustomerResponseDto)
   findAll(
     @Query() query: QueryCustomerDto,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     return this.customersService.findAll(query, actor);
+  }
+
+  @Get('internal')
+  @Public()
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary:
+      'Internal service list of customers for n8n workflows (supports isStrategic filter)',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiQuery({ name: 'isStrategic', required: false, type: Boolean })
+  @ApiPaginatedResponse(CustomerResponseDto)
+  findAllInternal(
+    @Query() query: QueryCustomerDto,
+  ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
+    return this.customersService.findAllInternal(query);
   }
 
   @Get(':id/internal')
@@ -70,6 +91,10 @@ export class CustomersController {
     status: 401,
     description: 'Unauthorized internal service request.',
   })
+  @ApiResponse({
+    status: 400,
+    description: 'Idempotency-Key header is required and cannot be empty.',
+  })
   @ApiResponse({ status: 404, description: 'Customer not found.' })
   findOneInternal(
     @Param('id', ParseUUIDPipe) id: string,
@@ -82,6 +107,10 @@ export class CustomersController {
   @ApiOperation({ summary: 'Get customer details by ID' })
   @ApiParam({ name: 'id', description: 'UUID of the customer' })
   @ApiResponse({ status: 200, type: CustomerResponseDto })
+  @ApiResponse({
+    status: 400,
+    description: 'Idempotency-Key header is required and cannot be empty.',
+  })
   @ApiResponse({ status: 404, description: 'Customer not found.' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
@@ -136,6 +165,10 @@ export class CustomersController {
   @ApiResponse({
     status: 403,
     description: 'Forbidden: Insufficient privileges for this customer.',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Idempotency-Key header is required and cannot be empty.',
   })
   @ApiResponse({ status: 404, description: 'Customer not found.' })
   getCustomer360(
@@ -226,6 +259,10 @@ export class CustomersController {
     status: 403,
     description: 'Forbidden: Insufficient privileges for this customer.',
   })
+  @ApiResponse({
+    status: 400,
+    description: 'Idempotency-Key header is required and cannot be empty.',
+  })
   @ApiResponse({ status: 404, description: 'Customer not found.' })
   triggerCustomer360(
     @Param('id', ParseUUIDPipe) id: string,
@@ -273,5 +310,15 @@ export class CustomersController {
     @Body() dto: Customer360CallbackDto,
   ): Promise<Customer360CallbackResponseDto> {
     return this.customersService.handleCustomer360Callback(dto);
+  }
+
+  @Get(':customerId/churn-assessments')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get customer churn assessment history' })
+  findChurnAssessments(
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<CustomerChurnAssessment[]> {
+    return this.customersService.findChurnAssessments(customerId, actor);
   }
 }

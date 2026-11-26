@@ -1,0 +1,1126 @@
+/* eslint-disable @typescript-eslint/unbound-method */
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
+import { type Repository } from 'typeorm';
+import {
+  RenewalService,
+  type RenewalMailTransport,
+} from './renewal.service.js';
+import type { Contract } from './entities/contract.entity.js';
+import type { RenewalDraft } from './entities/renewal-draft.entity.js';
+import type { Customer } from '../customers/entities/customer.entity.js';
+import type { CustomerTask } from '../customers/entities/customer-task.entity.js';
+import type { AuditLog } from '../audit/entities/audit-log.entity.js';
+import type { NotificationsService } from '../notifications/notifications.service.js';
+import { UserRole } from '../users/enums/user.enum.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+
+describe('RenewalService', () => {
+  let service: RenewalService;
+  let contractRepo: jest.Mocked<Repository<Contract>>;
+  let draftRepo: jest.Mocked<Repository<RenewalDraft>>;
+  let customerRepo: jest.Mocked<Repository<Customer>>;
+  let customerTaskRepo: jest.Mocked<Repository<CustomerTask>>;
+  let auditLogRepo: jest.Mocked<Repository<AuditLog>>;
+  let notificationsService: jest.Mocked<NotificationsService>;
+  let mailTransportService: jest.Mocked<RenewalMailTransport>;
+
+  beforeEach(() => {
+    contractRepo = {
+      findOne: jest.fn(),
+      find: jest.fn(),
+      create: jest.fn().mockImplementation((val) => val),
+      save: jest
+        .fn()
+        .mockImplementation((val) =>
+          Promise.resolve({ id: 'contract-saved-id', ...val }),
+        ),
+      createQueryBuilder: jest.fn(),
+    } as unknown as jest.Mocked<Repository<Contract>>;
+
+    draftRepo = {
+      findOne: jest.fn(),
+      find: jest.fn(),
+      create: jest.fn().mockImplementation((val) => val),
+      save: jest
+        .fn()
+        .mockImplementation((val) =>
+          Promise.resolve({ id: 'draft-saved-id', ...val }),
+        ),
+    } as unknown as jest.Mocked<Repository<RenewalDraft>>;
+
+    customerRepo = {
+      findOne: jest.fn(),
+    } as unknown as jest.Mocked<Repository<Customer>>;
+
+    customerTaskRepo = {
+      findOne: jest.fn(),
+      find: jest.fn(),
+      create: jest.fn().mockImplementation((val) => val),
+      save: jest
+        .fn()
+        .mockImplementation((val) =>
+          Promise.resolve({ id: 'task-saved-id', ...val }),
+        ),
+    } as unknown as jest.Mocked<Repository<CustomerTask>>;
+
+    auditLogRepo = {
+      create: jest.fn().mockImplementation((val) => val),
+      save: jest
+        .fn()
+        .mockImplementation((val) =>
+          Promise.resolve({ id: 'audit-saved-id', ...val }),
+        ),
+    } as unknown as jest.Mocked<Repository<AuditLog>>;
+
+    notificationsService = {
+      create: jest.fn().mockResolvedValue({ id: 'notif-1' }),
+    } as unknown as jest.Mocked<NotificationsService>;
+
+    mailTransportService = {
+      sendMail: jest.fn().mockResolvedValue({ messageId: '<msg-renewal-1>' }),
+    };
+
+    service = new RenewalService(
+      contractRepo,
+      draftRepo,
+      customerRepo,
+      customerTaskRepo,
+      auditLogRepo,
+      notificationsService,
+      mailTransportService,
+    );
+  });
+
+  describe('Contract Management', () => {
+    it('creates a contract successfully when customer exists and dates are valid', async () => {
+      customerRepo.findOne.mockResolvedValue({ id: 'customer-1' } as Customer);
+      contractRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.createContract({
+        customerId: 'customer-1',
+        contractNumber: 'CTR-2026-001',
+        startDate: '2026-01-01T00:00:00.000Z',
+        endDate: '2026-12-31T23:59:59.000Z',
+        amount: 15000,
+      });
+
+      expect(result).toMatchObject({
+        customerId: 'customer-1',
+        contractNumber: 'CTR-2026-001',
+        status: 'ACTIVE',
+      });
+      expect(contractRepo.save).toHaveBeenCalled();
+    });
+
+    it('rejects contract creation when customer does not exist', async () => {
+      customerRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.createContract({
+          customerId: 'non-existent-customer',
+          contractNumber: 'CTR-002',
+          startDate: '2026-01-01',
+          endDate: '2026-12-31',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects contract creation when startDate is after endDate', async () => {
+      customerRepo.findOne.mockResolvedValue({ id: 'customer-1' } as Customer);
+
+      await expect(
+        service.createContract({
+          customerId: 'customer-1',
+          contractNumber: 'CTR-003',
+          startDate: '2026-12-31',
+          endDate: '2026-01-01',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects contract creation when contractNumber already exists', async () => {
+      customerRepo.findOne.mockResolvedValue({ id: 'customer-1' } as Customer);
+      contractRepo.findOne.mockResolvedValue({
+        id: 'existing-contract',
+        contractNumber: 'CTR-DUPLICATE',
+      } as unknown as Contract);
+
+      await expect(
+        service.createContract({
+          customerId: 'customer-1',
+          contractNumber: 'CTR-DUPLICATE',
+          startDate: '2026-01-01',
+          endDate: '2026-12-31',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('throws NotFoundException when getting non-existent contract', async () => {
+      contractRepo.findOne.mockResolvedValue(null);
+      await expect(service.getContract('non-existent')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('updates a contract status and renewalDate', async () => {
+      const existing = {
+        id: 'contract-1',
+        status: 'ACTIVE',
+        renewalDate: null,
+      } as unknown as Contract;
+      contractRepo.findOne.mockResolvedValue(existing);
+
+      await service.updateContract('contract-1', {
+        status: 'RENEWED',
+        renewalDate: '2027-01-01T00:00:00.000Z',
+      });
+
+      expect(contractRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'RENEWED',
+        }),
+      );
+    });
+  });
+
+  describe('calculateUrgency', () => {
+    it('handles null or invalid dates safely with UNKNOWN and -1 days', () => {
+      expect(service.calculateUrgency(null)).toEqual({
+        level: 'UNKNOWN',
+        daysRemaining: -1,
+      });
+      expect(service.calculateUrgency(new Date('invalid'))).toEqual({
+        level: 'UNKNOWN',
+        daysRemaining: -1,
+      });
+    });
+
+    it('identifies EXPIRED contracts for dates in the past', () => {
+      const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      const res = service.calculateUrgency(past);
+      expect(res.level).toBe('EXPIRED');
+      expect(res.daysRemaining).toBeLessThan(0);
+    });
+
+    it('identifies CRITICAL urgency for <= 7 days', () => {
+      const date3 = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+      expect(service.calculateUrgency(date3).level).toBe('CRITICAL');
+
+      const date7 = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      expect(service.calculateUrgency(date7).level).toBe('CRITICAL');
+    });
+
+    it('identifies HIGH urgency for > 7 and <= 30 days', () => {
+      const date15 = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
+      expect(service.calculateUrgency(date15).level).toBe('HIGH');
+
+      const date30 = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      expect(service.calculateUrgency(date30).level).toBe('HIGH');
+    });
+
+    it('identifies MEDIUM urgency for > 30 and <= 60 days', () => {
+      const date45 = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000);
+      expect(service.calculateUrgency(date45).level).toBe('MEDIUM');
+
+      const date60 = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+      expect(service.calculateUrgency(date60).level).toBe('MEDIUM');
+    });
+
+    it('identifies LOW urgency for > 60 days', () => {
+      const date90 = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+      expect(service.calculateUrgency(date90).level).toBe('LOW');
+    });
+  });
+
+  describe('Draft Management & Idempotency', () => {
+    it('returns existing draft when idempotencyKey is reused', async () => {
+      const existing = {
+        id: 'draft-existing-1',
+        contractId: 'contract-1',
+        customerId: 'customer-1',
+        idempotencyKey: 'key-123',
+        status: 'DRAFT',
+        validationResult: {},
+      } as unknown as RenewalDraft;
+      draftRepo.findOne.mockResolvedValue(existing);
+      contractRepo.findOne.mockResolvedValue({
+        id: 'contract-1',
+        customerId: 'customer-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+
+      const result = await service.saveDraft({
+        contractId: 'contract-1',
+        customerId: 'customer-1',
+        idempotencyKey: 'key-123',
+      });
+
+      expect(result.id).toBe(existing.id);
+      expect(result.canAutoSend).toBe(false);
+      expect(draftRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException if idempotencyKey is missing', async () => {
+      await expect(
+        service.saveDraft({
+          contractId: 'contract-1',
+          customerId: 'customer-1',
+          idempotencyKey: '',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws NotFoundException if target contract does not exist', async () => {
+      draftRepo.findOne.mockResolvedValue(null);
+      contractRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.saveDraft({
+          contractId: 'non-existent-contract',
+          customerId: 'customer-1',
+          idempotencyKey: 'key-456',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException if customerId does not match contract customerId', async () => {
+      draftRepo.findOne.mockResolvedValue(null);
+      contractRepo.findOne.mockResolvedValue({
+        id: 'contract-1',
+        customerId: 'customer-real',
+      } as unknown as Contract);
+
+      await expect(
+        service.saveDraft({
+          contractId: 'contract-1',
+          customerId: 'customer-imposter',
+          idempotencyKey: 'key-789',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('records renewal attempt idempotently', async () => {
+      const existing = {
+        id: 'draft-1',
+        idempotencyKey: 'attempt-key-1',
+        status: 'DRAFT',
+      } as unknown as RenewalDraft;
+      draftRepo.findOne.mockResolvedValue(existing);
+
+      const result = await service.recordRenewalAttempt({
+        contractId: 'contract-1',
+        status: 'SENT',
+        idempotencyKey: 'attempt-key-1',
+        communicationId: 'comm-123',
+      });
+
+      expect(result.status).toBe('SENT');
+      expect(result.communicationId).toBe('comm-123');
+      expect(draftRepo.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('Authoritative Security: checkEligibility', () => {
+    it('1. Rejects caller-supplied hasConsent: true when database has no consent', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        validationResult: {
+          consentGranted: false, // Authoritative missing
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'admin-1',
+        },
+      } as unknown as RenewalDraft);
+
+      const res = await service.checkEligibility({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-1',
+        hasConsent: true, // Caller lie
+      });
+      expect(res.canAutoSend).toBe(false);
+      expect(res.reason).toBe('FAIL_CLOSED: no backend consent record');
+    });
+
+    it('2. Rejects caller-supplied hasTemplate: true when template is not approved in backend', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        validationResult: {
+          consentGranted: true,
+          templateApproved: false, // Authoritative missing
+          policyApproved: true,
+          approvedBy: 'admin-1',
+        },
+      } as unknown as RenewalDraft);
+
+      const res = await service.checkEligibility({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-1',
+        hasTemplate: true, // Caller lie
+      });
+      expect(res.canAutoSend).toBe(false);
+      expect(res.reason).toBe('FAIL_CLOSED: no backend template record');
+    });
+
+    it('3. Rejects caller-supplied policyAllows: true when policy does not permit', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: false, // Authoritative missing
+          approvedBy: 'admin-1',
+        },
+      } as unknown as RenewalDraft);
+
+      const res = await service.checkEligibility({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-1',
+        policyAllows: true, // Caller lie
+      });
+      expect(res.canAutoSend).toBe(false);
+      expect(res.reason).toBe('FAIL_CLOSED: no backend policy record');
+    });
+
+    it('4. Rejects caller-supplied needsApproval: false when approval record is missing', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'DRAFT',
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: undefined, // Authoritative missing
+        },
+      } as unknown as RenewalDraft);
+
+      const res = await service.checkEligibility({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-1',
+        needsApproval: false, // Caller lie
+      });
+      expect(res.canAutoSend).toBe(false);
+      expect(res.reason).toBe('FAIL_CLOSED: no backend approval record');
+    });
+
+    it('5. Rejects caller supplying all 4 favorable booleans when backend records are empty', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        validationResult: {}, // Empty metadata
+      } as unknown as RenewalDraft);
+
+      const res = await service.checkEligibility({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-1',
+        hasConsent: true,
+        hasTemplate: true,
+        policyAllows: true,
+        needsApproval: false,
+      });
+      expect(res.canAutoSend).toBe(false);
+      expect(res.reason).toMatch(/FAIL_CLOSED/);
+    });
+
+    it('6. Rejects when contract belongs to a different customer', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+
+      const res = await service.checkEligibility({
+        contractId: 'c-1',
+        customerId: 'cust-2', // Mismatch
+        draftId: 'd-1',
+      });
+      expect(res.canAutoSend).toBe(false);
+      expect(res.reason).toBe('FAIL_CLOSED: contract not found');
+    });
+
+    it('7. Rejects when draft belongs to a different contract', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-1',
+        contractId: 'c-other', // Mismatch
+        customerId: 'cust-1',
+        validationResult: {},
+      } as unknown as RenewalDraft);
+
+      const res = await service.checkEligibility({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-1',
+      });
+      expect(res.canAutoSend).toBe(false);
+      expect(res.reason).toBe('FAIL_CLOSED: draft not found');
+    });
+
+    it('8. Rejects non-existent contract ID', async () => {
+      contractRepo.findOne.mockResolvedValue(null);
+
+      const res = await service.checkEligibility({
+        contractId: 'non-existent-contract',
+        customerId: 'cust-1',
+      });
+      expect(res.canAutoSend).toBe(false);
+      expect(res.reason).toBe('FAIL_CLOSED: contract not found');
+    });
+
+    it('9. Rejects inactive or cancelled contracts', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        status: 'CANCELLED',
+      } as unknown as Contract);
+
+      const res = await service.checkEligibility({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-1',
+      });
+      expect(res.canAutoSend).toBe(false);
+      expect(res.reason).toContain('CANCELLED');
+    });
+
+    it('10. Approves auto-send ONLY when all authoritative backend records exist', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'APPROVED',
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'admin-uuid',
+        },
+      } as unknown as RenewalDraft);
+
+      const res = await service.checkEligibility({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-1',
+      });
+      expect(res.canAutoSend).toBe(true);
+      expect(res.reason).toBe('OK');
+    });
+
+    it('11. Strips caller-forged approval/consent metadata and status in saveDraft so checkEligibility stays FAIL_CLOSED', async () => {
+      draftRepo.findOne.mockResolvedValue(null);
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+
+      const saved = await service.saveDraft({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        idempotencyKey: 'forged-draft-key',
+        status: 'APPROVED', // Forged caller status
+        validationResult: {
+          grounded: true,
+          consentGranted: true, // Forged caller flag
+          templateApproved: true, // Forged caller flag
+          policyApproved: true, // Forged caller flag
+          approvedBy: 'attacker-id', // Forged caller approver
+        },
+      });
+
+      expect(saved.status).toBe('DRAFT');
+      expect(saved.validationResult).toMatchObject({
+        grounded: true,
+        consentGranted: false,
+        templateApproved: false,
+        policyApproved: false,
+        approvedBy: null,
+      });
+      expect(saved.canAutoSend).toBe(false);
+      expect(saved.eligibilityReason).toBe(
+        'FAIL_CLOSED: no backend consent record',
+      );
+    });
+
+    it('12. Transitions draft to APPROVED via approveDraft with actor audit and unlocks canAutoSend', async () => {
+      const salesActor = {
+        id: 'sales-owner-1',
+        email: 'owner@example.com',
+        name: 'Sales Owner',
+        role: UserRole.SALES,
+      } as AuthenticatedUser;
+      const draftRecord = {
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'DRAFT',
+        draftContent:
+          'Dear customer, your contract CTR-2026-100 is scheduled for renewal.',
+        validationResult: {
+          grounded: true,
+          consentGranted: false,
+          templateApproved: false,
+          policyApproved: false,
+        },
+      } as unknown as RenewalDraft;
+
+      draftRepo.findOne.mockResolvedValue(draftRecord);
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-100',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        status: 'ACTIVE',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+      customerTaskRepo.find.mockResolvedValue([]);
+
+      const approved = await service.approveDraft(
+        'd-1',
+        {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          comment: 'Legal and customer consent verified',
+        },
+        salesActor,
+      );
+
+      expect(approved.status).toBe('APPROVED');
+      expect(approved.canAutoSend).toBe(true);
+      expect(approved.eligibilityReason).toBe('OK');
+      expect(approved.validationResult).toMatchObject({
+        consentGranted: true,
+        templateApproved: true,
+        policyApproved: true,
+        approvedBy: 'sales-owner-1',
+        attestationEvidence: expect.objectContaining({
+          consentVerifiedFromCustomerId: 'cust-1',
+          consentVerifiedEmail: 'client@acme.example.com',
+          templateVerifiedContractNumber: 'CTR-2026-100',
+        }),
+      });
+      expect(auditLogRepo.save).toHaveBeenCalled();
+    });
+
+    it('12b. Rejects approveDraft when persisted customer is opted-out or draft template is ungrounded despite caller booleans', async () => {
+      const salesActor = {
+        id: 'sales-owner-1',
+        email: 'owner@example.com',
+        name: 'Sales Owner',
+        role: UserRole.SALES,
+      } as AuthenticatedUser;
+
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'DRAFT',
+        draftContent: 'Dear customer, your contract CTR-2026-100 is due.',
+        validationResult: { grounded: true },
+      } as unknown as RenewalDraft);
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-100',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+
+      // Opted-out customer record must reject approval even with consentGranted: true
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        status: 'OPTED_OUT',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+
+      await expect(
+        service.approveDraft(
+          'd-1',
+          {
+            consentGranted: true,
+            templateApproved: true,
+            policyApproved: true,
+          },
+          salesActor,
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      // Active customer, but draft content does not cite contract number -> rejects templateApproved: true
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        status: 'ACTIVE',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+      draftRepo.findOne.mockResolvedValueOnce({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'DRAFT',
+        draftContent: 'Generic renewal email without contract reference.',
+        validationResult: { grounded: true },
+      } as unknown as RenewalDraft);
+
+      await expect(
+        service.approveDraft(
+          'd-1',
+          {
+            consentGranted: true,
+            templateApproved: true,
+            policyApproved: true,
+          },
+          salesActor,
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('13. Enforces Sales actor ownership on contract and draft operations', async () => {
+      const otherSalesActor = {
+        id: 'sales-other-2',
+        email: 'other@example.com',
+        name: 'Other Sales',
+        role: UserRole.SALES,
+      } as AuthenticatedUser;
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-owned-by-1',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-owned-by-1',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+
+      await expect(service.getContract('c-1', otherSalesActor)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('14. Creates an idempotent RENEWAL_APPROVAL CustomerTask and notifies owner when auto-send is blocked', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-500',
+        status: 'ACTIVE',
+        renewalDate: new Date('2026-12-20T00:00:00.000Z'),
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        name: 'Acme Industrial',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'DRAFT',
+        recommendation: 'Propose 1-year renewal',
+      } as unknown as RenewalDraft);
+      customerTaskRepo.findOne.mockResolvedValue(null);
+
+      const res = await service.ensureRenewalApprovalTask({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-1',
+        idempotencyKey: 'approval-task-key-1',
+      });
+
+      expect(res.status).toBe('PENDING_APPROVAL');
+      expect(res.taskStatus).toBe('OPEN');
+      expect(res.taskId).toBe('task-saved-id');
+      expect(customerTaskRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customerId: 'cust-1',
+          taskType: 'RENEWAL_APPROVAL',
+          sourceEntityType: 'CustomerContract',
+          sourceEntityId: 'c-1',
+        }),
+      );
+      expect(notificationsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'sales-owner-1',
+          idempotencyKey: 'approval-task-key-1:notification',
+        }),
+      );
+    });
+
+    it('15. Delivers approved renewal via mailTransportService and fails closed if unapproved', async () => {
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-777',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+
+      // Fail-closed when draft is not approved
+      draftRepo.findOne.mockResolvedValueOnce({
+        id: 'd-unapproved',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'DRAFT',
+        validationResult: {},
+      } as unknown as RenewalDraft);
+
+      await expect(
+        service.sendApprovedRenewal({
+          contractId: 'c-1',
+          customerId: 'cust-1',
+          draftId: 'd-unapproved',
+          idempotencyKey: 'send-blocked-1',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(mailTransportService.sendMail).not.toHaveBeenCalled();
+
+      // Succeeds when draft is approved
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-approved',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'APPROVED',
+        draftContent: 'Dear customer, your renewal proposal is ready.',
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'sales-owner-1',
+        },
+      } as unknown as RenewalDraft);
+
+      const sent = await service.sendApprovedRenewal({
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-approved',
+        idempotencyKey: 'send-ok-1',
+      });
+
+      expect(mailTransportService.sendMail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'client@acme.example.com',
+        }),
+      );
+      expect(sent.status).toBe('SENT');
+      expect(sent.communicationId).toBe('<msg-renewal-1>');
+    });
+
+    it('16. Fails closed and never synthesizes a communicationId when mailTransport is missing or returns no messageId', async () => {
+      const serviceWithoutTransport = new RenewalService(
+        contractRepo,
+        draftRepo,
+        customerRepo,
+        customerTaskRepo,
+        auditLogRepo,
+        notificationsService,
+        undefined,
+      );
+
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-777',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+      draftRepo.findOne.mockResolvedValue({
+        id: 'd-approved',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'APPROVED',
+        draftContent:
+          'Dear customer, your contract CTR-2026-777 renewal proposal is ready.',
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'sales-owner-1',
+        },
+      } as unknown as RenewalDraft);
+
+      const missingTransportResult =
+        await serviceWithoutTransport.sendApprovedRenewal({
+          contractId: 'c-1',
+          customerId: 'cust-1',
+          draftId: 'd-approved',
+          idempotencyKey: 'send-no-transport-1',
+        });
+
+      expect(missingTransportResult.status).toBe('FAILED');
+      expect(missingTransportResult.delivered).toBe(false);
+      expect(missingTransportResult.communicationId).toBeNull();
+    });
+
+    it('17. Prevents duplicate renewal emails on concurrent sendApprovedRenewal calls with atomic PROCESSING claim', async () => {
+      const persistedDraft = {
+        id: 'd-concurrent-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'APPROVED',
+        draftContent:
+          'Dear customer, your contract CTR-2026-777 renewal proposal is ready.',
+        communicationId: null,
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'sales-owner-1',
+        },
+      } as unknown as RenewalDraft;
+
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-777',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+
+      draftRepo.findOne.mockImplementation(() =>
+        Promise.resolve(persistedDraft),
+      );
+      draftRepo.save.mockImplementation((updated) => {
+        Object.assign(persistedDraft, updated);
+        return Promise.resolve(persistedDraft);
+      });
+      mailTransportService.sendMail.mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return { messageId: '<msg-concurrent-once>' };
+      });
+
+      const payload = {
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-concurrent-1',
+        idempotencyKey: 'send-concurrent-key-1',
+      };
+
+      const [first, second] = await Promise.all([
+        service.sendApprovedRenewal(payload),
+        service.sendApprovedRenewal(payload),
+      ]);
+
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
+      expect(first.status).toBe('SENT');
+      expect(first.communicationId).toBe('<msg-concurrent-once>');
+      expect(['PROCESSING', 'SENT']).toContain(second.status);
+      expect(second.idempotencyStatus).toBe('replayed');
+    });
+
+    it('18. Holds delivery in PROCESSING and reconciles stale lease to UNKNOWN without resending when DB ack fails after SMTP accepts', async () => {
+      const persistedDraft = {
+        id: 'd-ack-lost-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'APPROVED',
+        draftContent:
+          'Dear customer, your contract CTR-2026-777 renewal proposal is ready.',
+        communicationId: null,
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'sales-owner-1',
+        },
+      } as unknown as RenewalDraft;
+
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-777',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+
+      draftRepo.findOne.mockImplementation(() =>
+        Promise.resolve(persistedDraft),
+      );
+
+      let saveCallCount = 0;
+      draftRepo.save.mockImplementation((updated) => {
+        saveCallCount += 1;
+        // 1st save is the pre-SMTP PROCESSING claim (succeeds)
+        // 2nd save is the post-SMTP SENT acknowledgement (simulates DB crash)
+        if (saveCallCount === 2) {
+          return Promise.reject(
+            new Error('PostgreSQL connection lost after SMTP acceptance'),
+          );
+        }
+        Object.assign(persistedDraft, updated);
+        return Promise.resolve(persistedDraft);
+      });
+
+      const payload = {
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-ack-lost-1',
+        idempotencyKey: 'send-ack-lost-key-1',
+      };
+
+      await expect(service.sendApprovedRenewal(payload)).rejects.toThrow(
+        'PostgreSQL connection lost after SMTP acceptance',
+      );
+
+      // SMTP was called once, and the durable DB state remained PROCESSING (never reverted to APPROVED)
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
+      expect(persistedDraft.status).toBe('PROCESSING');
+
+      // Immediate retry while lease is active returns PROCESSING without calling SMTP again
+      const activeLeaseRetry = await service.sendApprovedRenewal(payload);
+      expect(activeLeaseRetry.status).toBe('PROCESSING');
+      expect(activeLeaseRetry.delivered).toBe(false);
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
+
+      // Simulate lease expiration (> 2 minutes) and retry: reconciles to UNKNOWN without calling SMTP again
+      const meta = persistedDraft.validationResult as Record<string, unknown>;
+      const claim = meta.deliveryClaim as Record<string, unknown>;
+      claim.startedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+
+      const staleLeaseRetry = await service.sendApprovedRenewal(payload);
+      expect(staleLeaseRetry.status).toBe('UNKNOWN');
+      expect(staleLeaseRetry.delivered).toBe(false);
+      expect(staleLeaseRetry.errorMessage).toBe('DELIVERY_OUTCOME_UNKNOWN');
+      expect(persistedDraft.status).toBe('UNKNOWN');
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
+    });
+
+    it('19. Preserves retryability after a transient SMTP failure (RETRYABLE_FAILURE) and succeeds on subsequent retry', async () => {
+      const persistedDraft = {
+        id: 'd-transient-retry-1',
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        status: 'APPROVED',
+        draftContent:
+          'Dear customer, your contract CTR-2026-777 renewal proposal is ready.',
+        communicationId: null,
+        validationResult: {
+          consentGranted: true,
+          templateApproved: true,
+          policyApproved: true,
+          approvedBy: 'sales-owner-1',
+        },
+      } as unknown as RenewalDraft;
+
+      contractRepo.findOne.mockResolvedValue({
+        id: 'c-1',
+        customerId: 'cust-1',
+        contractNumber: 'CTR-2026-777',
+        status: 'ACTIVE',
+      } as unknown as Contract);
+      customerRepo.findOne.mockResolvedValue({
+        id: 'cust-1',
+        email: 'client@acme.example.com',
+        createdBy: 'sales-owner-1',
+      } as unknown as Customer);
+
+      draftRepo.findOne.mockImplementation(() =>
+        Promise.resolve(persistedDraft),
+      );
+      draftRepo.save.mockImplementation((updated) => {
+        Object.assign(persistedDraft, updated);
+        return Promise.resolve(persistedDraft);
+      });
+
+      mailTransportService.sendMail
+        .mockRejectedValueOnce(
+          Object.assign(new Error('Temporary SMTP connection refused'), {
+            code: 'ECONNREFUSED',
+          }),
+        )
+        .mockResolvedValueOnce({ messageId: '<msg-retry-recovered-1>' });
+
+      const payload = {
+        contractId: 'c-1',
+        customerId: 'cust-1',
+        draftId: 'd-transient-retry-1',
+        idempotencyKey: 'send-transient-retry-key-1',
+      };
+
+      // 1st attempt fails transiently with ECONNREFUSED -> recorded as RETRYABLE_FAILURE
+      const firstAttempt = await service.sendApprovedRenewal(payload);
+      expect(firstAttempt.status).toBe('FAILED');
+      expect(firstAttempt.delivered).toBe(false);
+      expect(persistedDraft.status).toBe('RETRYABLE_FAILURE');
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(1);
+
+      // 2nd attempt (retry with same idempotencyKey) resumes the approved draft and succeeds
+      const secondAttempt = await service.sendApprovedRenewal(payload);
+      expect(secondAttempt.status).toBe('SENT');
+      expect(secondAttempt.delivered).toBe(true);
+      expect(secondAttempt.communicationId).toBe('<msg-retry-recovered-1>');
+      expect(secondAttempt.idempotencyStatus).toBe('replayed');
+      expect(persistedDraft.status).toBe('SENT');
+      expect(mailTransportService.sendMail).toHaveBeenCalledTimes(2);
+    });
+  });
+});
