@@ -116,6 +116,7 @@ export class NotificationsService {
       idempotencyKey
         ? this.notificationRepository.findOne({ where: { idempotencyKey } })
         : Promise.resolve(null);
+
     const reuseExisting = (existing: Notification) => {
       const existingPayload = {
         userId: existing.userId,

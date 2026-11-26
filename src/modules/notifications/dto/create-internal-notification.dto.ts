@@ -12,7 +12,11 @@ import {
 } from '../enums/notification.enum.js';
 
 export class CreateInternalNotificationDto {
-  @ApiPropertyOptional({ description: 'Recipient user UUID', format: 'uuid' })
+  @ApiPropertyOptional({
+    description:
+      'Recipient user UUID. If omitted, will be resolved from lead owner.',
+    format: 'uuid',
+  })
   @IsOptional()
   @IsUUID('4')
   userId?: string;

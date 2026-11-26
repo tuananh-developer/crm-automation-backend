@@ -115,6 +115,7 @@ describe('LeadsService', () => {
     jobTitle: 'VP Sales',
     companySize: 50,
     industry: 'Technology',
+    isStrategic: false,
     status: null,
     createdBy: 'user-123',
     updatedBy: null,

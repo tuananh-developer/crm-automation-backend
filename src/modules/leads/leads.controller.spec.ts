@@ -96,6 +96,13 @@ describe('LeadsController', () => {
     expect(result).toEqual(mockLead);
   });
 
+  it('should call service.findOneInternal with id', async () => {
+    const result = await controller.findOneInternal('lead-123');
+
+    expect(service.findOneInternal).toHaveBeenCalledWith('lead-123');
+    expect(result).toEqual(mockLead);
+  });
+
   it('should call service.update with id and dto', async () => {
     const dto = { firstName: 'Jane' };
     const result = await controller.update('lead-123', dto, actor);

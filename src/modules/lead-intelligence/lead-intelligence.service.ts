@@ -21,7 +21,6 @@ import { ReviewTask } from '../review/entities/review-task.entity.js';
 import { Notification } from '../notifications/entities/notification.entity.js';
 import { LeadStatus } from '../leads/enums/lead.enum.js';
 import { UserRole } from '../users/enums/user.enum.js';
-import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   EnrichmentStatus,
   QualificationStatus,
@@ -31,9 +30,12 @@ import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
 import { ReviewStatus } from '../review/enums/review.enum.js';
 import { RabbitMQService } from '../../infrastructure/rabbitmq/rabbitmq.service.js';
 import { CRM_EVENTS } from '../../infrastructure/rabbitmq/rabbitmq.constants.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   computeScoreLabel,
   EnrichmentCallbackDto,
+  EvaluateScoringPolicyDto,
+  EvaluateScoringPolicyResponseDto,
   QualificationCallbackDto,
   ScoringCallbackDto,
   TriggerEnrichmentDto,
@@ -47,6 +49,50 @@ import type { EnsureQualificationReviewerNotificationDto } from './dto/ensure-qu
 
 export const CONFIDENCE_THRESHOLD = 0.8;
 export const DEFAULT_ENRICHMENT_PROVIDER = 'mock';
+
+/**
+ * Evaluates whether a job title represents executive / buying decision authority.
+ * Explicitly excludes individual contributor / team-lead titles (e.g. "Team Lead", "Lead Developer").
+ */
+export function isExecutiveDecisionMakerTitle(rawTitle: unknown): boolean {
+  if (typeof rawTitle !== 'string') return false;
+  const normalized = rawTitle.trim().toLowerCase();
+  if (!normalized) return false;
+
+  const nonExecutiveLeadPattern =
+    /\b(team lead|tech lead|technical lead|lead developer|lead engineer|qa lead|test lead|support lead|design lead|project lead|shift lead|squad lead|module lead|chapter lead)\b/i;
+  if (nonExecutiveLeadPattern.test(normalized)) {
+    return false;
+  }
+
+  if (/\b(ceo|cto|cfo|coo|cmo|cio|ciso|cro|cpo)\b/i.test(normalized)) {
+    return true;
+  }
+
+  const executivePatterns = [
+    /\bchief\b/i,
+    /\bvice president\b/i,
+    /\bvp\b/i,
+    /\bsvp\b/i,
+    /\bevp\b/i,
+    /\bpresident\b/i,
+    /\bdirector\b/i,
+    /\bfounder\b/i,
+    /\bco-founder\b/i,
+    /\bcofounder\b/i,
+    /\bowner\b/i,
+    /\bmanaging partner\b/i,
+    /\bgeneral manager\b/i,
+    /\bhead of\b/i,
+    /\bcountry manager\b/i,
+    /\bgiám đốc\b/i,
+    /\bchủ tịch\b/i,
+    /\btrưởng ban\b/i,
+    /\btrưởng phòng\b/i,
+  ];
+
+  return executivePatterns.some((pattern) => pattern.test(normalized));
+}
 
 @Injectable()
 export class LeadIntelligenceService {
@@ -1252,13 +1298,7 @@ export class LeadIntelligenceService {
     interactions: Interaction[];
     scoringFeatures: Record<string, any>;
   }> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
-    if (actor) {
-      this.assertLeadAccess(lead, actor);
-    }
+    const lead = await this.assertLeadAccessById(leadId, actor);
 
     const [qualification, enrichment, interactions] = await Promise.all([
       this.getLatestQualification(leadId, actor),
@@ -1278,12 +1318,7 @@ export class LeadIntelligenceService {
     const industry = enrichment?.companyIndustry || lead.industry || null;
     const jobTitle = enrichment?.contactJobTitle || lead.jobTitle || '';
 
-    const isDecisionMaker = Boolean(
-      jobTitle &&
-      /c[etom]o|founder|co-founder|owner|president|vp|vice president|director|head|manager|lead/i.test(
-        jobTitle,
-      ),
-    );
+    const isDecisionMaker = isExecutiveDecisionMakerTitle(jobTitle);
 
     const safeInteractions = Array.isArray(interactions) ? interactions : [];
     const now = Date.now();
@@ -1406,6 +1441,213 @@ export class LeadIntelligenceService {
   }
 
   /**
+   * Evaluates the canonical lead scoring policy (UC04).
+   * Correlates the WorkflowRun to the target Lead and 'lead-scoring' workflow,
+   * rejects cross-lead context tampering, and derives all feature points strictly
+   * from server-side canonical records.
+   */
+  async evaluateScoringPolicy(
+    dto: EvaluateScoringPolicyDto,
+  ): Promise<EvaluateScoringPolicyResponseDto> {
+    const workflowRun = await this.workflowRunsRepository.findOne({
+      where: { id: dto.workflowRunId },
+    });
+    if (!workflowRun) {
+      throw new NotFoundException(
+        `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+      );
+    }
+    this.assertCallbackRunScope(workflowRun, dto.leadId, 'lead-scoring');
+    this.assertCallbackRunActive(workflowRun);
+
+    const enrichObj =
+      typeof dto.enrich === 'object' && dto.enrich !== null
+        ? dto.enrich
+        : undefined;
+    const leadObj =
+      typeof dto.lead === 'object' && dto.lead !== null ? dto.lead : undefined;
+    const qualObj =
+      typeof dto.qual === 'object' && dto.qual !== null ? dto.qual : undefined;
+
+    if (
+      leadObj &&
+      typeof leadObj['id'] === 'string' &&
+      leadObj['id'].trim() !== '' &&
+      leadObj['id'] !== dto.leadId
+    ) {
+      throw new BadRequestException(
+        `Supplied lead context id '${leadObj['id']}' does not match dto.leadId '${dto.leadId}'`,
+      );
+    }
+    if (
+      qualObj &&
+      typeof qualObj['leadId'] === 'string' &&
+      qualObj['leadId'].trim() !== '' &&
+      qualObj['leadId'] !== dto.leadId
+    ) {
+      throw new BadRequestException(
+        `Supplied qualification context leadId '${qualObj['leadId']}' does not match dto.leadId '${dto.leadId}'`,
+      );
+    }
+    if (
+      enrichObj &&
+      typeof enrichObj['leadId'] === 'string' &&
+      enrichObj['leadId'].trim() !== '' &&
+      enrichObj['leadId'] !== dto.leadId
+    ) {
+      throw new BadRequestException(
+        `Supplied enrichment context leadId '${enrichObj['leadId']}' does not match dto.leadId '${dto.leadId}'`,
+      );
+    }
+    if (Array.isArray(dto.interactions)) {
+      for (const item of dto.interactions) {
+        if (
+          typeof item === 'object' &&
+          item !== null &&
+          'leadId' in item &&
+          typeof (item as Record<string, unknown>)['leadId'] === 'string' &&
+          String((item as Record<string, unknown>)['leadId']).trim() !== '' &&
+          (item as Record<string, unknown>)['leadId'] !== dto.leadId
+        ) {
+          throw new BadRequestException(
+            `Supplied interaction context leadId '${String((item as Record<string, unknown>)['leadId'])}' does not match dto.leadId '${dto.leadId}'`,
+          );
+        }
+      }
+    }
+
+    const canonicalContext = await this.getScoringContext(dto.leadId);
+    const canonicalLead = canonicalContext.lead;
+    const canonicalQual = canonicalContext.qualification;
+    const canonicalEnrich = canonicalContext.enrichment;
+    const canonicalInteractions = Array.isArray(canonicalContext.interactions)
+      ? canonicalContext.interactions
+      : [];
+
+    const baseScore = 20;
+
+    // 1. Profile Fit Points (0..20)
+    let profileFitPoints = 0;
+    const rawCompanySize =
+      canonicalEnrich?.companySize ?? canonicalLead.companySize;
+    const companySize =
+      typeof rawCompanySize === 'number' &&
+      Number.isFinite(rawCompanySize) &&
+      rawCompanySize >= 0
+        ? rawCompanySize
+        : undefined;
+    const hasCompanyName =
+      (typeof canonicalEnrich?.companyName === 'string' &&
+        canonicalEnrich.companyName.trim().length > 0) ||
+      (typeof canonicalLead.companyName === 'string' &&
+        canonicalLead.companyName.trim().length > 0);
+
+    if (typeof companySize === 'number') {
+      if (companySize >= 100) profileFitPoints = 20;
+      else if (companySize >= 20) profileFitPoints = 15;
+      else if (companySize >= 5) profileFitPoints = 10;
+      else profileFitPoints = 5;
+    } else if (hasCompanyName) {
+      profileFitPoints = 10;
+    }
+
+    // 2. Decision Maker Points (0..20)
+    let decisionMakerPoints = 0;
+    const rawJobTitle =
+      canonicalEnrich?.contactJobTitle ?? canonicalLead.jobTitle;
+    const normalizedJobTitle =
+      typeof rawJobTitle === 'string' ? rawJobTitle.trim() : '';
+    if (isExecutiveDecisionMakerTitle(normalizedJobTitle)) {
+      decisionMakerPoints = 20;
+    } else if (normalizedJobTitle.length > 0) {
+      decisionMakerPoints = 10;
+    }
+
+    // 3. Qualification Points (-20..25)
+    let qualificationPoints = 0;
+    if (canonicalQual?.status === QualificationStatus.QUALIFIED) {
+      const parsedConf =
+        canonicalQual.confidence !== undefined &&
+        canonicalQual.confidence !== null
+          ? Number(canonicalQual.confidence)
+          : 0.85;
+      const rawConf = Number.isFinite(parsedConf) ? parsedConf : 0.85;
+      const clampedConf = Math.max(0, Math.min(1, rawConf));
+      qualificationPoints = Math.round(clampedConf * 25);
+    } else if (canonicalQual?.status === QualificationStatus.DISQUALIFIED) {
+      qualificationPoints = -20;
+    } else if (canonicalQual?.status === QualificationStatus.NEEDS_REVIEW) {
+      qualificationPoints = 10;
+    }
+
+    // 4. Engagement Points (0..25)
+    const engagementPoints = Math.min(25, canonicalInteractions.length * 8);
+
+    // 5. Enrichment Bonus (0..10)
+    const enrichmentBonus =
+      canonicalEnrich?.status === EnrichmentStatus.SUCCESS ? 10 : 0;
+
+    const calculatedTotal =
+      baseScore +
+      profileFitPoints +
+      decisionMakerPoints +
+      qualificationPoints +
+      engagementPoints +
+      enrichmentBonus;
+
+    const canonicalScore = Math.max(
+      0,
+      Math.min(100, Math.round(calculatedTotal)),
+    );
+    const label = computeScoreLabel(canonicalScore);
+    const policyVersion = '1.0';
+
+    let reason: string;
+    if (label === ScoreLabel.HOT) {
+      reason = `[Canonical Policy - HOT ${canonicalScore}/100] High intent, executive decision authority, strong qualification, and verified profile fit.`;
+    } else if (label === ScoreLabel.WARM) {
+      reason = `[Canonical Policy - WARM ${canonicalScore}/100] Moderate engagement, reasonable profile fit, and active qualification signals.`;
+    } else {
+      reason = `[Canonical Policy - COLD ${canonicalScore}/100] Low engagement or incomplete business profile.`;
+    }
+
+    const breakdown: Record<string, number> = {
+      baseScore,
+      profileFitPoints,
+      decisionMakerPoints,
+      qualificationPoints,
+      engagementPoints,
+      enrichmentBonus,
+    };
+
+    const scoringFeatures: Record<string, unknown> = {
+      ...breakdown,
+      hasCompanyName,
+      companySize: companySize ?? null,
+      jobTitle: normalizedJobTitle || null,
+      isDecisionMaker: decisionMakerPoints === 20,
+      qualificationStatus: canonicalQual?.status ?? null,
+      enrichmentStatus: canonicalEnrich?.status ?? null,
+      interactionCount: canonicalInteractions.length,
+      ...(dto.contextAudit ? { contextAudit: dto.contextAudit } : {}),
+    };
+
+    return {
+      score: canonicalScore,
+      label,
+      policyVersion,
+      reason,
+      breakdown,
+      scoringFeatures,
+      modelInfo: {
+        provider: 'crm-scoring-policy',
+        model: 'deterministic-scoring-v1',
+        modelVersion: policyVersion,
+      },
+    };
+  }
+
+  /**
    * Trigger the AI lead scoring workflow:
    *  1. Aggregate comprehensive scoring context (Lead, latest Qualification, latest Enrichment, Interactions).
    *  2. Create a WorkflowRun record with status PENDING.
@@ -1416,14 +1658,7 @@ export class LeadIntelligenceService {
     dto?: TriggerScoringDto,
     actor?: AuthenticatedUser,
   ): Promise<TriggerScoringResponseDto> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
-
-    if (actor) {
-      this.assertLeadAccess(lead, actor);
-    }
+    const lead = await this.assertLeadAccessById(leadId, actor);
 
     const context = await this.getScoringContext(leadId, actor);
 
@@ -1477,7 +1712,7 @@ export class LeadIntelligenceService {
       occurredAt: i.occurredAt,
     }));
 
-    // 1. Create WorkflowRun
+    // 1. Create WorkflowRun (never trust caller-supplied dto.userId for audit attribution)
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 'lead-scoring',
       leadId: lead.id,
@@ -1558,60 +1793,105 @@ export class LeadIntelligenceService {
     score: LeadScore | null;
     workflowRunUpdated: boolean;
   }> {
-    const lead = await this.leadsRepository.findOne({
-      where: { id: dto.leadId },
-    });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
+    if (!dto.workflowRunId || !dto.workflowRunId.trim()) {
+      throw new BadRequestException(
+        'workflowRunId is required for scoring callback correlation',
+      );
     }
 
-    // ── Idempotency Check ───────────────────────────────────────────────────
-    const existingRun = await this.workflowRunsRepository.findOne({
-      where: {
-        id: dto.workflowRunId,
-        leadId: dto.leadId,
-        workflowName: 'lead-scoring',
-      },
-    });
-    this.assertCallbackRunScope(existingRun, lead.id, 'lead-scoring');
-    const existingScore = await this.scoresRepository.findOne({
-      where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
-    });
-
-    if (this.isTerminalWorkflowStatus(existingRun.status)) {
-      if (existingScore) {
-        this.logger.warn(
-          `Idempotent duplicate callback detected for workflowRunId=${dto.workflowRunId}. Returning existing score.`,
-        );
-        return { score: existingScore, workflowRunUpdated: false };
-      }
+    if (
+      dto.status !== undefined &&
+      dto.status !== 'SUCCESS' &&
+      dto.status !== 'FAILED'
+    ) {
+      throw new BadRequestException(
+        `Invalid scoring callback status '${String(dto.status)}'. Expected 'SUCCESS' or 'FAILED'`,
+      );
     }
-    this.assertCallbackRunActive(existingRun);
 
     const isFailure = dto.status === 'FAILED';
 
     const processScoring = async (repos: {
+      leadRepo: Repository<Lead>;
       scoresRepo: Repository<LeadScore>;
       workflowRunRepo: Repository<WorkflowRun>;
     }) => {
+      // 1. Lock WorkflowRun with pessimistic_write
       const workflowRun = await repos.workflowRunRepo.findOne({
-        where: {
-          id: dto.workflowRunId,
-          leadId: dto.leadId,
-          workflowName: 'lead-scoring',
-        },
+        where: { id: dto.workflowRunId },
         lock: { mode: 'pessimistic_write' },
       });
-      this.assertCallbackRunScope(workflowRun, lead.id, 'lead-scoring');
-
-      if (this.isTerminalWorkflowStatus(workflowRun.status)) {
-        const completedScore = await repos.scoresRepo.findOne({
-          where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
-        });
-        if (completedScore) {
-          return { score: completedScore, workflowRunUpdated: false };
-        }
+      if (!workflowRun) {
+        throw new NotFoundException(
+          `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+        );
       }
+      this.assertCallbackRunScope(workflowRun, dto.leadId, 'lead-scoring');
+
+      // 2. Lock Lead with pessimistic_write
+      const lead = await repos.leadRepo.findOne({
+        where: { id: dto.leadId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!lead) {
+        throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
+      }
+
+      const existingScore = await repos.scoresRepo.findOne({
+        where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      const targetRunStatus = isFailure
+        ? WorkflowStatus.FAILED
+        : WorkflowStatus.SUCCESS;
+
+      // 3. Terminal State & Idempotency Check inside transaction
+      if (this.isTerminalWorkflowStatus(workflowRun.status)) {
+        if (workflowRun.status === targetRunStatus) {
+          if (isFailure) {
+            if (
+              dto.errorMessage &&
+              workflowRun.errorMessage &&
+              dto.errorMessage.trim() !== workflowRun.errorMessage.trim()
+            ) {
+              throw new ConflictException(
+                `Conflict: WorkflowRun '${workflowRun.id}' already failed with a conflicting error message`,
+              );
+            }
+            this.logger.warn(
+              `Idempotent duplicate callback detected for failed workflowRunId=${dto.workflowRunId}. Returning null score.`,
+            );
+            return { score: null, workflowRunUpdated: false };
+          } else {
+            if (existingScore) {
+              const rawScore = dto.score ?? 0;
+              const normalizedScore = Math.max(
+                0,
+                Math.min(100, Math.round(Number(rawScore) * 100) / 100),
+              );
+              if (
+                dto.score !== undefined &&
+                normalizedScore !== Number(existingScore.score)
+              ) {
+                throw new ConflictException(
+                  `Conflict: WorkflowRun '${workflowRun.id}' already scored with '${existingScore.score}', conflicting with '${normalizedScore}'`,
+                );
+              }
+              this.logger.warn(
+                `Idempotent duplicate callback detected for workflowRunId=${dto.workflowRunId}. Returning existing score.`,
+              );
+              return { score: existingScore, workflowRunUpdated: false };
+            }
+          }
+        }
+
+        throw new ConflictException(
+          `Conflict: WorkflowRun '${workflowRun.id}' is already in terminal state '${workflowRun.status}' and cannot transition to '${targetRunStatus}'`,
+        );
+      }
+
+      // 4. Active check: must be in PENDING or RUNNING
       this.assertCallbackRunActive(workflowRun);
 
       if (isFailure) {
@@ -1632,7 +1912,7 @@ export class LeadIntelligenceService {
         0,
         Math.min(100, Math.round(Number(rawScore) * 100) / 100),
       );
-      const label = dto.label || computeScoreLabel(normalizedScore);
+      const label = computeScoreLabel(normalizedScore);
 
       const modelInfoObj =
         typeof dto.modelInfo === 'object' && dto.modelInfo !== null
@@ -1651,9 +1931,14 @@ export class LeadIntelligenceService {
           : null);
       const modelVersion =
         dto.modelVersion ||
+        (modelInfoObj && typeof modelInfoObj.modelVersion === 'string'
+          ? modelInfoObj.modelVersion
+          : null) ||
         (modelInfoObj && typeof modelInfoObj.version === 'string'
           ? modelInfoObj.version
-          : null);
+          : null) ||
+        dto.policyVersion ||
+        null;
 
       const snapshotObj =
         typeof dto.inputOutputSnapshot === 'object' &&
@@ -1714,6 +1999,7 @@ export class LeadIntelligenceService {
     if (this.dataSource) {
       return await this.dataSource.transaction(async (manager) => {
         return processScoring({
+          leadRepo: manager.getRepository(Lead),
           scoresRepo: manager.getRepository(LeadScore),
           workflowRunRepo: manager.getRepository(WorkflowRun),
         });
@@ -1721,6 +2007,7 @@ export class LeadIntelligenceService {
     }
 
     return await processScoring({
+      leadRepo: this.leadsRepository,
       scoresRepo: this.scoresRepository,
       workflowRunRepo: this.workflowRunsRepository,
     });

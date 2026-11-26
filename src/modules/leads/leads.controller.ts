@@ -99,18 +99,15 @@ export class LeadsController {
   @Public()
   @UseGuards(N8nAuthGuard)
   @ApiOperation({
-    summary: 'Internal service read of lead details for n8n workflows',
+    summary: 'Internal endpoint to get lead profile for n8n workflows',
   })
   @ApiParam({ name: 'id', description: 'UUID of the lead' })
   @ApiResponse({
     status: 200,
-    description: 'Lead found.',
+    description: 'Lead profile returned successfully.',
     type: LeadResponseDto,
   })
-  @ApiResponse({
-    status: 401,
-    description: 'Unauthorized internal service request.',
-  })
+  @ApiResponse({ status: 401, description: 'Unauthorized n8n request.' })
   @ApiResponse({ status: 404, description: 'Lead not found.' })
   async findOneInternal(
     @Param('id', ParseUUIDPipe) id: string,

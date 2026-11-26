@@ -376,7 +376,6 @@ describe('SequencesService', () => {
       expect(executionsRepo.create).not.toHaveBeenCalled();
     });
 
-
     it('should throw NotFoundException if lead does not exist', async () => {
       (leadsRepo.findOne as jest.Mock).mockResolvedValue(null);
 
@@ -497,8 +496,7 @@ describe('SequencesService', () => {
         getRepository: jest.fn().mockImplementation((entity) => {
           if (
             entity &&
-            (entity as { name?: string }).name ===
-              'LeadFollowUpEnrollment'
+            (entity as { name?: string }).name === 'LeadFollowUpEnrollment'
           ) {
             return mockEnrollRepo;
           }
@@ -671,6 +669,28 @@ describe('SequencesService', () => {
       expect(result.cancelledAt).toBeInstanceOf(Date);
       expect(activeEnrollmentWithExecutions.executions[0].status).toBe(
         ExecutionStatus.SKIPPED,
+      );
+    });
+  });
+
+  describe('findAllEnrollments authorization', () => {
+    it('enforces both convertedCustomerId and lead.ownerId for SALES actor when customerId is provided', async () => {
+      (enrollmentsRepo.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findAllEnrollments(
+        { customerId: 'cust-unowned-999' },
+        actor,
+      );
+
+      expect(enrollmentsRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            lead: {
+              convertedCustomerId: 'cust-unowned-999',
+              ownerId: actor.id,
+            },
+          },
+        }),
       );
     });
   });
