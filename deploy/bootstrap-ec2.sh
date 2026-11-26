@@ -30,7 +30,7 @@ docker info >/dev/null 2>&1 || {
   exit 1
 }
 
-for required_file in "$COMPOSE_FILE" "$DEPLOY_DIR/Caddyfile" "$DEPLOY_DIR/check-env.sh" "$DEPLOY_DIR/rabbitmq/definitions.json"; do
+for required_file in "$COMPOSE_FILE" "$DEPLOY_DIR/Caddyfile" "$DEPLOY_DIR/check-env.sh" "$DEPLOY_DIR/configure-tailscale-serve.sh" "$DEPLOY_DIR/rabbitmq/definitions.json"; do
   [[ -s "$required_file" ]] || {
     echo "Deployment bundle is incomplete: $required_file" >&2
     exit 1
@@ -192,7 +192,7 @@ set_env_value() {
   if grep -qE "^${key}=" "$ENV_FILE"; then
     sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
   else
-    printf '\\n%s=%s\\n' "$key" "$value" >> "$ENV_FILE"
+    printf '\n%s=%s\n' "$key" "$value" >> "$ENV_FILE"
   fi
 }
 
