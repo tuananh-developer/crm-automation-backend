@@ -35,7 +35,7 @@ The n8n editor and webhook URLs intentionally use different hostnames. This foll
 - Docker Engine and Docker Compose v2.
 - SSM Agent online in Systems Manager and an instance profile with `AmazonSSMManagedInstanceCore`.
 - Tailscale installed by the bootstrap script, with the EC2 device authorized in your tailnet.
-- Tailscale Serve and HTTPS certificates enabled for your tailnet in the Tailscale admin console.
+- Tailscale MagicDNS and HTTPS certificates / Serve enabled for your tailnet in the Tailscale admin console.
 - Outbound HTTPS access to AWS Systems Manager, Docker Hub, Tailscale, and Neon.
 - Security Group inbound TCP 80 and 443 only. Do not expose 3000, 5672, 15672, 5678, or 5432. Prefer no public SSH rule; use SSM or Tailscale SSH if needed.
 - Use an Elastic IP if using `nip.io` for the public API and webhook hostnames.
