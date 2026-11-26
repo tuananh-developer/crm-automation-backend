@@ -148,5 +148,6 @@ jobs:
           docker run --rm -v "$RUNNER_TEMP/deploy-target:/target" crm-automation-deploy-config:ci
           test -s "$RUNNER_TEMP/deploy-target/deploy/compose.production.yml"
           test -s "$RUNNER_TEMP/deploy-target/deploy/bootstrap-ec2.sh"
+          test -s "$RUNNER_TEMP/deploy-target/deploy/configure-tailscale-serve.sh"
           test -s "$RUNNER_TEMP/deploy-target/deploy/.env.production"
           test -s "$RUNNER_TEMP/deploy-target/deploy/rabbitmq/definitions.json"
