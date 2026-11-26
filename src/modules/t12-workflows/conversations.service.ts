@@ -196,6 +196,7 @@ export class ConversationsService {
   async createTranscript(
     dto: CreateTranscriptDto,
     user: AuthenticatedUser,
+    headerIdempotencyKey?: string,
   ): Promise<IngestTranscriptResult> {
     const rawContent = dto.rawTranscript || dto.content;
     if (!rawContent || !rawContent.trim()) {
@@ -210,29 +211,79 @@ export class ConversationsService {
 
     await this.validateEntityAccess(user, dto.customerId, dto.leadId);
 
+    const bodyIdempotencyKey =
+      dto.idempotencyKey !== undefined ? dto.idempotencyKey.trim() : undefined;
+    if (dto.idempotencyKey !== undefined && !bodyIdempotencyKey) {
+      throw new BadRequestException('idempotencyKey cannot be empty');
+    }
+
+    const headerKey =
+      headerIdempotencyKey !== undefined
+        ? headerIdempotencyKey.trim()
+        : undefined;
+    if (headerIdempotencyKey !== undefined && !headerKey) {
+      throw new BadRequestException('Idempotency-Key header cannot be empty');
+    }
+
+    if (bodyIdempotencyKey && headerKey && bodyIdempotencyKey !== headerKey) {
+      throw new BadRequestException(
+        'Conflicting Idempotency-Key header and body idempotencyKey',
+      );
+    }
+
+    const sourceEventId =
+      dto.sourceEventId !== undefined ? dto.sourceEventId.trim() : undefined;
+    if (dto.sourceEventId !== undefined && !sourceEventId) {
+      throw new BadRequestException('sourceEventId cannot be empty');
+    }
+
+    const explicitIdempotencyKey = bodyIdempotencyKey || headerKey;
+    if (explicitIdempotencyKey && explicitIdempotencyKey.length > 120) {
+      throw new BadRequestException(
+        'idempotencyKey must be at most 120 characters',
+      );
+    }
+    if (sourceEventId && sourceEventId.length > 120) {
+      throw new BadRequestException(
+        'sourceEventId must be at most 120 characters',
+      );
+    }
+
+    if (!dto.meetingId && !explicitIdempotencyKey && !sourceEventId) {
+      throw new BadRequestException(
+        'Either meetingId, sourceEventId, or idempotencyKey must be provided',
+      );
+    }
+
     const safeTranscript = this.redactSensitiveContent(rawContent);
     const contentHash = createHash('sha256')
       .update(safeTranscript)
       .digest('hex');
 
-    // Deterministic client key: prefer explicitly passed key; fallback hashes all scoped dimensions (meetingId, customerId, leadId, sourceType, contentHash) within varchar(180) so distinct entities/channels never collide with 409
-    const scopeDigest = createHash('sha256')
-      .update(
-        JSON.stringify({
-          meetingId: dto.meetingId || null,
-          customerId: dto.customerId || null,
-          leadId: dto.leadId || null,
-          sourceType: dto.sourceType || 'CALL',
-          contentHash,
-        }),
-      )
-      .digest('hex');
-    const scopeKey = `scope:${scopeDigest}`;
-    const clientKey = dto.idempotencyKey?.trim() || scopeKey;
+    let clientKey: string;
+    if (explicitIdempotencyKey) {
+      clientKey = explicitIdempotencyKey;
+    } else if (sourceEventId) {
+      clientKey = `event:${sourceEventId}`;
+    } else {
+      const scopeDigest = createHash('sha256')
+        .update(
+          JSON.stringify({
+            meetingId: dto.meetingId,
+            customerId: dto.customerId || null,
+            leadId: dto.leadId || null,
+            sourceType: dto.sourceType || 'CALL',
+            contentHash,
+          }),
+        )
+        .digest('hex');
+      clientKey = `scope:${scopeDigest}`;
+    }
     const idempotencyKey = `wf09:${user.id}:${clientKey}`;
 
     const inputPayload = {
       meetingId: dto.meetingId || null,
+      ...(sourceEventId ? { sourceEventId } : {}),
       sourceType: dto.sourceType || 'CALL',
       customerId: dto.customerId || null,
       leadId: dto.leadId || null,

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -52,11 +53,21 @@ export class ConversationsController {
     status: 202,
     description: 'Transcript accepted for AI summarization.',
   })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Missing required meetingId or caller-supplied sourceEventId/idempotencyKey, or invalid transcript payload.',
+  })
   async createTranscript(
     @Body() dto: CreateTranscriptDto,
     @CurrentUser() user: AuthenticatedUser,
+    @Headers('idempotency-key') headerIdempotencyKey?: string,
   ) {
-    return this.conversationsService.createTranscript(dto, user);
+    return this.conversationsService.createTranscript(
+      dto,
+      user,
+      headerIdempotencyKey,
+    );
   }
 
   @Get('conversation-transcripts/:transcriptId')

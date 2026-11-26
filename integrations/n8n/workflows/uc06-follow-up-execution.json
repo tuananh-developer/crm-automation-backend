@@ -1,12 +1,19 @@
 {
-  "name": "UC06 - Execute Follow-up",
+  "name": "T12-WF04 — AI CRM Follow-up Agent",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
         "path": "follow-up-execute",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_AFTER_IMPORT",
+          "name": "CRM Internal Webhook Header"
+        }
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
@@ -15,8 +22,21 @@
         0
       ],
       "id": "88fa4747-222d-45e6-b3d9-caede6d02917",
-      "name": "Webhook",
+      "name": "Webhook Trigger",
       "webhookId": "fa563d88-5c20-42de-95d9-ef612680bd3f"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json || {};\nconst headers = item.headers || {};\nconst body = item.body && typeof item.body === 'object' ? item.body : item;\n\nconst expectedKey =\n  typeof $env !== 'undefined' && $env\n    ? $env.N8N_API_KEY || $env.N8N_WEBHOOK_SECRET || ''\n    : '';\nconst providedKey =\n  headers['x-n8n-api-key'] ||\n  headers['X-N8N-API-KEY'] ||\n  '';\n\nconst executionId = typeof body.executionId === 'string' ? body.executionId.trim() : '';\nconst enrollmentId = typeof body.enrollmentId === 'string' ? body.enrollmentId.trim() : '';\nconst stepId = typeof body.stepId === 'string' ? body.stepId.trim() : '';\nconst correlationId =\n  (typeof headers['x-correlation-id'] === 'string' && headers['x-correlation-id'].trim()) ||\n  (typeof body.correlationId === 'string' && body.correlationId.trim()) ||\n  executionId ||\n  null;\n\nconst errors = [];\nif (expectedKey && (!providedKey || providedKey !== expectedKey)) {\n  errors.push('Invalid follow-up webhook credentials');\n}\nif (!executionId) {\n  errors.push('Missing executionId');\n}\nif (!enrollmentId) {\n  errors.push('Missing enrollmentId');\n}\nif (!stepId) {\n  errors.push('Missing stepId');\n}\n\nconst isUnauthorized = errors.includes('Invalid follow-up webhook credentials');\n\nreturn [\n  {\n    json: {\n      isValidRequest: errors.length === 0,\n      statusCode: isUnauthorized ? 401 : errors.length > 0 ? 400 : 200,\n      validationError:\n        errors.length > 0\n          ? errors.join('; ')\n          : null,\n      executionId: executionId || null,\n      enrollmentId: enrollmentId || null,\n      stepId: stepId || null,\n      correlationId,\n      validatedAt: new Date().toISOString()\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "id": "b14a7901-84c6-45a2-993a-1b42c0d39a02",
+      "name": "Code: Validate Execution Request"
     },
     {
       "parameters": {
@@ -25,35 +45,16 @@
             "caseSensitive": true,
             "leftValue": "",
             "typeValidation": "strict",
-            "version": 3
+            "version": 2
           },
           "conditions": [
             {
               "id": "8a261f3b-b79a-4d73-86c9-5f5d5c6b8c01",
-              "leftValue": "={{ $json.body.executionId }}",
-              "rightValue": "",
+              "leftValue": "={{ $json.isValidRequest }}",
+              "rightValue": true,
               "operator": {
-                "type": "string",
-                "operation": "notEmpty",
-                "singleValue": true
-              }
-            },
-            {
-              "id": "0ca85dd8-6155-4e4c-8ff5-4d75a0f4d62e",
-              "leftValue": "={{ $json.headers['x-n8n-api-key'] }}",
-              "rightValue": "={{ $env.N8N_API_KEY || $env.N8N_WEBHOOK_SECRET }}",
-              "operator": {
-                "type": "string",
-                "operation": "equals"
-              }
-            },
-            {
-              "id": "a60f45a2-f0c5-40df-976f-d1665b020d7d",
-              "leftValue": "={{ $json.headers['x-n8n-api-key'] }}",
-              "rightValue": "",
-              "operator": {
-                "type": "string",
-                "operation": "notEmpty",
+                "type": "boolean",
+                "operation": "true",
                 "singleValue": true
               }
             }
@@ -63,18 +64,48 @@
         "options": {}
       },
       "type": "n8n-nodes-base.if",
-      "typeVersion": 2.3,
+      "typeVersion": 2.2,
       "position": [
-        224,
+        440,
         0
       ],
       "id": "934f0779-edfd-4b59-a534-580394c13f6d",
-      "name": "Validate Input"
+      "name": "IF: Valid Execution Request"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  success: false,\n  error: $json.validationError || 'Invalid follow-up webhook credentials or request',\n  statusCode: Number($json.statusCode || 401),\n  retryable: false,\n  executionId: $json.executionId || null,\n  enrollmentId: $json.enrollmentId || null,\n  stepId: $json.stepId || null,\n  deliveryStatus: 'PERMANENT_FAILURE'\n}) }}",
+        "options": {
+          "responseCode": "={{ Number($json.statusCode || 401) }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        180
+      ],
+      "id": "c6f389e6-5aa3-4818-9d73-ecf9b0d4a27a",
+      "name": "Respond: Reject Invalid Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "const req = $input.first().json;\n// Enforce PR #72 boundary: n8n forwards only the persisted execution identity.\n// Recipient, subject and rendered template content remain authoritative in NestJS.\nreturn [\n  {\n    json: {\n      executionId: req.executionId,\n      enrollmentId: req.enrollmentId,\n      stepId: req.stepId,\n      idempotencyKey: req.executionId,\n      correlationId: req.correlationId || req.executionId,\n      dispatchedAt: new Date().toISOString()\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -60
+      ],
+      "id": "c450d3e2-71c8-4c11-8327-68b7a5f9b105",
+      "name": "Code: Prepare Idempotent Send Handoff"
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000').replace(/\\/+$/, '') + '/api/v1/internal/communication/follow-ups/' + $json.body.executionId + '/send' }}",
+        "url": "={{ ($env.BACKEND_INTERNAL_URL || 'http://host.docker.internal:3000').replace(/\\/+$/, '') + '/api/v1/internal/communication/follow-ups/' + $json.executionId + '/send' }}",
         "options": {
           "timeout": 35000,
           "response": {
@@ -96,7 +127,11 @@
             },
             {
               "name": "Idempotency-Key",
-              "value": "={{ $json.body.executionId }}"
+              "value": "={{ $json.idempotencyKey }}"
+            },
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $json.correlationId }}"
             }
           ]
         },
@@ -105,106 +140,240 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
       "position": [
-        500,
-        0
+        900,
+        -60
       ],
       "id": "9d56e7a4-1350-44a2-9b4d-9e6b56c76d01",
-      "name": "Backend Send Email",
+      "name": "HTTP Request: Backend Send Message",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ JSON.stringify($json) }}",
+        "jsCode": "const res = $input.first().json || {};\nconst ctx = $('Code: Prepare Idempotent Send Handoff').first().json;\n\nconst rawStatus = typeof res.deliveryStatus === 'string' ? res.deliveryStatus : (res.success === true ? 'SENT' : 'UNKNOWN');\nconst isSent = res.success === true && rawStatus === 'SENT';\nconst isUnknown = rawStatus === 'UNKNOWN';\nconst isRetryableFailure = rawStatus === 'RETRYABLE_FAILURE';\n\nreturn [\n  {\n    json: {\n      success: isSent,\n      deliveryStatus: rawStatus,\n      providerMessageId: res.providerMessageId ?? null,\n      error: isSent ? null : (res.error || (isUnknown ? 'DELIVERY_OUTCOME_UNKNOWN' : 'Follow-up delivery failed')),\n      retryable: isSent || isUnknown ? false : Boolean(isRetryableFailure || res.retryable === true),\n      idempotencyStatus: res.idempotencyStatus || 'new',\n      statusCode: 200,\n      executionId: ctx.executionId,\n      enrollmentId: ctx.enrollmentId,\n      stepId: ctx.stepId,\n      correlationId: ctx.correlationId\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        -140
+      ],
+      "id": "d821a4b3-90e5-4f12-b871-39f1e2c40707",
+      "name": "Code: Normalize Delivery Result"
+    },
+    {
+      "parameters": {
+        "jsCode": "const err = $input.first().json || {};\nconst ctx = $('Code: Prepare Idempotent Send Handoff').first().json;\n\nconst statusCode = Number(\n  err.error?.status ||\n  err.details?.httpCode ||\n  err.error?.statusCode ||\n  err.statusCode ||\n  502\n);\n\nconst isExplicitRetryableHttp = [408, 423, 425, 429].includes(statusCode);\nconst isAmbiguousServerFailure = statusCode >= 500;\nconst deliveryStatus = isExplicitRetryableHttp\n  ? 'RETRYABLE_FAILURE'\n  : isAmbiguousServerFailure\n    ? 'UNKNOWN'\n    : 'PERMANENT_FAILURE';\n\nreturn [\n  {\n    json: {\n      success: false,\n      deliveryStatus,\n      providerMessageId: null,\n      error:\n        err.error?.message ||\n        err.message ||\n        (isAmbiguousServerFailure ? 'DELIVERY_OUTCOME_UNKNOWN' : 'Follow-up delivery request failed'),\n      retryable: isExplicitRetryableHttp || isAmbiguousServerFailure,\n      idempotencyStatus: 'new',\n      statusCode,\n      executionId: ctx.executionId,\n      enrollmentId: ctx.enrollmentId,\n      stepId: ctx.stepId,\n      correlationId: ctx.correlationId\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        60
+      ],
+      "id": "e732b5c4-12f6-4a23-8912-4af2d3e50808",
+      "name": "Code: Classify Transport Error"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "19f7b2a1-5c3d-4e89-9a12-7b8c9d0e1f23",
+              "leftValue": "={{ $json.success === true && $json.deliveryStatus === 'SENT' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
         "options": {}
       },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1380,
+        -140
+      ],
+      "id": "f193c6d5-23a7-4b34-9a23-5bf3e4f60909",
+      "name": "IF: Delivery Succeeded"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  success: true,\n  deliveryStatus: 'SENT',\n  providerMessageId: $json.providerMessageId ?? null,\n  error: null,\n  retryable: false,\n  idempotencyStatus: $json.idempotencyStatus || 'new',\n  executionId: $json.executionId,\n  enrollmentId: $json.enrollmentId,\n  stepId: $json.stepId,\n  correlationId: $json.correlationId\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
       "position": [
-        896,
-        -96
+        1620,
+        -220
       ],
       "id": "e2ca5292-1eeb-4cc9-abe9-d8933857bf4e",
-      "name": "Respond Success"
+      "name": "Respond: Delivery Sent"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json || {};\nconst isPersistedUnknown =\n  item.deliveryStatus === 'UNKNOWN' && Number(item.statusCode || 200) === 200;\n\nreturn [\n  {\n    json: {\n      success: false,\n      deliveryStatus: item.deliveryStatus || 'FAILED',\n      providerMessageId: item.providerMessageId ?? null,\n      error:\n        item.error ||\n        (item.deliveryStatus === 'UNKNOWN'\n          ? 'DELIVERY_OUTCOME_UNKNOWN'\n          : 'Follow-up delivery request failed'),\n      retryable: isPersistedUnknown ? false : Boolean(item.retryable),\n      idempotencyStatus: item.idempotencyStatus || 'new',\n      statusCode: Number(item.statusCode || 200),\n      executionId: item.executionId || null,\n      enrollmentId: item.enrollmentId || null,\n      stepId: item.stepId || null,\n      correlationId: item.correlationId || null\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1620,
+        20
+      ],
+      "id": "a284d7e6-34b8-4c45-8b34-6cf4f5a71011",
+      "name": "Code: Format Failure or Unknown Outcome"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({\n  success: false,\n  error: $json.error?.message || $json.message || 'Follow-up delivery request failed',\n  statusCode: Number($json.error?.status || $json.details?.httpCode || $json.error?.statusCode || $json.statusCode || 502),\n  retryable: Number($json.error?.status || $json.details?.httpCode || $json.error?.statusCode || $json.statusCode || 502) >= 500\n    || [408, 423, 425, 429].includes(Number($json.error?.status || $json.details?.httpCode || $json.error?.statusCode || $json.statusCode || 502)),\n  executionId: $('Webhook').first().json.body.executionId || null,\n  deliveryStatus: Number($json.error?.status || $json.details?.httpCode || $json.error?.statusCode || $json.statusCode || 502) >= 500 ? 'UNKNOWN' : 'FAILED'\n}) }}",
+        "responseBody": "={{ JSON.stringify({\n  success: false,\n  deliveryStatus: $json.deliveryStatus,\n  providerMessageId: $json.providerMessageId ?? null,\n  error: $json.error,\n  retryable: Boolean($json.retryable),\n  idempotencyStatus: $json.idempotencyStatus || 'new',\n  statusCode: Number($json.statusCode || 200),\n  executionId: $json.executionId,\n  enrollmentId: $json.enrollmentId,\n  stepId: $json.stepId,\n  correlationId: $json.correlationId\n}) }}",
         "options": {
-          "responseCode": "={{ Number($json.error?.status || $json.details?.httpCode || $json.error?.statusCode || $json.statusCode || 502) }}"
+          "responseCode": "={{ Number($json.statusCode || 200) }}"
         }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
       "position": [
-        448,
-        96
+        1860,
+        20
       ],
       "id": "d3f750a6-4dbb-48b5-83e7-2423c0073668",
-      "name": "Respond Error"
-    },
-    {
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ success: false, error: 'Invalid follow-up webhook credentials or request', retryable: false }) }}",
-        "options": {
-          "responseCode": 401
-        }
-      },
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.5,
-      "position": [
-        500,
-        220
-      ],
-      "id": "c6f389e6-5aa3-4818-9d73-ecf9b0d4a27a",
-      "name": "Respond Rejected"
+      "name": "Respond: Delivery Failed or Unknown"
     }
   ],
   "pinData": {},
   "connections": {
-    "Webhook": {
+    "Webhook Trigger": {
       "main": [
         [
           {
-            "node": "Validate Input",
+            "node": "Code: Validate Execution Request",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Validate Input": {
+    "Code: Validate Execution Request": {
       "main": [
         [
           {
-            "node": "Backend Send Email",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Respond Rejected",
+            "node": "IF: Valid Execution Request",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Backend Send Email": {
+    "IF: Valid Execution Request": {
       "main": [
         [
           {
-            "node": "Respond Success",
+            "node": "Code: Prepare Idempotent Send Handoff",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Respond Error",
+            "node": "Respond: Reject Invalid Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Prepare Idempotent Send Handoff": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Backend Send Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Backend Send Message": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalize Delivery Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Classify Transport Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize Delivery Result": {
+      "main": [
+        [
+          {
+            "node": "IF: Delivery Succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Classify Transport Error": {
+      "main": [
+        [
+          {
+            "node": "Code: Format Failure or Unknown Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Delivery Succeeded": {
+      "main": [
+        [
+          {
+            "node": "Respond: Delivery Sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Format Failure or Unknown Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Format Failure or Unknown Outcome": {
+      "main": [
+        [
+          {
+            "node": "Respond: Delivery Failed or Unknown",
             "type": "main",
             "index": 0
           }

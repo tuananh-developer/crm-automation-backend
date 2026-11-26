@@ -342,6 +342,7 @@ describe('ConversationsService', () => {
       const result = await service.createTranscript(
         {
           customerId: 'customer-1',
+          sourceEventId: 'call-evt-sales-1',
           content: 'Discussed onboarding with Customer.',
         },
         mockSalesUser1,
@@ -369,6 +370,7 @@ describe('ConversationsService', () => {
         {
           leadId: 'lead-unassigned',
           customerId: 'customer-unassigned',
+          sourceEventId: 'admin-evt-1',
           content: 'Admin notes for unassigned entities.',
         },
         mockAdminUser,
@@ -980,6 +982,7 @@ describe('ConversationsService', () => {
       const result = await service.createTranscript(
         {
           customerId: 'customer-1',
+          sourceEventId: 'call-atomic-1',
           content: 'Discussed renewal contract terms with client.',
           sourceType: 'CALL',
         },
@@ -1034,6 +1037,7 @@ describe('ConversationsService', () => {
         service.createTranscript(
           {
             customerId: 'customer-1',
+            sourceEventId: 'fault-outbox-1',
             content: 'Discussed renewal terms.',
           },
           mockSalesUser1,
@@ -1056,6 +1060,7 @@ describe('ConversationsService', () => {
         service.createTranscript(
           {
             customerId: 'customer-1',
+            sourceEventId: 'fault-db-1',
             content: 'Discussed renewal terms.',
           },
           mockSalesUser1,
@@ -1300,18 +1305,42 @@ describe('ConversationsService', () => {
       );
     });
 
-    it('omitting idempotencyKey falls back deterministically to contentHash and reuses existing record on replay', async () => {
+    it('rejects ingestion with BadRequestException when meetingId, sourceEventId, and idempotencyKey are all omitted', async () => {
       customersRepository.findOne.mockResolvedValue({
         id: 'customer-1',
         createdBy: mockSalesUser1.id,
       });
 
+      await expect(
+        service.createTranscript(
+          {
+            customerId: 'customer-1',
+            sourceType: 'MEETING',
+            content: 'Customer requested a follow-up demo next Tuesday.',
+          },
+          mockSalesUser1,
+        ),
+      ).rejects.toThrow(
+        'Either meetingId, sourceEventId, or idempotencyKey must be provided',
+      );
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(dispatcher.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('replays existing transcript deterministically when meetingId is provided and idempotencyKey is omitted', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: mockSalesUser1.id,
+      });
+
+      const meetingId = '33333333-3333-4333-8333-333333333333';
       const text = 'Customer requested a follow-up demo next Tuesday.';
       const safeText = service.redactSensitiveContent(text);
       const contentHash = createHash('sha256').update(safeText).digest('hex');
       const expectedPayload = {
-        meetingId: null,
-        sourceType: 'CALL',
+        meetingId,
+        sourceType: 'MEETING',
         customerId: 'customer-1',
         leadId: null,
         contentLength: safeText.length,
@@ -1319,16 +1348,16 @@ describe('ConversationsService', () => {
       };
 
       const existingRun = {
-        id: 'run-hash-1',
+        id: 'run-meeting-replay-1',
         workflowName: 't12-wf09-conversation-summarizer',
-        idempotencyKey: `wf09:${mockSalesUser1.id}:content:${contentHash}`,
+        idempotencyKey: `wf09:${mockSalesUser1.id}:scope:meeting-hash`,
         status: WorkflowStatus.PENDING,
         inputPayload: expectedPayload,
         startedAt: new Date('2026-11-01T10:00:00.000Z'),
       };
       const existingTranscript = {
-        id: 'transcript-hash-1',
-        workflowRunId: 'run-hash-1',
+        id: 'transcript-meeting-replay-1',
+        workflowRunId: 'run-meeting-replay-1',
         redactedText: safeText,
         createdAt: new Date('2026-11-01T10:00:00.000Z'),
       };
@@ -1336,18 +1365,19 @@ describe('ConversationsService', () => {
       workflowRunsRepository.findOne.mockResolvedValue(existingRun);
       transcriptsRepository.findOne.mockResolvedValue(existingTranscript);
 
-      // Caller omits idempotencyKey
       const result = await service.createTranscript(
         {
           customerId: 'customer-1',
+          meetingId,
+          sourceType: 'MEETING',
           content: text,
         },
         mockSalesUser1,
       );
 
       expect(result.reused).toBe(true);
-      expect(result.transcriptId).toBe('transcript-hash-1');
-      expect(result.workflowRunId).toBe('run-hash-1');
+      expect(result.transcriptId).toBe('transcript-meeting-replay-1');
+      expect(result.workflowRunId).toBe('run-meeting-replay-1');
       expect(dispatcher.enqueue).not.toHaveBeenCalled();
     });
 
@@ -1471,18 +1501,16 @@ describe('ConversationsService', () => {
       expect(transcriptsRepository.save).toHaveBeenCalledTimes(2);
     });
 
-    it('creates distinct fallback idempotency keys for different customers, leads, or sourceTypes when meetingId and idempotencyKey are omitted', async () => {
-      customersRepository.findOne.mockImplementation(({ where }: any) =>
-        Promise.resolve({ id: where.id, createdBy: mockSalesUser1.id }),
-      );
-      leadsRepository.findOne.mockImplementation(({ where }: any) =>
-        Promise.resolve({ id: where.id, ownerId: mockSalesUser1.id }),
-      );
+    it('creates two distinct transcripts for two meeting events with identical transcript text when meetingId is omitted but sourceEventId differs', async () => {
+      customersRepository.findOne.mockResolvedValue({
+        id: 'customer-1',
+        createdBy: mockSalesUser1.id,
+      });
 
       workflowRunsRepository.findOne.mockResolvedValue(null);
       let runCounter = 0;
       workflowRunsRepository.create.mockImplementation((payload: any) => ({
-        id: `run-scope-${++runCounter}`,
+        id: `run-event-${++runCounter}`,
         status: WorkflowStatus.PENDING,
         ...payload,
       }));
@@ -1492,7 +1520,7 @@ describe('ConversationsService', () => {
 
       let txCounter = 0;
       transcriptsRepository.create.mockImplementation((payload: any) => ({
-        id: `transcript-scope-${++txCounter}`,
+        id: `transcript-event-${++txCounter}`,
         createdAt: new Date(),
         ...payload,
       }));
@@ -1500,32 +1528,43 @@ describe('ConversationsService', () => {
         Promise.resolve(t),
       );
 
-      const text = 'Identical transcript content without meetingId.';
+      const identicalText =
+        'Customer confirmed renewal timeline during weekly check-in.';
 
-      await service.createTranscript(
-        { customerId: 'customer-1', sourceType: 'CALL', content: text },
+      const first = await service.createTranscript(
+        {
+          customerId: 'customer-1',
+          sourceType: 'MEETING',
+          sourceEventId: 'meeting-evt-001',
+          content: identicalText,
+        },
         mockSalesUser1,
       );
-      await service.createTranscript(
-        { customerId: 'customer-2', sourceType: 'CALL', content: text },
+      const second = await service.createTranscript(
+        {
+          customerId: 'customer-1',
+          sourceType: 'MEETING',
+          sourceEventId: 'meeting-evt-002',
+          content: identicalText,
+        },
         mockSalesUser1,
       );
-      await service.createTranscript(
-        { customerId: 'customer-1', sourceType: 'EMAIL', content: text },
-        mockSalesUser1,
-      );
-      await service.createTranscript(
-        { leadId: 'lead-1', sourceType: 'CALL', content: text },
-        mockSalesUser1,
-      );
+
+      expect(first.reused).toBe(false);
+      expect(second.reused).toBe(false);
+      expect(first.transcriptId).toBe('transcript-event-1');
+      expect(second.transcriptId).toBe('transcript-event-2');
+      expect(first.workflowRunId).toBe('run-event-1');
+      expect(second.workflowRunId).toBe('run-event-2');
 
       const keys = workflowRunsRepository.create.mock.calls.map(
         (call: any[]) => call[0].idempotencyKey as string,
       );
-      expect(new Set(keys).size).toBe(4);
+      expect(new Set(keys).size).toBe(2);
       for (const k of keys) {
         expect(k.length).toBeLessThanOrEqual(180);
       }
+      expect(dispatcher.enqueue).toHaveBeenCalledTimes(2);
     });
   });
 

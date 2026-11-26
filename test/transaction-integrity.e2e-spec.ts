@@ -854,6 +854,46 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
         meetingFirst.body.workflowRunId as string,
         meetingSecond.body.workflowRunId as string,
       );
+
+      // Omitting meetingId, sourceEventId, and idempotencyKey must fail with 400
+      const unkeyedRes = await api
+        .post('/api/v1/conversation-transcripts')
+        .send({
+          leadId,
+          sourceType: 'MEETING',
+          content: 'Unkeyed meeting transcript.',
+        });
+      expect(unkeyedRes.status).toBe(400);
+
+      // Two distinct meeting events without meetingId but with distinct sourceEventIds and identical text
+      const eventFirst = await api
+        .post('/api/v1/conversation-transcripts')
+        .send({
+          leadId,
+          sourceType: 'MEETING',
+          sourceEventId: `e2e-evt-1-${Date.now()}`,
+          content: 'Identical event transcript without meetingId.',
+        });
+      const eventSecond = await api
+        .post('/api/v1/conversation-transcripts')
+        .send({
+          leadId,
+          sourceType: 'MEETING',
+          sourceEventId: `e2e-evt-2-${Date.now()}`,
+          content: 'Identical event transcript without meetingId.',
+        });
+      expect(eventFirst.status).toBe(202);
+      expect(eventSecond.status).toBe(202);
+      expect(eventSecond.body.workflowRunId).not.toBe(
+        eventFirst.body.workflowRunId,
+      );
+      expect(eventSecond.body.transcriptId).not.toBe(
+        eventFirst.body.transcriptId,
+      );
+      workflowRunIds.push(
+        eventFirst.body.workflowRunId as string,
+        eventSecond.body.workflowRunId as string,
+      );
     } finally {
       await dataSource.query(
         'DELETE FROM conversation_transcripts WHERE workflow_run_id = ANY($1::uuid[]);',

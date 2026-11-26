@@ -513,17 +513,14 @@ export class SequencesService {
       });
       savedEnrollment = result.savedEnrollment;
 
-      await this.rabbitmqService.publishEvent(
-        CRM_EVENTS.FOLLOW_UP_TRIGGERED,
-        {
-          enrollmentId: result.savedEnrollment.id,
-          executionId: result.savedExecution.id,
-          leadId: lead.id,
-          sequenceId: sequence.id,
-          stepId: firstStep.id,
-          scheduledAt: result.scheduledDate.toISOString(),
-        },
-      );
+      await this.rabbitmqService.publishEvent(CRM_EVENTS.FOLLOW_UP_TRIGGERED, {
+        enrollmentId: result.savedEnrollment.id,
+        executionId: result.savedExecution.id,
+        leadId: lead.id,
+        sequenceId: sequence.id,
+        stepId: firstStep.id,
+        scheduledAt: result.scheduledDate.toISOString(),
+      });
     }
 
     this.logger.log(
@@ -545,6 +542,7 @@ export class SequencesService {
       leadId?: string;
       sequenceId?: string;
       status?: EnrollmentStatus;
+      customerId?: string;
     },
     actor: AuthenticatedUser,
   ): Promise<LeadFollowUpEnrollmentResponseDto[]> {
@@ -552,8 +550,16 @@ export class SequencesService {
     if (query?.leadId) where.leadId = query.leadId;
     if (query?.sequenceId) where.sequenceId = query.sequenceId;
     if (query?.status) where.status = query.status;
+
+    const leadWhere: FindOptionsWhere<Lead> = {};
+    if (query?.customerId) {
+      leadWhere.convertedCustomerId = query.customerId;
+    }
     if (actor.role === UserRole.SALES) {
-      where.lead = { ownerId: actor.id };
+      leadWhere.ownerId = actor.id;
+    }
+    if (Object.keys(leadWhere).length > 0) {
+      where.lead = leadWhere;
     }
 
     const enrollments = await this.enrollmentsRepository.find({

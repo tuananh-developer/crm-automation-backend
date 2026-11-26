@@ -24,10 +24,20 @@ export class CreateTranscriptDto {
   meetingId?: string;
 
   @ApiPropertyOptional({
+    description:
+      'Caller-supplied source event identifier (required when meetingId and idempotencyKey are omitted)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  sourceEventId?: string;
+
+  @ApiPropertyOptional({
     description: 'Idempotency key for request deduplication',
   })
   @IsOptional()
   @IsString()
+  @MaxLength(120)
   idempotencyKey?: string;
 
   @ApiPropertyOptional({
