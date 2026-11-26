@@ -241,7 +241,7 @@ if [[ -z "$TAILSCALE_DNS_NAME" ]]; then
 fi
 
 set_env_value N8N_TAILSCALE_DNS_NAME "$TAILSCALE_DNS_NAME"
-set_env_value N8N_EDITOR_BASE_URL "https://$TAILSCALE_DNS_NAME/"
+set_env_value N8N_EDITOR_BASE_URL "https://$TAILSCALE_DNS_NAME:8443/"
 bash "$DEPLOY_DIR/check-env.sh" "$ENV_FILE"
 
 chown root:root "$ENV_FILE"
@@ -307,7 +307,7 @@ echo "===== PRODUCTION STACK ====="
 echo
 echo "Bootstrap completed."
 echo "API: https://$API_DOMAIN/api/v1/health"
-echo "n8n Editor (Tailscale only): https://$TAILSCALE_DNS_NAME/"
+echo "n8n Editor (Tailscale only): https://$TAILSCALE_DNS_NAME:8443/"
 echo "n8n public webhook base: https://$N8N_WEBHOOK_DOMAIN/"
 echo "The public webhook host returns 404 at / and only forwards webhook/form paths."
 echo "Preserve N8N_ENCRYPTION_KEY and Docker volume n8n_data."
