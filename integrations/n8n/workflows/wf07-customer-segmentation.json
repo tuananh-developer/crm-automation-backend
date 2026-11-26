@@ -33,11 +33,11 @@
             },
             {
               "name": "limit",
-              "value": "3"
+              "value": "100"
             },
             {
               "name": "page",
-              "value": "1"
+              "value": "={{ $pageCount + 1 }}"
             }
           ]
         },
@@ -52,6 +52,22 @@
         },
         "options": {
           "timeout": 30000,
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "page",
+                    "value": "={{ $pageCount + 1 }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.meta || $response.body.meta.page >= $response.body.meta.totalPages || ($response.body.data || []).length === 0 }}"
+            }
+          },
           "response": {
             "response": {
               "fullResponse": false
@@ -66,7 +82,10 @@
       "position": [
         470,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
@@ -84,29 +103,24 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.CRM_API_BASE_URL }}/internal/n8n/segments/{{ $json.id }}/customers",
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
-            {
-              "name": "limit",
-              "value": "3"
-            },
-            {
-              "name": "page",
-              "value": "1"
-            }
-          ]
-        },
+        "method": "POST",
+        "url": "={{ $env.CRM_API_BASE_URL }}/internal/n8n/segments/{{ $json.id }}/workflow-runs",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "X-N8N-API-KEY",
               "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ String($execution.id || '') + ':' + $json.id }}"
             }
           ]
         },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
         "options": {
           "timeout": 30000,
           "response": {
@@ -116,19 +130,22 @@
           }
         }
       },
-      "id": "node-4-get-cohort",
-      "name": "4. Get Customer Cohort",
+      "id": "node-4-create-workflow-run",
+      "name": "4. Create Workflow Run",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
         910,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const segment = $('3. Split Segments').item.json;\nconst cohortResponse = $json;\nconst cohort = Array.isArray(cohortResponse.data) ? cohortResponse.data : [];\nconst segmentId = segment.id;\nif (!segmentId || !segment.criteria) {\n  throw new Error('Segment ID or criteria is missing');\n}\nconst baseUrl = $env.CRM_API_BASE_URL;\nconst apiKey = $env.N8N_API_KEY;\nconst executionId = String($execution.id || '');\nif (!baseUrl || !apiKey || !executionId) {\n  throw new Error('CRM_API_BASE_URL, N8N_API_KEY, and execution ID are required');\n}\nconst url = baseUrl.replace(/\\/$/, '') + '/internal/n8n/segments/' + segmentId + '/workflow-runs';\nconst headers = { 'X-N8N-API-KEY': apiKey, 'Idempotency-Key': executionId + ':' + segmentId, 'Content-Type': 'application/json' };\nlet resp;\nif (this.helpers && typeof this.helpers.httpRequest === 'function') {\n  resp = await this.helpers.httpRequest({ method: 'POST', url, headers, body: {}, json: true });\n} else {\n  const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify({}) });\n  resp = await r.json();\n}\nif (!resp || !resp.workflowRunId) {\n  throw new Error('Backend did not return a workflowRunId');\n}\nreturn {\n  json: {\n    segmentId,\n    segmentName: segment.name,\n    ownerId: segment.createdBy || (segment.creator && segment.creator.id) || null,\n    executionId,\n    criteria: segment.criteria,\n    isActive: segment.isActive,\n    cohortSize: cohort.length,\n    workflowRunId: resp.workflowRunId,\n    validatedAt: new Date().toISOString()\n  }\n};"
+        "jsCode": "const segment = $('3. Split Segments').item.json;\nconst runResponse = $json;\nconst segmentId = segment && segment.id;\nif (!segmentId || !segment.criteria) {\n  throw new Error('Segment ID or criteria is missing');\n}\nif (!segment.isActive) {\n  throw new Error('Segment is inactive');\n}\nconst executionId = String($execution.id || '');\nif (!executionId) {\n  throw new Error('Execution ID is required');\n}\nif (!runResponse || typeof runResponse.workflowRunId !== 'string' || !runResponse.workflowRunId.trim()) {\n  throw new Error('Backend did not return a workflowRunId');\n}\nreturn {\n  json: {\n    segmentId,\n    segmentName: segment.name,\n    ownerId: segment.createdBy || (segment.creator && segment.creator.id) || null,\n    executionId,\n    criteria: segment.criteria,\n    isActive: segment.isActive,\n    cohortSize: typeof segment.customerCount === 'number' ? segment.customerCount : 0,\n    workflowRunId: runResponse.workflowRunId,\n    validatedAt: new Date().toISOString()\n  }\n};"
       },
       "id": "node-5-validate",
       "name": "5. Validate Evaluation Request",
@@ -171,7 +188,10 @@
       "position": [
         1350,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
@@ -258,7 +278,7 @@
         "url": "={{ $env.CRM_API_BASE_URL }}/internal/n8n/segments/{{ $json.segmentId }}/workflow-callback",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ workflowRunId: $json.workflowRunId, segmentId: $json.segmentId, segmentName: $json.segmentName, status: 'SUCCESS', statistics: { total: $json.total, processed: $json.processed, matched: $json.matched, unmatched: $json.unmatched, matchRate: $json.matchRate }, aiInsights: $json.aiInsights, rejectedInsights: $json.rejectedInsights, anomalyDetected: false }) }}",
+        "jsonBody": "={{ JSON.stringify({ workflowRunId: $json.workflowRunId, segmentId: $json.segmentId, segmentName: $json.segmentName, status: 'SUCCESS', statistics: { total: $json.total, processed: $json.processed, matched: $json.matched, unmatched: $json.unmatched, matchRate: $json.matchRate }, aiInsights: $json.aiInsights, rejectedInsights: $json.rejectedInsights, anomalyDetected: $json.matched === 0 }) }}",
         "options": {
           "timeout": 30000,
           "response": {
@@ -284,7 +304,10 @@
       "position": [
         2450,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
@@ -308,7 +331,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ userId: $('5. Validate Evaluation Request').first().json.ownerId, type: $('8. Normalize Statistics').first().json.matched === 0 ? 'ANOMALY_ALERT' : 'SEGMENT_EVALUATION', title: $('8. Normalize Statistics').first().json.matched === 0 ? 'Segment evaluation anomaly detected' : 'Segment evaluation completed', content: 'Segment ' + $('5. Validate Evaluation Request').first().json.segmentName + ' matched ' + $('8. Normalize Statistics').first().json.matched + ' out of ' + $('8. Normalize Statistics').first().json.total + ' evaluated customers.', idempotencyKey: $('5. Validate Evaluation Request').first().json.executionId + ':' + $('5. Validate Evaluation Request').first().json.segmentId + ':notification' }) }}"
+        "jsonBody": "={{ JSON.stringify({ userId: $('5. Validate Evaluation Request').item.json.ownerId, type: $('8. Normalize Statistics').item.json.matched === 0 ? 'ANOMALY_ALERT' : 'SEGMENT_EVALUATION', title: $('8. Normalize Statistics').item.json.matched === 0 ? 'Segment evaluation anomaly detected' : 'Segment evaluation completed', content: 'Segment ' + $('5. Validate Evaluation Request').item.json.segmentName + ' matched ' + $('8. Normalize Statistics').item.json.matched + ' out of ' + $('8. Normalize Statistics').item.json.total + ' evaluated customers.', idempotencyKey: $('5. Validate Evaluation Request').item.json.executionId + ':' + $('5. Validate Evaluation Request').item.json.segmentId + ':notification' }) }}"
       },
       "id": "node-12-anomaly-check",
       "name": "12. Notify Backend on Anomaly",
@@ -351,14 +374,14 @@
       "main": [
         [
           {
-            "node": "4. Get Customer Cohort",
+            "node": "4. Create Workflow Run",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "4. Get Customer Cohort": {
+    "4. Create Workflow Run": {
       "main": [
         [
           {
