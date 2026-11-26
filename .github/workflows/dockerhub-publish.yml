@@ -42,16 +42,6 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract backend image metadata
-        id: backend-meta
-        uses: docker/metadata-action@v6
-        with:
-          context: git
-          images: ${{ vars.DOCKERHUB_USERNAME }}/crm-automation-backend
-          tags: |
-            type=raw,value=latest
-            type=sha,format=short,prefix=sha-
-
       - name: Build and push backend image
         uses: docker/build-push-action@v7
         with:
@@ -59,20 +49,11 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.backend-meta.outputs.tags }}
-          labels: ${{ steps.backend-meta.outputs.labels }}
+          tags: |
+            ${{ vars.DOCKERHUB_USERNAME }}/crm-automation-backend:latest
+            ${{ vars.DOCKERHUB_USERNAME }}/crm-automation-backend:${{ steps.tag.outputs.image_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Extract deployment bundle metadata
-        id: config-meta
-        uses: docker/metadata-action@v6
-        with:
-          context: git
-          images: ${{ vars.DOCKERHUB_USERNAME }}/crm-automation-backend
-          tags: |
-            type=raw,value=config-latest
-            type=sha,format=short,prefix=config-sha-
 
       - name: Build and push deployment bundle image
         uses: docker/build-push-action@v7
@@ -81,8 +62,9 @@ jobs:
           file: ./deploy/Dockerfile.config
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.config-meta.outputs.tags }}
-          labels: ${{ steps.config-meta.outputs.labels }}
+          tags: |
+            ${{ vars.DOCKERHUB_USERNAME }}/crm-automation-backend:config-latest
+            ${{ vars.DOCKERHUB_USERNAME }}/crm-automation-backend:config-${{ steps.tag.outputs.image_tag }}
 
   deploy:
     name: Deploy immutable image to EC2 through SSM
