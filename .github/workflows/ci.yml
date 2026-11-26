@@ -104,13 +104,17 @@ jobs:
       - name: Prepare ephemeral CI environment
         run: |
           cp deploy/.env.production.example deploy/.env.production
+          sed -i \
+            -e 's#^N8N_TAILSCALE_DNS_NAME=.*#N8N_TAILSCALE_DNS_NAME=crm-automation-ec2.example.ts.net#' \
+            -e 's#^N8N_EDITOR_BASE_URL=.*#N8N_EDITOR_BASE_URL=https://crm-automation-ec2.example.ts.net:8443/#' \
+            deploy/.env.production
           for key in LOCAL_RABBITMQ_PASSWORD JWT_SECRET N8N_API_KEY N8N_WEBHOOK_SECRET N8N_ENCRYPTION_KEY; do
             value="$(openssl rand -hex 32)"
             sed -i "s|^${key}=.*|${key}=${value}|" deploy/.env.production
           done
           sed -i \
             -e 's#api.203.0.113.10.nip.io#api.127.0.0.1.nip.io#g' \
-            -e 's#n8n.203.0.113.10.nip.io#n8n.127.0.0.1.nip.io#g' \
+            -e 's#hooks.203.0.113.10.nip.io#hooks.127.0.0.1.nip.io#g' \
             -e 's#you@example.com#ci@example.test#g' \
             -e 's#crm_role#ci_crm#g' \
             -e 's#REPLACE_WITH_DATABASE_PASSWORD#ci-database-password#g' \
@@ -121,10 +125,19 @@ jobs:
           bash -n deploy/check-env.sh
           bash -n deploy/bootstrap-ec2.sh
           bash -n deploy/ssm-deploy-image.sh
+          bash -n deploy/configure-tailscale-serve.sh
           sh -n deploy/install-config.sh
           node --check deploy/run-migrations.cjs
           bash deploy/check-env.sh
           docker compose --env-file deploy/.env.production -f deploy/compose.production.yml config --quiet
+      - name: Validate public Caddy ingress rules
+        run: |
+          docker run --rm \
+            -e ACME_EMAIL=ci@example.test \
+            -e API_DOMAIN=api.127.0.0.1.nip.io \
+            -e N8N_WEBHOOK_DOMAIN=hooks.127.0.0.1.nip.io \
+            -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Build backend Docker image
         run: docker build --platform linux/amd64 -f Dockerfile -t crm-automation-backend:ci .
       - name: Build Docker Hub deployment-config image
@@ -135,5 +148,6 @@ jobs:
           docker run --rm -v "$RUNNER_TEMP/deploy-target:/target" crm-automation-deploy-config:ci
           test -s "$RUNNER_TEMP/deploy-target/deploy/compose.production.yml"
           test -s "$RUNNER_TEMP/deploy-target/deploy/bootstrap-ec2.sh"
+          test -s "$RUNNER_TEMP/deploy-target/deploy/configure-tailscale-serve.sh"
           test -s "$RUNNER_TEMP/deploy-target/deploy/.env.production"
           test -s "$RUNNER_TEMP/deploy-target/deploy/rabbitmq/definitions.json"

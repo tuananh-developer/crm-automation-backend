@@ -38,11 +38,11 @@ services:
       NODE_ENV: production
       GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
       TZ: Asia/Ho_Chi_Minh
-      N8N_HOST: ${N8N_DOMAIN:?Set N8N_DOMAIN}
+      N8N_HOST: ${N8N_TAILSCALE_DNS_NAME:?Set N8N_TAILSCALE_DNS_NAME}
       N8N_PORT: 5678
       N8N_PROTOCOL: https
-      N8N_EDITOR_BASE_URL: https://${N8N_DOMAIN:?Set N8N_DOMAIN}/
-      N8N_WEBHOOK_URL: https://${N8N_DOMAIN:?Set N8N_DOMAIN}/
+      N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:?Set N8N_EDITOR_BASE_URL}
+      N8N_WEBHOOK_URL: https://${N8N_WEBHOOK_DOMAIN:?Set N8N_WEBHOOK_DOMAIN}/
       N8N_PROXY_HOPS: 1
       N8N_SECURE_COOKIE: "true"
       N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
@@ -66,6 +66,9 @@ services:
       N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:?Set N8N_WEBHOOK_SECRET}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-pro}
+    ports:
+      # Tailscale Serve is the only path to the editor; never bind n8n to public interfaces.
+      - "127.0.0.1:5678:5678"
     volumes:
       - n8n_data:/home/node/.n8n
     mem_limit: ${N8N_MEM_LIMIT:-2g}
@@ -135,7 +138,7 @@ services:
     restart: unless-stopped
     environment:
       API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN}
-      N8N_DOMAIN: ${N8N_DOMAIN:?Set N8N_DOMAIN}
+      N8N_WEBHOOK_DOMAIN: ${N8N_WEBHOOK_DOMAIN:?Set N8N_WEBHOOK_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL}
     ports:
       - "80:80"

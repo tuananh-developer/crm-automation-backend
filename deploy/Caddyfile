@@ -15,7 +15,15 @@
   reverse_proxy backend:3000
 }
 
-{$N8N_DOMAIN} {
+{$N8N_WEBHOOK_DOMAIN} {
   encode zstd gzip
-  reverse_proxy n8n:5678
+
+  @n8n_public_endpoints path /webhook/* /webhook-test/* /webhook-waiting/* /form/* /form-test/* /form-waiting/*
+  handle @n8n_public_endpoints {
+    reverse_proxy n8n:5678
+  }
+
+  handle {
+    respond "Not Found" 404
+  }
 }
