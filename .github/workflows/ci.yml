@@ -106,7 +106,7 @@ jobs:
           cp deploy/.env.production.example deploy/.env.production
           sed -i \
             -e 's#^N8N_TAILSCALE_DNS_NAME=.*#N8N_TAILSCALE_DNS_NAME=crm-automation-ec2.example.ts.net#' \
-            -e 's#^N8N_EDITOR_BASE_URL=.*#N8N_EDITOR_BASE_URL=https://crm-automation-ec2.example.ts.net/#' \
+            -e 's#^N8N_EDITOR_BASE_URL=.*#N8N_EDITOR_BASE_URL=https://crm-automation-ec2.example.ts.net:8443/#' \
             deploy/.env.production
           for key in LOCAL_RABBITMQ_PASSWORD JWT_SECRET N8N_API_KEY N8N_WEBHOOK_SECRET N8N_ENCRYPTION_KEY; do
             value="$(openssl rand -hex 32)"
