@@ -104,10 +104,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       });
     expect(adminRegistration.status).toBe(201);
     adminUserId = adminRegistration.body.user.id;
-    await dataSource.query(
-      "UPDATE users SET role = 'ADMIN' WHERE id = $1;",
-      [adminUserId],
-    );
+    await dataSource.query("UPDATE users SET role = 'ADMIN' WHERE id = $1;", [
+      adminUserId,
+    ]);
 
     const adminLogin = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
@@ -474,17 +473,19 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
   it('returns one success and one 409 for concurrent registrations with the same email', async () => {
     const email = `register.race.${suffix}@example.test`;
     const register = () =>
-      request(app.getHttpServer())
-        .post('/api/v1/auth/register')
-        .send({
-          name: 'Concurrent Registration',
-          email,
-          password: 'E2eStrongPassword123!',
-        });
+      request(app.getHttpServer()).post('/api/v1/auth/register').send({
+        name: 'Concurrent Registration',
+        email,
+        password: 'E2eStrongPassword123!',
+      });
 
     const responses = await Promise.all([register(), register()]);
-    expect(responses.filter((response) => response.status === 201)).toHaveLength(1);
-    expect(responses.filter((response) => response.status === 409)).toHaveLength(1);
+    expect(
+      responses.filter((response) => response.status === 201),
+    ).toHaveLength(1);
+    expect(
+      responses.filter((response) => response.status === 409),
+    ).toHaveLength(1);
 
     const [users] = await dataSource.query(
       'SELECT COUNT(*)::int AS count FROM users WHERE email = $1;',
@@ -506,7 +507,9 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     }
 
     expect(statuses).toContain(429);
-    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(0);
+    expect(statuses.filter((status) => status === 401).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('preserves Lead contact edits when review resolution runs concurrently', async () => {
@@ -627,9 +630,7 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
       await dataSource.query(
         `DROP TRIGGER IF EXISTS ${triggerName} ON audit_logs;`,
       );
-      await dataSource.query(
-        `DROP FUNCTION IF EXISTS ${functionName}();`,
-      );
+      await dataSource.query(`DROP FUNCTION IF EXISTS ${functionName}();`);
     }
   });
 
@@ -741,5 +742,83 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     expect(rejectedRequest.decision_comment).toBe(
       'Discount exceeds the permitted policy',
     );
+  });
+
+  it('requires Idempotency-Key, replays identical Customer 360 trigger, and deduplicates concurrent triggers under PostgreSQL 23505', async () => {
+    const customerId = randomUUID();
+    const idempotencyKey = `wf05-concurrent-${suffix}`;
+
+    await dataSource.query(
+      `INSERT INTO customers (id, name, email, company_name, status, created_by)
+       VALUES ($1, $2, $3, $4, 'ACTIVE', $5);`,
+      [
+        customerId,
+        `Concurrent Customer ${suffix}`,
+        `concurrent.${suffix}@example.test`,
+        'Concurrent Integrity Corp',
+        userId,
+      ],
+    );
+
+    try {
+      const missingKeyResponse = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .send({});
+      expect(missingKeyResponse.status).toBe(400);
+
+      const blankKeyResponse = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .set('Idempotency-Key', '   ')
+        .send({});
+      expect(blankKeyResponse.status).toBe(400);
+
+      const [first, second] = await Promise.all([
+        api
+          .post(`/api/v1/customers/${customerId}/360/trigger`)
+          .set('Idempotency-Key', idempotencyKey)
+          .send({}),
+        api
+          .post(`/api/v1/customers/${customerId}/360/trigger`)
+          .set('Idempotency-Key', idempotencyKey)
+          .send({}),
+      ]);
+
+      expect(first.status).toBe(202);
+      expect(second.status).toBe(202);
+      expect(first.body.workflowRunId).toBeDefined();
+      expect(second.body.workflowRunId).toBe(first.body.workflowRunId);
+      workflowRunIds.push(first.body.workflowRunId as string);
+
+      const replayResponse = await api
+        .post(`/api/v1/customers/${customerId}/360/trigger`)
+        .set('Idempotency-Key', idempotencyKey)
+        .send({});
+      expect(replayResponse.status).toBe(202);
+      expect(replayResponse.body.workflowRunId).toBe(first.body.workflowRunId);
+
+      const runs = await dataSource.query(
+        'SELECT id FROM workflow_runs WHERE id = $1;',
+        [first.body.workflowRunId],
+      );
+      expect(runs).toHaveLength(1);
+
+      const outboxRows = await dataSource.query(
+        "SELECT id FROM outbox_events WHERE payload->>'workflowRunId' = $1;",
+        [first.body.workflowRunId],
+      );
+      expect(outboxRows).toHaveLength(1);
+    } finally {
+      await dataSource.query(
+        "DELETE FROM outbox_events WHERE payload->>'workflowRunId' IN (SELECT id::text FROM workflow_runs WHERE customer_id = $1);",
+        [customerId],
+      );
+      await dataSource.query(
+        'DELETE FROM workflow_runs WHERE customer_id = $1;',
+        [customerId],
+      );
+      await dataSource.query('DELETE FROM customers WHERE id = $1;', [
+        customerId,
+      ]);
+    }
   });
 });

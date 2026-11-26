@@ -1,34 +1,61 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
+  InternalServerErrorException,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity.js';
 import { CustomerSegment } from './entities/customer-segment.entity.js';
 import { Segment } from './entities/segment.entity.js';
 import { CustomerChurnAssessment } from './entities/customer-churn-assessment.entity.js';
 import { CustomerTask } from './entities/customer-task.entity.js';
+import { Lead } from '../leads/entities/lead.entity.js';
+import { Interaction } from '../leads/entities/interaction.entity.js';
+import { LeadQualification } from '../lead-intelligence/entities/lead-qualification.entity.js';
+import { LeadEnrichment } from '../lead-intelligence/entities/lead-enrichment.entity.js';
+import { LeadScore } from '../lead-intelligence/entities/lead-score.entity.js';
 import { WorkflowRun } from '../workflow/entities/workflow-run.entity.js';
-import { QueryCustomerDto } from './dto/index.js';
-import { QueryCustomerTaskDto } from './dto/query-customer-task.dto.js';
-import { CustomerResponseDto } from './dto/customer-response.dto.js';
-import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
-import { CustomerMapper } from './mappers/customer.mapper.js';
-import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
+import { WorkflowStatus } from '../workflow/enums/workflow.enum.js';
+import { LeadFollowUpEnrollment } from '../follow-up/entities/lead-follow-up-enrollment.entity.js';
+import { FollowUpExecution } from '../follow-up/entities/follow-up-execution.entity.js';
 import { UserRole } from '../users/enums/user.enum.js';
+import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import {
   hasSamePayload,
   isPostgresUniqueViolation,
 } from '../../common/utils/idempotency.util.js';
+import {
+  Customer360AiSummaryDto,
+  Customer360CallbackDto,
+  Customer360CallbackResponseDto,
+  Customer360ResponseDto,
+  Customer360Status,
+  CustomerResponseDto,
+  QueryCustomerDto,
+  TriggerCustomer360ResponseDto,
+} from './dto/index.js';
+import { QueryCustomerTaskDto } from './dto/query-customer-task.dto.js';
+import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto.js';
+import { CustomerMapper } from './mappers/customer.mapper.js';
+import { N8nWorkflowDispatchService } from '../t12-workflows/n8n-workflow-dispatch.service.js';
+import { WorkflowExecutionClaimsService } from '../t12-workflows/workflow-execution-claims.service.js';
+import { CustomerFeedback } from '../feedback/entities/customer-feedback.entity.js';
+import type { ClaimCustomer360ProfileDto } from './dto/claim-customer-360-profile.dto.js';
 
 export type SupportedChurnRiskLevel =
   'LOW' | 'MEDIUM' | 'HIGH' | 'INSUFFICIENT_DATA';
 
 @Injectable()
 export class CustomersService {
+  private readonly logger = new Logger(CustomersService.name);
+
   constructor(
     @InjectRepository(Customer)
     private readonly customersRepository: Repository<Customer>,
@@ -39,14 +66,61 @@ export class CustomersService {
     @InjectRepository(Segment)
     private readonly segmentsRepository: Repository<Segment>,
 
+    @Optional()
     @InjectRepository(CustomerChurnAssessment)
     private readonly churnAssessmentsRepository?: Repository<CustomerChurnAssessment>,
 
+    @Optional()
     @InjectRepository(CustomerTask)
     private readonly customerTasksRepository?: Repository<CustomerTask>,
 
+    @Optional()
     @InjectRepository(WorkflowRun)
     private readonly workflowRunsRepository?: Repository<WorkflowRun>,
+
+    @Optional()
+    @InjectRepository(Lead)
+    private readonly leadsRepository?: Repository<Lead>,
+
+    @Optional()
+    @InjectRepository(Interaction)
+    private readonly interactionsRepository?: Repository<Interaction>,
+
+    @Optional()
+    @InjectRepository(LeadQualification)
+    private readonly qualificationsRepository?: Repository<LeadQualification>,
+
+    @Optional()
+    @InjectRepository(LeadEnrichment)
+    private readonly enrichmentsRepository?: Repository<LeadEnrichment>,
+
+    @Optional()
+    @InjectRepository(LeadScore)
+    private readonly scoresRepository?: Repository<LeadScore>,
+
+    @Optional()
+    @InjectRepository(LeadFollowUpEnrollment)
+    private readonly enrollmentsRepository?: Repository<LeadFollowUpEnrollment>,
+
+    @Optional()
+    @InjectRepository(FollowUpExecution)
+    private readonly executionsRepository?: Repository<FollowUpExecution>,
+
+    @Optional()
+    private readonly configService?: ConfigService,
+
+    @Optional()
+    private readonly dataSource?: DataSource,
+
+    @Optional()
+    private readonly dispatcher?: N8nWorkflowDispatchService,
+
+    @Optional()
+    private readonly executionClaims?: WorkflowExecutionClaimsService,
+
+    @Optional()
+    @InjectRepository(CustomerFeedback)
+    private readonly feedbackRepository?: Repository<CustomerFeedback>,
   ) {}
 
   async findAll(
@@ -113,7 +187,7 @@ export class CustomersService {
 
   async findOne(
     id: string,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<CustomerResponseDto> {
     const customer = await this.customersRepository.findOne({
       where: { id },
@@ -129,7 +203,9 @@ export class CustomersService {
 
     if (
       !customer ||
-      (actor.role === UserRole.SALES && customer.createdBy !== actor.id)
+      (actor &&
+        actor.role === UserRole.SALES &&
+        customer.createdBy !== actor.id)
     ) {
       throw new NotFoundException(`Customer with ID '${id}' not found`);
     }
@@ -142,8 +218,122 @@ export class CustomersService {
   }
 
   async findOneInternal(id: string): Promise<CustomerResponseDto> {
+    return this.findOne(id);
+  }
+
+  /**
+   * Atomically claims a Customer 360 WorkflowRun and returns the customer CRM profile (T12-WF05).
+   * Prevents duplicate/replayed n8n executions from reading downstream sources or calling Gemini.
+   */
+  async claimAndGetCustomerProfile(
+    customerId: string,
+    dto: ClaimCustomer360ProfileDto,
+  ): Promise<CustomerResponseDto> {
     const customer = await this.customersRepository.findOne({
-      where: { id },
+      where: { id: customerId },
+      relations: {
+        creator: true,
+        convertedLeads: true,
+        customerSegments: {
+          segment: true,
+          assignedByUser: true,
+        },
+      },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+
+    if (!this.workflowRunsRepository) {
+      throw new InternalServerErrorException(
+        'WorkflowRun repository is not configured',
+      );
+    }
+
+    const run = await this.workflowRunsRepository.findOne({
+      where: {
+        id: dto.workflowRunId,
+        customerId,
+        workflowName: 't12-wf05-customer-360',
+      },
+    });
+    if (!run) {
+      throw new NotFoundException(
+        `WorkflowRun '${dto.workflowRunId}' not found for Customer '${customerId}'`,
+      );
+    }
+
+    const claimsService =
+      this.executionClaims ??
+      (this.dataSource
+        ? new WorkflowExecutionClaimsService(this.dataSource)
+        : null);
+    if (!claimsService) {
+      throw new InternalServerErrorException(
+        'WorkflowExecutionClaimsService is unavailable',
+      );
+    }
+
+    const claim = await claimsService.claim({
+      workflowRunId: dto.workflowRunId,
+      workflowName: 't12-wf05-customer-360',
+      n8nExecutionId: dto.n8nExecutionId,
+    });
+    if (!claim.claimed) {
+      throw new ConflictException(
+        `WorkflowRun '${dto.workflowRunId}' is already claimed by another execution or is no longer active`,
+      );
+    }
+
+    return CustomerMapper.toResponseDto(
+      Object.assign(customer, {
+        segmentCount: customer.customerSegments?.length ?? 0,
+      }),
+    );
+  }
+
+  /**
+   * Enforces object-level customer access policy (RBAC + Ownership).
+   * Admins have full access. Sales agents can only access customers they created or
+   * customers converted from leads they own or converted.
+   */
+  private checkCustomerAccess(
+    customer: Customer,
+    user?: AuthenticatedUser,
+  ): void {
+    if (!user) {
+      return; // Internal service execution (e.g. n8n service worker)
+    }
+
+    if (user.role === UserRole.ADMIN) {
+      return; // ADMIN role bypasses ownership checks
+    }
+
+    const isCreator = customer.createdBy === user.id;
+    const isOwnerOrConverter =
+      customer.convertedLeads &&
+      customer.convertedLeads.some(
+        (lead) => lead.ownerId === user.id || lead.convertedBy === user.id,
+      );
+
+    if (!isCreator && !isOwnerOrConverter) {
+      throw new ForbiddenException(
+        `Forbidden: User '${user.id}' is not authorized to access Customer '${customer.id}' (requires ownership or ADMIN role).`,
+      );
+    }
+  }
+
+  /**
+   * Aggregates full CRM 360 view for a customer (T12-WF05 / UC05 / 07_API_CONTRACT.md).
+   * Combines profile, converted leads, interaction timeline, intelligence history,
+   * follow-up sequences, segment memberships, and AI 360 executive summary.
+   */
+  async getCustomer360(
+    customerId: string,
+    user?: AuthenticatedUser,
+  ): Promise<Customer360ResponseDto> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
       relations: {
         creator: true,
         convertedLeads: true,
@@ -155,14 +345,774 @@ export class CustomersService {
     });
 
     if (!customer) {
-      throw new NotFoundException(`Customer with ID '${id}' not found`);
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
     }
 
-    return CustomerMapper.toResponseDto(
+    this.checkCustomerAccess(customer, user);
+
+    const convertedLeads = customer.convertedLeads || [];
+    const convertedLeadIds = convertedLeads.map((l) => l.id);
+
+    let interactions: Interaction[] = [];
+    let qualifications: LeadQualification[] = [];
+    let enrichments: LeadEnrichment[] = [];
+    let scores: LeadScore[] = [];
+    let enrollments: LeadFollowUpEnrollment[] = [];
+    let executions: FollowUpExecution[] = [];
+
+    if (convertedLeadIds.length > 0) {
+      interactions =
+        (await this.interactionsRepository?.find({
+          where: { leadId: In(convertedLeadIds) },
+          order: { occurredAt: 'DESC' },
+        })) ?? [];
+
+      qualifications =
+        (await this.qualificationsRepository?.find({
+          where: { leadId: In(convertedLeadIds) },
+          order: { createdAt: 'DESC' },
+        })) ?? [];
+
+      enrichments =
+        (await this.enrichmentsRepository?.find({
+          where: { leadId: In(convertedLeadIds) },
+          order: { enrichedAt: 'DESC' },
+        })) ?? [];
+
+      scores =
+        (await this.scoresRepository?.find({
+          where: { leadId: In(convertedLeadIds) },
+          order: { createdAt: 'DESC' },
+        })) ?? [];
+
+      enrollments =
+        (await this.enrollmentsRepository?.find({
+          where: { leadId: In(convertedLeadIds) },
+          order: { createdAt: 'DESC' },
+          relations: { sequence: true },
+        })) ?? [];
+
+      const enrollmentIds = enrollments.map((e) => e.id);
+      if (enrollmentIds.length > 0) {
+        executions =
+          (await this.executionsRepository?.find({
+            where: { enrollmentId: In(enrollmentIds) },
+            order: { scheduledAt: 'DESC' },
+            relations: { step: true },
+          })) ?? [];
+      }
+    }
+
+    // Fetch latest completed WorkflowRun for Customer 360
+    const latestRun = this.workflowRunsRepository
+      ? await this.workflowRunsRepository.findOne({
+          where: {
+            customerId,
+            workflowName: 't12-wf05-customer-360',
+          },
+          order: { startedAt: 'DESC' },
+        })
+      : null;
+
+    let aiSummary: Customer360AiSummaryDto | null = null;
+    if (
+      latestRun &&
+      latestRun.status === WorkflowStatus.SUCCESS &&
+      latestRun.outputPayload
+    ) {
+      const p = latestRun.outputPayload as Record<string, unknown>;
+      const rawSummary = typeof p.summary === 'string' ? p.summary.trim() : '';
+      if (rawSummary.length > 0) {
+        const modelInfo = p.modelInfo as Record<string, unknown> | undefined;
+        aiSummary = {
+          summary: rawSummary,
+          keyStrengths: Array.isArray(p.keyStrengths)
+            ? (p.keyStrengths as string[])
+            : [],
+          potentialRisks: Array.isArray(p.potentialRisks)
+            ? (p.potentialRisks as string[])
+            : [],
+          growthOpportunities: Array.isArray(p.growthOpportunities)
+            ? (p.growthOpportunities as string[])
+            : [],
+          recommendedNextAction:
+            typeof p.recommendedNextAction === 'string'
+              ? p.recommendedNextAction
+              : 'Maintain proactive quarterly engagement.',
+          aiModel:
+            typeof modelInfo?.model === 'string'
+              ? modelInfo.model
+              : 'gemini-3.5-flash-lite',
+          evaluatedAt:
+            typeof p.evaluatedAt === 'string'
+              ? p.evaluatedAt
+              : latestRun.finishedAt?.toISOString(),
+        };
+      }
+    }
+
+    const customerDto = CustomerMapper.toResponseDto(
       Object.assign(customer, {
         segmentCount: customer.customerSegments?.length ?? 0,
       }),
     );
+
+    const feedbackCoverage = this.feedbackRepository
+      ? (await this.feedbackRepository.count({ where: { customerId } })) > 0
+        ? 'AVAILABLE'
+        : 'EMPTY'
+      : 'NOT_CONNECTED';
+
+    return {
+      customer: customerDto,
+      convertedLeads: convertedLeads.map((l) => ({
+        id: l.id,
+        firstName: l.firstName,
+        lastName: l.lastName,
+        email: l.email,
+        phone: l.phone,
+        companyName: l.companyName,
+        jobTitle: l.jobTitle,
+        convertedAt: l.convertedAt,
+      })),
+      interactions: interactions.map((i) => ({
+        id: i.id,
+        leadId: i.leadId,
+        type: i.type,
+        channel: i.channel,
+        subject: i.subject,
+        content: i.content,
+        occurredAt: i.occurredAt,
+      })),
+      intelligence: {
+        qualifications: qualifications.map((q) => ({
+          id: q.id,
+          leadId: q.leadId,
+          status: q.status,
+          confidence: q.confidence,
+          intent: q.intent,
+          reason: q.reason,
+          evaluatedAt: q.createdAt,
+        })),
+        enrichments: enrichments.map((e) => ({
+          id: e.id,
+          leadId: e.leadId,
+          provider: e.provider,
+          companyName: e.companyName,
+          companyIndustry: e.companyIndustry,
+          companySize: e.companySize,
+          status: e.status,
+          enrichedAt: e.enrichedAt,
+        })),
+        scores: scores.map((s) => ({
+          id: s.id,
+          leadId: s.leadId,
+          score: s.score,
+          label: s.label,
+          reason: s.reason,
+          modelName: s.modelName,
+          createdAt: s.createdAt,
+        })),
+      },
+      followUps: {
+        enrollments: enrollments.map((en) => ({
+          id: en.id,
+          sequenceId: en.sequenceId,
+          sequenceName: en.sequence?.name ?? null,
+          status: en.status,
+          enrolledAt: en.startedAt || en.createdAt,
+        })),
+        executions: executions.map((ex) => ({
+          id: ex.id,
+          enrollmentId: ex.enrollmentId,
+          stepOrder: ex.step?.stepOrder ?? null,
+          status: ex.status,
+          scheduledAt: ex.scheduledAt,
+          executedAt: ex.completedAt || ex.startedAt || null,
+        })),
+      },
+      segments: (customer.customerSegments || []).map((cs) => ({
+        segmentId: cs.segmentId,
+        segmentName: cs.segment?.name ?? null,
+        assignmentType: cs.assignmentType,
+        confidence: cs.confidence,
+        assignedReason: cs.assignedReason,
+        assignedAt: cs.assignedAt,
+      })),
+      sourceCoverage: {
+        crmProfile: 'AVAILABLE',
+        interactions: interactions.length > 0 ? 'AVAILABLE' : 'EMPTY',
+        leadIntelligence:
+          qualifications.length > 0 ||
+          enrichments.length > 0 ||
+          scores.length > 0
+            ? 'AVAILABLE'
+            : 'EMPTY',
+        followUps:
+          enrollments.length > 0 || executions.length > 0
+            ? 'AVAILABLE'
+            : 'EMPTY',
+        segments:
+          (customer.customerSegments || []).length > 0 ? 'AVAILABLE' : 'EMPTY',
+        customerIssues: 'NOT_CONNECTED',
+        customerFeedback: feedbackCoverage,
+      },
+      aiSummary,
+      latestWorkflowRun: latestRun
+        ? {
+            id: latestRun.id,
+            status: latestRun.status,
+            startedAt: latestRun.startedAt,
+            completedAt: latestRun.finishedAt,
+            errorMessage: latestRun.errorMessage ?? null,
+          }
+        : null,
+    };
+  }
+
+  /**
+   * Retrieves interactions for a customer and its converted leads (for n8n Node 4).
+   */
+  async getCustomerInteractions(
+    customerId: string,
+    user?: AuthenticatedUser,
+  ): Promise<any[]> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: { convertedLeads: true },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+    this.checkCustomerAccess(customer, user);
+
+    const leadIds = (customer.convertedLeads || []).map((l) => l.id);
+    if (leadIds.length === 0) {
+      return [];
+    }
+    return (
+      (await this.interactionsRepository?.find({
+        where: { leadId: In(leadIds) },
+        order: { occurredAt: 'DESC' },
+      })) ?? []
+    );
+  }
+
+  /**
+   * Retrieves lead intelligence history (for n8n Node 5).
+   */
+  async getCustomerIntelligence(
+    customerId: string,
+    user?: AuthenticatedUser,
+  ): Promise<{ qualifications: any[]; enrichments: any[]; scores: any[] }> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: { convertedLeads: true },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+    this.checkCustomerAccess(customer, user);
+
+    const leadIds = (customer.convertedLeads || []).map((l) => l.id);
+    if (leadIds.length === 0) {
+      return { qualifications: [], enrichments: [], scores: [] };
+    }
+
+    const [qualifications, enrichments, scores] = await Promise.all([
+      this.qualificationsRepository?.find({
+        where: { leadId: In(leadIds) },
+        order: { createdAt: 'DESC' },
+      }) ?? Promise.resolve([]),
+      this.enrichmentsRepository?.find({
+        where: { leadId: In(leadIds) },
+        order: { enrichedAt: 'DESC' },
+      }) ?? Promise.resolve([]),
+      this.scoresRepository?.find({
+        where: { leadId: In(leadIds) },
+        order: { createdAt: 'DESC' },
+      }) ?? Promise.resolve([]),
+    ]);
+
+    return { qualifications, enrichments, scores };
+  }
+
+  /**
+   * Retrieves follow-up campaign history (for n8n Node 6).
+   */
+  async getCustomerFollowUps(
+    customerId: string,
+    user?: AuthenticatedUser,
+  ): Promise<{ enrollments: any[]; executions: any[] }> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: { convertedLeads: true },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+    this.checkCustomerAccess(customer, user);
+
+    const leadIds = (customer.convertedLeads || []).map((l) => l.id);
+    if (leadIds.length === 0) {
+      return { enrollments: [], executions: [] };
+    }
+
+    const enrollments =
+      (await this.enrollmentsRepository?.find({
+        where: { leadId: In(leadIds) },
+        order: { createdAt: 'DESC' },
+        relations: { sequence: true },
+      })) ?? [];
+
+    const enrollmentIds = enrollments.map((e) => e.id);
+    let executions: FollowUpExecution[] = [];
+    if (enrollmentIds.length > 0) {
+      executions =
+        (await this.executionsRepository?.find({
+          where: { enrollmentId: In(enrollmentIds) },
+          order: { scheduledAt: 'DESC' },
+          relations: { step: true },
+        })) ?? [];
+    }
+
+    return { enrollments, executions };
+  }
+
+  /**
+   * Retrieves segment memberships for a customer (for n8n Node 7).
+   * When called internally with workflowRunId and n8nExecutionId, renews the WF05 execution claim lease.
+   */
+  async getCustomerSegments(
+    customerId: string,
+    user?: AuthenticatedUser,
+    workflowRunId?: string,
+    n8nExecutionId?: string,
+  ): Promise<any[]> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: {
+        convertedLeads: true,
+        customerSegments: { segment: true },
+      },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+    this.checkCustomerAccess(customer, user);
+
+    if (!user && workflowRunId && n8nExecutionId) {
+      if (!this.workflowRunsRepository) {
+        throw new InternalServerErrorException(
+          'WorkflowRun repository is not configured',
+        );
+      }
+
+      const run = await this.workflowRunsRepository.findOne({
+        where: {
+          id: workflowRunId,
+          customerId,
+          workflowName: 't12-wf05-customer-360',
+        },
+      });
+      if (!run) {
+        throw new NotFoundException(
+          `WorkflowRun '${workflowRunId}' not found for Customer '${customerId}'`,
+        );
+      }
+      const claimsService =
+        this.executionClaims ??
+        (this.dataSource
+          ? new WorkflowExecutionClaimsService(this.dataSource)
+          : null);
+      if (claimsService) {
+        await claimsService.heartbeat({
+          workflowRunId,
+          workflowName: 't12-wf05-customer-360',
+          n8nExecutionId,
+        });
+      }
+    }
+
+    return (customer.customerSegments || []).map((cs) => ({
+      segmentId: cs.segmentId,
+      segmentName: cs.segment?.name ?? null,
+      assignmentType: cs.assignmentType,
+      confidence: cs.confidence,
+      assignedReason: cs.assignedReason,
+      assignedAt: cs.assignedAt,
+    }));
+  }
+
+  /**
+   * Initiates AI Customer 360 analysis workflow (T12-WF05).
+   * Creates a correlated WorkflowRun and dispatches an authenticated internal webhook to n8n.
+   * Enforces object-level authorization and binds triggeredByUserId to authenticated caller.
+   */
+  async triggerCustomer360(
+    customerId: string,
+    user: AuthenticatedUser,
+    clientProvidedKey?: string,
+  ): Promise<TriggerCustomer360ResponseDto> {
+    const customer = await this.customersRepository.findOne({
+      where: { id: customerId },
+      relations: { convertedLeads: true },
+    });
+
+    if (!customer) {
+      throw new NotFoundException(`Customer with ID '${customerId}' not found`);
+    }
+
+    this.checkCustomerAccess(customer, user);
+
+    const n8nApiKey =
+      this.configService?.get<string>('N8N_API_KEY') ||
+      this.configService?.get<string>('N8N_WEBHOOK_SECRET');
+
+    if (!n8nApiKey) {
+      throw new InternalServerErrorException(
+        'Webhook authentication secret (N8N_API_KEY / N8N_WEBHOOK_SECRET) is not configured',
+      );
+    }
+
+    // 1. Transactional Outbox: persist WorkflowRun and durable OutboxEvent atomically
+    const dispatcher = this.dispatcher ?? new N8nWorkflowDispatchService();
+    const trimmedKey =
+      typeof clientProvidedKey === 'string' ? clientProvidedKey.trim() : '';
+    if (!trimmedKey) {
+      throw new BadRequestException(
+        'Idempotency-Key header is required and cannot be empty',
+      );
+    }
+    if (trimmedKey.length > 120) {
+      throw new BadRequestException(
+        'Idempotency-Key header must be at most 120 characters',
+      );
+    }
+    const idempotencyKey = `wf05:${user.id}:${customer.id}:${trimmedKey}`;
+
+    let savedRun: WorkflowRun;
+    if (this.dataSource) {
+      try {
+        savedRun = await this.dataSource.transaction(async (manager) => {
+          const workflowRunsRepo = manager.getRepository(WorkflowRun);
+
+          // Lookup-and-return pattern: if key exists, return existing run
+          const existingRun = await workflowRunsRepo.findOne({
+            where: { idempotencyKey },
+          });
+
+          if (existingRun) {
+            if (existingRun.workflowName !== 't12-wf05-customer-360') {
+              throw new ConflictException(
+                `Idempotency key is already used by another workflow: ${existingRun.workflowName}`,
+              );
+            }
+            this.logger.log(
+              `Replaying existing WorkflowRun ${existingRun.id} for idempotencyKey=${idempotencyKey}`,
+            );
+            return existingRun;
+          }
+
+          const workflowRun = workflowRunsRepo.create({
+            workflowName: 't12-wf05-customer-360',
+            customerId: customer.id,
+            triggeredByUserId: user.id,
+            status: WorkflowStatus.PENDING,
+            startedAt: new Date(),
+            idempotencyKey,
+            inputPayload: {
+              customerId: customer.id,
+              customerName: customer.name,
+              customerEmail: customer.email,
+              companyName: customer.companyName,
+              triggeredByUserId: user.id,
+              requestedAt: new Date().toISOString(),
+            },
+          });
+
+          const run = await workflowRunsRepo.save(workflowRun);
+
+          // Atomically enqueue durable HTTP outbox event in the same transaction
+          await dispatcher.enqueue(
+            manager,
+            'N8N_WF05_WEBHOOK_URL',
+            't12-wf05-customer-360',
+            {
+              customerId: customer.id,
+              workflowRunId: run.id,
+              triggeredByUserId: user.id,
+              timestamp: new Date().toISOString(),
+            },
+          );
+
+          return run;
+        });
+      } catch (error) {
+        if (!isPostgresUniqueViolation(error) || !this.workflowRunsRepository) {
+          throw error;
+        }
+        // Lookup outside the rolled-back transaction to avoid PostgreSQL 25P02
+        const concurrentRun = await this.workflowRunsRepository.findOne({
+          where: { idempotencyKey },
+        });
+        if (!concurrentRun) {
+          throw error;
+        }
+        if (concurrentRun.workflowName !== 't12-wf05-customer-360') {
+          throw new ConflictException(
+            `Idempotency key is already used by another workflow: ${concurrentRun.workflowName}`,
+          );
+        }
+        savedRun = concurrentRun;
+      }
+    } else {
+      if (!this.workflowRunsRepository) {
+        throw new InternalServerErrorException(
+          'WorkflowRun repository is not configured',
+        );
+      }
+      const existingRun = await this.workflowRunsRepository.findOne({
+        where: { idempotencyKey },
+      });
+      if (existingRun) {
+        if (existingRun.workflowName !== 't12-wf05-customer-360') {
+          throw new ConflictException(
+            `Idempotency key is already used by another workflow: ${existingRun.workflowName}`,
+          );
+        }
+        savedRun = existingRun;
+      } else {
+        const workflowRun = this.workflowRunsRepository.create({
+          workflowName: 't12-wf05-customer-360',
+          customerId: customer.id,
+          triggeredByUserId: user.id,
+          status: WorkflowStatus.PENDING,
+          startedAt: new Date(),
+          idempotencyKey,
+          inputPayload: {
+            customerId: customer.id,
+            customerName: customer.name,
+            customerEmail: customer.email,
+            companyName: customer.companyName,
+            triggeredByUserId: user.id,
+            requestedAt: new Date().toISOString(),
+          },
+        });
+        savedRun = await this.workflowRunsRepository.save(workflowRun);
+      }
+    }
+
+    this.logger.log(
+      `Created WorkflowRun ${savedRun.id} and enqueued OutboxEvent for Customer 360 of customer ${customer.id} by user ${user.id}`,
+    );
+
+    return {
+      message: 'Customer 360 analysis workflow triggered successfully',
+      customerId: customer.id,
+      workflowRunId: savedRun.id,
+    };
+  }
+
+  /**
+   * Receives AI Customer 360 callback from n8n (T12-WF05).
+   * Validates correlation between workflowRunId, customerId, and workflowName.
+   * Locks WorkflowRun in transaction to prevent out-of-order terminal state transitions.
+   * Only allows transitions from active states (PENDING/RUNNING).
+   * Returns idempotent response for duplicate matching callbacks, and 409 ConflictException for conflicting ones.
+   */
+  async handleCustomer360Callback(
+    dto: Customer360CallbackDto,
+  ): Promise<Customer360CallbackResponseDto> {
+    const processCallback = async (repos: {
+      workflowRunsRepo: Repository<WorkflowRun>;
+      customersRepo: Repository<Customer>;
+    }) => {
+      const customer = await repos.customersRepo.findOne({
+        where: { id: dto.customerId },
+      });
+
+      if (!customer) {
+        throw new NotFoundException(
+          `Customer with ID '${dto.customerId}' not found`,
+        );
+      }
+
+      const workflowRun = await repos.workflowRunsRepo.findOne({
+        where: { id: dto.workflowRunId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!workflowRun) {
+        throw new NotFoundException(
+          `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+        );
+      }
+
+      if (workflowRun.customerId !== customer.id) {
+        throw new BadRequestException(
+          `WorkflowRun '${workflowRun.id}' belongs to customer '${workflowRun.customerId}', not '${customer.id}'`,
+        );
+      }
+
+      if (workflowRun.workflowName !== 't12-wf05-customer-360') {
+        throw new BadRequestException(
+          `WorkflowRun '${workflowRun.id}' is associated with workflow '${workflowRun.workflowName}', not 't12-wf05-customer-360'`,
+        );
+      }
+
+      const isSuccess = dto.status === Customer360Status.SUCCESS;
+      const targetStatus = isSuccess
+        ? WorkflowStatus.SUCCESS
+        : WorkflowStatus.FAILED;
+
+      const isActive =
+        workflowRun.status === WorkflowStatus.PENDING ||
+        workflowRun.status === WorkflowStatus.RUNNING;
+      const callbackExecutionId =
+        typeof dto.n8nExecutionId === 'string' ? dto.n8nExecutionId.trim() : '';
+
+      if (!isActive) {
+        if (
+          workflowRun.n8nExecutionId &&
+          callbackExecutionId !== workflowRun.n8nExecutionId
+        ) {
+          throw new ConflictException(
+            `Conflict: WorkflowRun '${workflowRun.id}' belongs to execution '${workflowRun.n8nExecutionId}', not '${callbackExecutionId || 'none'}'`,
+          );
+        }
+
+        // Run has already concluded in a terminal state
+        if (workflowRun.status !== targetStatus) {
+          throw new ConflictException(
+            `Conflict: WorkflowRun '${workflowRun.id}' is already in terminal state '${workflowRun.status}', cannot transition to '${targetStatus}'`,
+          );
+        }
+
+        const existingPayload = workflowRun.outputPayload as Record<
+          string,
+          unknown
+        > | null;
+        if (isSuccess) {
+          if (
+            dto.summary &&
+            existingPayload?.summary &&
+            dto.summary !== existingPayload.summary
+          ) {
+            throw new ConflictException(
+              `Conflict: WorkflowRun '${workflowRun.id}' already completed with a conflicting summary payload`,
+            );
+          }
+        } else {
+          if (
+            dto.errorMessage &&
+            workflowRun.errorMessage &&
+            dto.errorMessage !== workflowRun.errorMessage
+          ) {
+            throw new ConflictException(
+              `Conflict: WorkflowRun '${workflowRun.id}' already failed with a conflicting error message`,
+            );
+          }
+        }
+
+        this.logger.warn(
+          `Idempotent duplicate Customer 360 callback detected for workflowRunId=${workflowRun.id}`,
+        );
+        return {
+          success: isSuccess,
+          customerId: customer.id,
+          workflowRunId: workflowRun.id,
+        };
+      }
+
+      if (!workflowRun.n8nExecutionId) {
+        throw new ConflictException(
+          `Conflict: WorkflowRun '${workflowRun.id}' has not been claimed by an n8n execution`,
+        );
+      }
+
+      if (!callbackExecutionId) {
+        throw new BadRequestException(
+          'n8nExecutionId is required to finalize a claimed Customer 360 WorkflowRun',
+        );
+      }
+
+      if (workflowRun.n8nExecutionId !== callbackExecutionId) {
+        throw new ConflictException(
+          `Conflict: WorkflowRun '${workflowRun.id}' is claimed by execution '${workflowRun.n8nExecutionId}'`,
+        );
+      }
+
+      if (
+        !workflowRun.claimExpiresAt ||
+        workflowRun.claimExpiresAt.getTime() <= Date.now()
+      ) {
+        throw new ConflictException(
+          `Conflict: WorkflowRun '${workflowRun.id}' lease is missing or has expired for execution '${workflowRun.n8nExecutionId}'`,
+        );
+      }
+
+      // Transition from active state to terminal state
+      workflowRun.status = targetStatus;
+      workflowRun.finishedAt = new Date();
+      workflowRun.claimExpiresAt = null;
+      workflowRun.errorMessage = dto.errorMessage ?? null;
+      workflowRun.outputPayload = {
+        summary: dto.summary ?? null,
+        keyStrengths: dto.keyStrengths || [],
+        potentialRisks: dto.potentialRisks || [],
+        growthOpportunities: dto.growthOpportunities || [],
+        recommendedNextAction: dto.recommendedNextAction ?? null,
+        sourceCoverage: dto.sourceCoverage || {
+          crmProfile: 'AVAILABLE',
+          interactions: 'EMPTY',
+          leadIntelligence: 'EMPTY',
+          followUps: 'EMPTY',
+          segments: 'EMPTY',
+          customerIssues: 'NOT_CONNECTED',
+          customerFeedback: 'NOT_CONNECTED',
+        },
+        rawAIOutput: dto.rawAIOutput ?? null,
+        modelInfo: {
+          provider: 'google',
+          model:
+            this.configService?.get<string>('GEMINI_MODEL') ||
+            'gemini-3.5-flash-lite',
+        },
+        evaluatedAt: new Date().toISOString(),
+      };
+
+      await repos.workflowRunsRepo.save(workflowRun);
+      this.logger.log(
+        `Updated WorkflowRun ${workflowRun.id} status=${workflowRun.status} for Customer 360 of customer ${customer.id}`,
+      );
+
+      return {
+        success: isSuccess,
+        customerId: customer.id,
+        workflowRunId: workflowRun.id,
+      };
+    };
+
+    if (this.dataSource) {
+      return await this.dataSource.transaction(async (manager) => {
+        return processCallback({
+          workflowRunsRepo: manager.getRepository(WorkflowRun),
+          customersRepo: manager.getRepository(Customer),
+        });
+      });
+    }
+
+    if (!this.workflowRunsRepository) {
+      throw new InternalServerErrorException(
+        'WorkflowRun repository is not configured',
+      );
+    }
+
+    return await processCallback({
+      workflowRunsRepo: this.workflowRunsRepository,
+      customersRepo: this.customersRepository,
+    });
   }
 
   private async assertCustomerAccess(
