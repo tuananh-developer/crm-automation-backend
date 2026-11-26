@@ -7,6 +7,7 @@ ENV_FILE="$DEPLOY_DIR/.env.production"
 COMPOSE_FILE="$DEPLOY_DIR/compose.production.yml"
 FRONTEND_DEFAULT="https://crm-automation-frontend.vercel.app"
 IMAGE="tanhisme/crm-automation-backend:latest"
+TAILSCALE_HOSTNAME="crm-automation-ec2"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this script with sudo: sudo bash $DEPLOY_DIR/bootstrap-ec2.sh" >&2
@@ -29,7 +30,7 @@ docker info >/dev/null 2>&1 || {
   exit 1
 }
 
-for required_file in "$COMPOSE_FILE" "$DEPLOY_DIR/Caddyfile" "$DEPLOY_DIR/check-env.sh" "$DEPLOY_DIR/rabbitmq/definitions.json"; do
+for required_file in "$COMPOSE_FILE" "$DEPLOY_DIR/Caddyfile" "$DEPLOY_DIR/check-env.sh" "$DEPLOY_DIR/configure-tailscale-serve.sh" "$DEPLOY_DIR/rabbitmq/definitions.json"; do
   [[ -s "$required_file" ]] || {
     echo "Deployment bundle is incomplete: $required_file" >&2
     exit 1
@@ -73,7 +74,6 @@ fi
 if [[ -f "$ENV_FILE" ]] && ! grep -q 'REPLACE_WITH_' "$ENV_FILE"; then
   echo "An existing non-placeholder production environment file was found."
   echo "It will be preserved; no secrets will be regenerated."
-  bash "$DEPLOY_DIR/check-env.sh" "$ENV_FILE"
 else
   if [[ -f "$ENV_FILE" ]]; then
     cp -a "$ENV_FILE" "$ENV_FILE.example-backup.$(date -u +%Y%m%dT%H%M%SZ)"
@@ -98,8 +98,8 @@ else
 
   read -r -p "API domain [api.$PUBLIC_IPV4.nip.io]: " API_DOMAIN
   API_DOMAIN="${API_DOMAIN:-api.$PUBLIC_IPV4.nip.io}"
-  read -r -p "n8n domain [n8n.$PUBLIC_IPV4.nip.io]: " N8N_DOMAIN
-  N8N_DOMAIN="${N8N_DOMAIN:-n8n.$PUBLIC_IPV4.nip.io}"
+  read -r -p "Public n8n webhook domain [hooks.$PUBLIC_IPV4.nip.io]: " N8N_WEBHOOK_DOMAIN
+  N8N_WEBHOOK_DOMAIN="${N8N_WEBHOOK_DOMAIN:-hooks.$PUBLIC_IPV4.nip.io}"
   read -r -p "ACME email for HTTPS certificates: " ACME_EMAIL
   read -r -p "Frontend origin [$FRONTEND_DEFAULT]: " FRONTEND_URL
   FRONTEND_URL="${FRONTEND_URL:-$FRONTEND_DEFAULT}"
@@ -127,7 +127,9 @@ else
   umask 077
   cat > "$ENV_FILE" <<EOF
 API_DOMAIN=$API_DOMAIN
-N8N_DOMAIN=$N8N_DOMAIN
+N8N_WEBHOOK_DOMAIN=$N8N_WEBHOOK_DOMAIN
+N8N_TAILSCALE_DNS_NAME=REPLACE_WITH_TAILSCALE_DNS_NAME
+N8N_EDITOR_BASE_URL=https://REPLACE_WITH_TAILSCALE_DNS_NAME/
 ACME_EMAIL=$ACME_EMAIL
 FRONTEND_URL=$FRONTEND_URL
 BACKEND_IMAGE_TAG=latest
@@ -177,8 +179,70 @@ N8N_WORKFLOW_CLAIM_LEASE_SECONDS=1200
 QUOTE_APPROVAL_THRESHOLD=0
 EOF
   chmod 0600 "$ENV_FILE"
-  bash "$DEPLOY_DIR/check-env.sh" "$ENV_FILE"
 fi
+
+# Migrate an existing deployment's public n8n hostname into the webhook-only hostname.
+read_env_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" "$ENV_FILE" | head -n 1
+}
+
+set_env_value() {
+  local key="$1" value="$2"
+  if grep -qE "^${key}=" "$ENV_FILE"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
+if ! grep -q '^N8N_WEBHOOK_DOMAIN=' "$ENV_FILE"; then
+  LEGACY_N8N_DOMAIN="$(read_env_value N8N_DOMAIN)"
+  if [[ -z "$LEGACY_N8N_DOMAIN" ]]; then
+    echo "N8N_WEBHOOK_DOMAIN is missing and no legacy N8N_DOMAIN can be migrated." >&2
+    exit 1
+  fi
+  set_env_value N8N_WEBHOOK_DOMAIN "$LEGACY_N8N_DOMAIN"
+fi
+
+# Install Tailscale on the EC2 host, not inside Docker, so Serve can proxy to loopback.
+if ! command -v jq >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y jq
+fi
+if ! command -v tailscale >/dev/null 2>&1; then
+  curl -fsSL https://tailscale.com/install.sh | sh
+fi
+systemctl enable --now tailscaled
+
+TAILSCALE_STATE="$(tailscale status --json 2>/dev/null | jq -r '.BackendState // empty' 2>/dev/null || true)"
+if [[ "$TAILSCALE_STATE" != "Running" ]]; then
+  echo
+  echo "Tailscale needs to join your tailnet."
+  echo "Authorize this EC2 device using the login URL printed by the next command."
+  tailscale up --hostname="$TAILSCALE_HOSTNAME" --accept-dns=false || true
+  for attempt in $(seq 1 120); do
+    TAILSCALE_STATE="$(tailscale status --json 2>/dev/null | jq -r '.BackendState // empty' 2>/dev/null || true)"
+    [[ "$TAILSCALE_STATE" == "Running" ]] && break
+    sleep 5
+  done
+fi
+
+if [[ "$TAILSCALE_STATE" != "Running" ]]; then
+  echo "Tailscale is not connected. Complete device authorization, then rerun bootstrap." >&2
+  tailscale status >&2 || true
+  exit 1
+fi
+
+TAILSCALE_DNS_NAME="$(tailscale status --json | jq -r '.Self.DNSName // empty' | sed 's/\\.$//')"
+if [[ -z "$TAILSCALE_DNS_NAME" ]]; then
+  echo "Could not determine this EC2 node's Tailscale MagicDNS name." >&2
+  exit 1
+fi
+
+set_env_value N8N_TAILSCALE_DNS_NAME "$TAILSCALE_DNS_NAME"
+set_env_value N8N_EDITOR_BASE_URL "https://$TAILSCALE_DNS_NAME:8443/"
+bash "$DEPLOY_DIR/check-env.sh" "$ENV_FILE"
 
 chown root:root "$ENV_FILE"
 chmod 0600 "$ENV_FILE"
@@ -191,6 +255,9 @@ docker pull "$IMAGE"
 
 echo "Starting production stack without building images..."
 "${COMPOSE[@]}" up -d --no-build
+
+echo "Configuring private n8n Editor access through Tailscale Serve..."
+bash "$DEPLOY_DIR/configure-tailscale-serve.sh"
 
 echo "Waiting for the backend health endpoint..."
 HEALTHY=false
@@ -225,19 +292,11 @@ if [[ "$API_READY" != "true" ]]; then
   exit 1
 fi
 
-echo "Waiting for the public HTTPS n8n endpoint..."
-N8N_READY=false
-for attempt in $(seq 1 24); do
-  if curl -fsS --connect-timeout 5 --max-time 10 "https://$N8N_DOMAIN/" >/dev/null 2>&1; then
-    N8N_READY=true
-    break
-  fi
-  sleep 5
-done
-
-if [[ "$N8N_READY" != "true" ]]; then
-  echo "n8n is not reachable through public HTTPS." >&2
-  echo "Check the N8N_DOMAIN DNS record and Caddy/n8n logs." >&2
+echo "Verifying that the public n8n webhook hostname does not expose the editor..."
+N8N_ROOT_STATUS="$(curl -sS --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' "https://$N8N_WEBHOOK_DOMAIN/" || true)"
+if [[ "$N8N_ROOT_STATUS" != "404" ]]; then
+  echo "Expected the public n8n hostname root to return 404, got: $N8N_ROOT_STATUS" >&2
+  echo "The n8n editor must only be reachable through Tailscale." >&2
   "${COMPOSE[@]}" logs --tail=100 caddy n8n >&2 || true
   exit 1
 fi
@@ -248,6 +307,8 @@ echo "===== PRODUCTION STACK ====="
 echo
 echo "Bootstrap completed."
 echo "API: https://$API_DOMAIN/api/v1/health"
-echo "n8n: https://$N8N_DOMAIN"
+echo "n8n Editor (Tailscale only): https://$TAILSCALE_DNS_NAME:8443/"
+echo "n8n public webhook base: https://$N8N_WEBHOOK_DOMAIN/"
+echo "The public webhook host returns 404 at / and only forwards webhook/form paths."
 echo "Preserve N8N_ENCRYPTION_KEY and Docker volume n8n_data."
 echo "Do not enable ENABLE_EC2_DEPLOY until production checks are complete."
