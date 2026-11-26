@@ -34,7 +34,7 @@ if [[ -z "$EXPECTED_DNS_NAME" || "$EXPECTED_DNS_NAME" != "$ACTUAL_DNS_NAME" ]]; 
 fi
 
 # Serve is tailnet-only. n8n publishes port 5678 on host loopback only.
-tailscale serve --bg --https=443 --yes http://127.0.0.1:5678
+tailscale serve --bg --https=8443 --yes http://127.0.0.1:5678
 tailscale serve status
 
-echo "Private n8n Editor: https://$ACTUAL_DNS_NAME/"
+echo "Private n8n Editor: https://$ACTUAL_DNS_NAME:8443/"
