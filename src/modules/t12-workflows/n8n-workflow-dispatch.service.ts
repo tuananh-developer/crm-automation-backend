@@ -8,6 +8,7 @@ import {
 
 export type N8nWebhookKey =
   | 'N8N_WF05_WEBHOOK_URL'
+  | 'N8N_WF09_WEBHOOK_URL'
   | 'N8N_WF10_WEBHOOK_URL'
   | 'N8N_WF11_WEBHOOK_URL'
   | 'N8N_WF12_WEBHOOK_URL'
@@ -27,6 +28,7 @@ export class N8nWorkflowDispatchService {
   ): Promise<OutboxEvent> {
     const allowedPaths: Record<N8nWebhookKey, string> = {
       N8N_WF05_WEBHOOK_URL: 't12-wf05-customer-360',
+      N8N_WF09_WEBHOOK_URL: 'internal/t12-wf09-conversation-summarizer',
       N8N_WF10_WEBHOOK_URL: 'internal/t12-wf10-next-best-action',
       N8N_WF11_WEBHOOK_URL: 'internal/t12-wf11-sales-meeting',
       N8N_WF12_WEBHOOK_URL: 'internal/t12-wf12-quote-proposal',

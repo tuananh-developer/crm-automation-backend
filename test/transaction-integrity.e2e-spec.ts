@@ -443,10 +443,11 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
 
       expect(apply.status).toBe(500);
 
-      const leads = await dataSource.query(
-        'SELECT id, phone FROM leads WHERE id = ANY($1::uuid[]) ORDER BY id;',
-        [[firstLeadId, secondLeadId]],
-      );
+      const leads: Array<{ id: string; phone: string }> =
+        await dataSource.query(
+          'SELECT id, phone FROM leads WHERE id = ANY($1::uuid[]) ORDER BY id;',
+          [[firstLeadId, secondLeadId]],
+        );
       const phonesById = new Map(leads.map((lead) => [lead.id, lead.phone]));
       expect(phonesById.get(firstLeadId)).toBe('+1 (415) 555-0101');
       expect(phonesById.get(secondLeadId)).toBe('+1 (415) 555-0102');
@@ -742,6 +743,167 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     expect(rejectedRequest.decision_comment).toBe(
       'Discount exceeds the permitted policy',
     );
+  });
+
+  it('deduplicates concurrent WF09 transcript ingestions under PostgreSQL 23505 and separates distinct meetings when idempotencyKey is omitted', async () => {
+    const leadId = await createLead(
+      'WF09 Concurrency',
+      `wf09.concurrent.${suffix}@example.test`,
+      '+14155550177',
+    );
+    const idempotencyKey = `wf09-concurrent-${suffix}`;
+
+    const meetingRun1 = await dataSource.getRepository(WorkflowRun).save({
+      workflowName: 'T12-WF11_SALES_MEETING',
+      leadId,
+      customerId: null,
+      triggeredByUserId: userId,
+      status: WorkflowStatus.PENDING,
+      inputPayload: {},
+      outputPayload: null,
+      errorMessage: null,
+      startedAt: new Date(),
+      finishedAt: null,
+    });
+    const meetingRun2 = await dataSource.getRepository(WorkflowRun).save({
+      workflowName: 'T12-WF11_SALES_MEETING',
+      leadId,
+      customerId: null,
+      triggeredByUserId: userId,
+      status: WorkflowStatus.PENDING,
+      inputPayload: {},
+      outputPayload: null,
+      errorMessage: null,
+      startedAt: new Date(),
+      finishedAt: null,
+    });
+    workflowRunIds.push(meetingRun1.id, meetingRun2.id);
+
+    const meetingId1 = randomUUID();
+    const meetingId2 = randomUUID();
+    await dataSource.query(
+      `INSERT INTO sales_meetings (id, workflow_run_id, owner_id, lead_id, status)
+       VALUES ($1, $2, $3, $4, 'PROCESSING'), ($5, $6, $3, $4, 'PROCESSING');`,
+      [meetingId1, meetingRun1.id, userId, leadId, meetingId2, meetingRun2.id],
+    );
+
+    try {
+      const [first, second] = await Promise.all([
+        api.post('/api/v1/conversation-transcripts').send({
+          leadId,
+          sourceType: 'CALL',
+          content: 'Customer asked for enterprise SLA pricing details.',
+          idempotencyKey,
+        }),
+        api.post('/api/v1/conversation-transcripts').send({
+          leadId,
+          sourceType: 'CALL',
+          content: 'Customer asked for enterprise SLA pricing details.',
+          idempotencyKey,
+        }),
+      ]);
+
+      expect(first.status).toBe(202);
+      expect(second.status).toBe(202);
+      expect(first.body.workflowRunId).toBeDefined();
+      expect(second.body.workflowRunId).toBe(first.body.workflowRunId);
+      expect(second.body.transcriptId).toBe(first.body.transcriptId);
+      workflowRunIds.push(first.body.workflowRunId as string);
+
+      const transcriptRows = await dataSource.query(
+        'SELECT id FROM conversation_transcripts WHERE workflow_run_id = $1;',
+        [first.body.workflowRunId],
+      );
+      expect(transcriptRows).toHaveLength(1);
+
+      const outboxRows = await dataSource.query(
+        "SELECT id FROM outbox_events WHERE payload->>'workflowRunId' = $1;",
+        [first.body.workflowRunId],
+      );
+      expect(outboxRows).toHaveLength(1);
+
+      // Two distinct meetings with identical transcript content when idempotencyKey is omitted
+      const meetingFirst = await api
+        .post('/api/v1/conversation-transcripts')
+        .send({
+          leadId,
+          meetingId: meetingId1,
+          sourceType: 'MEETING',
+          content: 'Identical follow-up discussion transcript.',
+        });
+      const meetingSecond = await api
+        .post('/api/v1/conversation-transcripts')
+        .send({
+          leadId,
+          meetingId: meetingId2,
+          sourceType: 'MEETING',
+          content: 'Identical follow-up discussion transcript.',
+        });
+
+      expect(meetingFirst.status).toBe(202);
+      expect(meetingSecond.status).toBe(202);
+      expect(meetingFirst.body.workflowRunId).toBeDefined();
+      expect(meetingSecond.body.workflowRunId).toBeDefined();
+      expect(meetingSecond.body.workflowRunId).not.toBe(
+        meetingFirst.body.workflowRunId,
+      );
+      expect(meetingSecond.body.transcriptId).not.toBe(
+        meetingFirst.body.transcriptId,
+      );
+      workflowRunIds.push(
+        meetingFirst.body.workflowRunId as string,
+        meetingSecond.body.workflowRunId as string,
+      );
+
+      // Omitting meetingId, sourceEventId, and idempotencyKey must fail with 400
+      const unkeyedRes = await api
+        .post('/api/v1/conversation-transcripts')
+        .send({
+          leadId,
+          sourceType: 'MEETING',
+          content: 'Unkeyed meeting transcript.',
+        });
+      expect(unkeyedRes.status).toBe(400);
+
+      // Two distinct meeting events without meetingId but with distinct sourceEventIds and identical text
+      const eventFirst = await api
+        .post('/api/v1/conversation-transcripts')
+        .send({
+          leadId,
+          sourceType: 'MEETING',
+          sourceEventId: `e2e-evt-1-${Date.now()}`,
+          content: 'Identical event transcript without meetingId.',
+        });
+      const eventSecond = await api
+        .post('/api/v1/conversation-transcripts')
+        .send({
+          leadId,
+          sourceType: 'MEETING',
+          sourceEventId: `e2e-evt-2-${Date.now()}`,
+          content: 'Identical event transcript without meetingId.',
+        });
+      expect(eventFirst.status).toBe(202);
+      expect(eventSecond.status).toBe(202);
+      expect(eventSecond.body.workflowRunId).not.toBe(
+        eventFirst.body.workflowRunId,
+      );
+      expect(eventSecond.body.transcriptId).not.toBe(
+        eventFirst.body.transcriptId,
+      );
+      workflowRunIds.push(
+        eventFirst.body.workflowRunId as string,
+        eventSecond.body.workflowRunId as string,
+      );
+    } finally {
+      await dataSource.query(
+        'DELETE FROM conversation_transcripts WHERE workflow_run_id = ANY($1::uuid[]);',
+        [workflowRunIds],
+      );
+      await dataSource.query(
+        'DELETE FROM sales_meetings WHERE id = ANY($1::uuid[]);',
+        [[meetingId1, meetingId2]],
+      );
+    }
   });
 
   it('requires Idempotency-Key, replays identical Customer 360 trigger, and deduplicates concurrent triggers under PostgreSQL 23505', async () => {

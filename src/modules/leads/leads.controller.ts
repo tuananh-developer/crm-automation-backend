@@ -24,9 +24,9 @@ import {
 } from '@nestjs/swagger';
 import { LeadsService } from './leads.service.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Public } from '../../common/decorators/public.decorator.js';
-import { N8nAuthGuard } from '../lead-intelligence/guards/n8n-auth.guard.js';
 import type { AuthenticatedUser } from '../../common/types/auth.interface.js';
 import { PaginatedResponseDto } from '../../common/index.js';
 import {
