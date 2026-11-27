@@ -44,11 +44,17 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
 
   const api = {
     get: (path: string) =>
-      request(app.getHttpServer()).get(path).set('Authorization', `Bearer ${accessToken}`),
+      request(app.getHttpServer())
+        .get(path)
+        .set('Authorization', `Bearer ${accessToken}`),
     post: (path: string) =>
-      request(app.getHttpServer()).post(path).set('Authorization', `Bearer ${accessToken}`),
+      request(app.getHttpServer())
+        .post(path)
+        .set('Authorization', `Bearer ${accessToken}`),
     patch: (path: string) =>
-      request(app.getHttpServer()).patch(path).set('Authorization', `Bearer ${accessToken}`),
+      request(app.getHttpServer())
+        .patch(path)
+        .set('Authorization', `Bearer ${accessToken}`),
   };
 
   beforeAll(async () => {
@@ -97,7 +103,10 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
       `INSERT INTO lead_sources (name, description, is_active)
        VALUES ($1, $2, true)
        RETURNING id;`,
-      [`CRM E2E Source ${timestamp}`, 'Source created by the E2E database fixture'],
+      [
+        `CRM E2E Source ${timestamp}`,
+        'Source created by the E2E database fixture',
+      ],
     );
     sourceId = sources[0].id;
   });
@@ -218,9 +227,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
     expect([200, 201]).toContain(res.status);
 
     // Verify lead status transitioned to QUALIFIED
-    const check = await api.get(
-      `/api/v1/leads/${leadId}`,
-    );
+    const check = await api.get(`/api/v1/leads/${leadId}`);
     expect(check.status).toBe(200);
     expect(check.body.status).toBe('QUALIFIED');
   });
@@ -229,6 +236,26 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // UC03: AI Lead Enrichment
   // ─────────────────────────────────────────────────────────────────────────
   it('UC03: should enrich Lead profile via POST /api/v1/enrichment/callback', async () => {
+    const mockUnauthorized = await request(app.getHttpServer()).get(
+      '/api/v1/enrichment/mock-enrichment?domain=innovatetech.io&email=cto@innovatetech.io',
+    );
+    expect(mockUnauthorized.status).toBe(401);
+
+    const mockByN8nKey = await request(app.getHttpServer())
+      .get(
+        '/api/v1/enrichment/mock-enrichment?domain=innovatetech.io&email=cto@innovatetech.io',
+      )
+      .set('x-n8n-api-key', N8N_KEY);
+    expect(mockByN8nKey.status).toBe(200);
+    expect(mockByN8nKey.body).toEqual(
+      expect.objectContaining({
+        provider: 'mock',
+        company: expect.objectContaining({
+          name: expect.any(String),
+        }),
+      }),
+    );
+
     const trigger = await api
       .post(`/api/v1/lead-intelligence/enrich/${leadId}`)
       .send({ provider: 'mock' });
@@ -258,9 +285,7 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // UC04: AI Lead Scoring
   // ─────────────────────────────────────────────────────────────────────────
   it('UC04: should calculate & record Lead score via POST /api/v1/scoring/callback', async () => {
-    const trigger = await api
-      .post(`/api/v1/scoring/score/${leadId}`)
-      .send({});
+    const trigger = await api.post(`/api/v1/scoring/score/${leadId}`).send({});
     expect(trigger.status).toBe(202);
 
     const res = await request(app.getHttpServer())
@@ -288,13 +313,11 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // ─────────────────────────────────────────────────────────────────────────
   it('UC05: should create Follow-up Sequence and enroll the qualified Lead', async () => {
     // 1. Create sequence
-    const seqRes = await api
-      .post('/api/v1/follow-up/sequences')
-      .send({
-        name: `Cadence E2E Integration ${timestamp}`,
-        description: 'Automated outreach cadence for qualified leads',
-        isActive: true,
-      });
+    const seqRes = await api.post('/api/v1/follow-up/sequences').send({
+      name: `Cadence E2E Integration ${timestamp}`,
+      description: 'Automated outreach cadence for qualified leads',
+      isActive: true,
+    });
 
     expect([200, 201]).toContain(seqRes.status);
     sequenceId = seqRes.body.id;
@@ -377,24 +400,19 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   it('UC06: should record Follow-up step execution via POST /api/v1/follow-ups/executions', async () => {
     n8nTriggerWebhook.mockClear();
 
-    const res = await api
-      .post('/api/v1/follow-ups/executions')
-      .send({
-        enrollmentId,
-        stepId,
-      });
+    const res = await api.post('/api/v1/follow-ups/executions').send({
+      enrollmentId,
+      stepId,
+    });
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('SUCCESS');
     expect(n8nTriggerWebhook).toHaveBeenCalledTimes(1);
-    expect(n8nTriggerWebhook).toHaveBeenCalledWith(
-      'follow-up-execute',
-      {
-        executionId: expect.any(String),
-        enrollmentId,
-        stepId,
-      },
-    );
+    expect(n8nTriggerWebhook).toHaveBeenCalledWith('follow-up-execute', {
+      executionId: expect.any(String),
+      enrollmentId,
+      stepId,
+    });
 
     const [execution] = await dataSource.query(
       `SELECT status, provider_message_id, response_payload
@@ -670,12 +688,10 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // ─────────────────────────────────────────────────────────────────────────
   it('UC07: should create, assign, and resolve a Human Review task', async () => {
     // 1. Create review task
-    const createRes = await api
-      .post('/api/v1/review-tasks')
-      .send({
-        leadId,
-        reason: 'High budget enterprise review required.',
-      });
+    const createRes = await api.post('/api/v1/review-tasks').send({
+      leadId,
+      reason: 'High budget enterprise review required.',
+    });
 
     expect([200, 201]).toContain(createRes.status);
     reviewTaskId = createRes.body.id;
@@ -713,18 +729,14 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // UC08: Convert Lead to Customer
   // ─────────────────────────────────────────────────────────────────────────
   it('UC08: should convert qualified Lead into Customer via POST /api/v1/leads/:id/convert', async () => {
-    const res = await api
-      .post(`/api/v1/leads/${leadId}/convert`)
-      .send({});
+    const res = await api.post(`/api/v1/leads/${leadId}/convert`).send({});
 
     expect([200, 201]).toContain(res.status);
     expect(res.body.customer.id).toBeDefined();
     customerId = res.body.customer.id;
 
     // Verify lead status updated to CONVERTED
-    const leadCheck = await api.get(
-      `/api/v1/leads/${leadId}`,
-    );
+    const leadCheck = await api.get(`/api/v1/leads/${leadId}`);
     expect(leadCheck.body.status).toBe('CONVERTED');
   });
 
@@ -747,25 +759,23 @@ describe('End-to-End CRM Automation Integration (UC01-UC09)', () => {
   // ─────────────────────────────────────────────────────────────────────────
   it('UC09: should create Segment and evaluate Customer assignment', async () => {
     // 1. Create segment
-    const segRes = await api
-      .post('/api/v1/segments')
-      .send({
-        name: `Enterprise VIP Segment ${timestamp}`,
-        description: 'High ARR and verified enterprise customers',
-        criteria: {
-          logic: 'AND',
-          assignmentType: 'RULE',
-          conditions: [
-            {
-              id: 'cond-1',
-              field: 'company_name',
-              operator: 'contains',
-              value: 'InnovateTech',
-            },
-          ],
-        },
-        isActive: true,
-      });
+    const segRes = await api.post('/api/v1/segments').send({
+      name: `Enterprise VIP Segment ${timestamp}`,
+      description: 'High ARR and verified enterprise customers',
+      criteria: {
+        logic: 'AND',
+        assignmentType: 'RULE',
+        conditions: [
+          {
+            id: 'cond-1',
+            field: 'company_name',
+            operator: 'contains',
+            value: 'InnovateTech',
+          },
+        ],
+      },
+      isActive: true,
+    });
 
     expect([200, 201]).toContain(segRes.status);
     segmentId = segRes.body.id;

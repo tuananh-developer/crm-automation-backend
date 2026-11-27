@@ -126,4 +126,11 @@ describe('LeadsController', () => {
 
     expect(service.convert).toHaveBeenCalledWith('lead-123', actor);
   });
+
+  it('should call service.findOneInternal with id without actor', async () => {
+    const result = await controller.findOneInternal('lead-123');
+
+    expect(service.findOneInternal).toHaveBeenCalledWith('lead-123');
+    expect(result).toEqual(mockLead);
+  });
 });

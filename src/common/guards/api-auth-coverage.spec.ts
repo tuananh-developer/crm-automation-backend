@@ -208,8 +208,6 @@ describe('API authentication guard coverage', () => {
     [LeadIntelligenceController, 'getLatestQualification'],
     [LeadIntelligenceController, 'getEnrichments'],
     [LeadIntelligenceController, 'getLatestEnrichment'],
-    [LeadIntelligenceController, 'mockEnrichment'],
-    [EnrichmentController, 'mockEnrichment'],
     [EnrichmentController, 'getEnrichmentsByLead'],
     [EnrichmentController, 'getLatestEnrichment'],
     [ScoringController, 'getScoringContext'],
@@ -225,6 +223,22 @@ describe('API authentication guard coverage', () => {
       );
 
       expect(guards).toContain(JwtAuthGuard);
+    },
+  );
+
+  it.each([
+    [LeadIntelligenceController, 'mockEnrichment'],
+    [EnrichmentController, 'mockEnrichment'],
+  ] as const)(
+    '%p.%s allows service or JWT authentication via JwtOrN8nAuthGuard',
+    (controller, method) => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        Object.getOwnPropertyDescriptor(controller.prototype, method)
+          ?.value as object,
+      );
+
+      expect(guards).toContain(JwtOrN8nAuthGuard);
     },
   );
 });

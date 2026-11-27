@@ -186,6 +186,17 @@ export class ScoringController {
     return ScoringMapper.toResponseDtoList(records);
   }
 
+  @Get('scores/:leadId/internal')
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({ summary: 'Internal service: Get score history for a lead' })
+  @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
+  async getScoresInternal(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<ScoringResponseDto[]> {
+    const records = await this.leadIntelligenceService.getScoresByLead(leadId);
+    return ScoringMapper.toResponseDtoList(records);
+  }
+
   @Get('scores/:leadId/latest')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -209,6 +220,19 @@ export class ScoringController {
       leadId,
       actor,
     );
+    return record ? ScoringMapper.toResponseDto(record) : null;
+  }
+
+  @Get('scores/:leadId/latest/internal')
+  @UseGuards(N8nAuthGuard)
+  @ApiOperation({
+    summary: 'Internal service: Get latest score assessment for a lead',
+  })
+  @ApiParam({ name: 'leadId', description: 'UUID of the lead' })
+  async getLatestScoreInternal(
+    @Param('leadId', ParseUUIDPipe) leadId: string,
+  ): Promise<ScoringResponseDto | null> {
+    const record = await this.leadIntelligenceService.getLatestScore(leadId);
     return record ? ScoringMapper.toResponseDto(record) : null;
   }
 }

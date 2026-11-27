@@ -24,16 +24,38 @@ describe('JwtOrN8nAuthGuard', () => {
 
   const createMockContext = (
     headers: Record<string, string>,
+    user?: unknown,
   ): ExecutionContext =>
     ({
       switchToHttp: jest.fn().mockReturnValue({
-        getRequest: jest.fn().mockReturnValue({ headers }),
+        getRequest: jest.fn().mockReturnValue({ headers, user }),
       }),
     }) as unknown as ExecutionContext;
 
+  it('returns true immediately if request already has authenticated user', async () => {
+    const context = createMockContext({}, { id: 'user-1' });
+
+    const result = await guard.canActivate(context);
+
+    expect(result).toBe(true);
+    expect(n8nAuthGuard.canActivate).not.toHaveBeenCalled();
+    expect(jwtAuthGuard.canActivate).not.toHaveBeenCalled();
+  });
+
   it('delegates to n8nAuthGuard when x-n8n-api-key header is present', async () => {
     (n8nAuthGuard.canActivate as jest.Mock).mockReturnValue(true);
-    const context = createMockContext({ 'x-n8n-api-key': 'secret' });
+    const context = createMockContext({ 'x-n8n-api-key': 'secret-token' });
+
+    const result = await guard.canActivate(context);
+
+    expect(result).toBe(true);
+    expect(n8nAuthGuard.canActivate).toHaveBeenCalledWith(context);
+    expect(jwtAuthGuard.canActivate).not.toHaveBeenCalled();
+  });
+
+  it('delegates to n8nAuthGuard when x-api-key header is present', async () => {
+    (n8nAuthGuard.canActivate as jest.Mock).mockReturnValue(true);
+    const context = createMockContext({ 'x-api-key': 'secret-token' });
 
     const result = await guard.canActivate(context);
 
@@ -52,6 +74,23 @@ describe('JwtOrN8nAuthGuard', () => {
 
     expect(result).toBe(true);
     expect(jwtAuthGuard.canActivate).toHaveBeenCalledWith(context);
+  });
+
+  it('falls back to n8nAuthGuard when jwtAuthGuard fails and Bearer is n8n secret', async () => {
+    (jwtAuthGuard.canActivate as jest.Mock).mockRejectedValue(
+      new UnauthorizedException('Invalid JWT'),
+    );
+    (n8nAuthGuard.canActivate as jest.Mock).mockReturnValue(true);
+
+    const context = createMockContext({
+      authorization: 'Bearer n8n-secret-token',
+    });
+
+    const result = await guard.canActivate(context);
+
+    expect(result).toBe(true);
+    expect(jwtAuthGuard.canActivate).toHaveBeenCalledWith(context);
+    expect(n8nAuthGuard.canActivate).toHaveBeenCalledWith(context);
   });
 
   it('throws UnauthorizedException when both guards fail', async () => {

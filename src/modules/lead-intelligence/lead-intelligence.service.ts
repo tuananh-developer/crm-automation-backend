@@ -124,24 +124,20 @@ export class LeadIntelligenceService {
 
   async triggerQualification(
     leadId: string,
-    dto: TriggerQualificationDto | undefined,
-    user: AuthenticatedUser,
+    dto?: TriggerQualificationDto,
+    actor?: AuthenticatedUser,
   ): Promise<TriggerQualificationResponseDto> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
-
-    this.assertLeadAccess(lead, user);
+    const lead = await this.assertLeadAccessById(leadId, actor);
 
     // Update lead status to QUALIFYING
     lead.status = LeadStatus.QUALIFYING;
+    await this.leadsRepository.save(lead);
 
     // Create workflow run record
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 'lead-qualification',
       leadId: lead.id,
-      triggeredByUserId: user.id,
+      triggeredByUserId: actor?.id ?? null,
       status: WorkflowStatus.PENDING,
       startedAt: new Date(),
       inputPayload: {
@@ -700,15 +696,10 @@ export class LeadIntelligenceService {
 
   async triggerEnrichment(
     leadId: string,
-    dto: TriggerEnrichmentDto | undefined,
-    user: AuthenticatedUser,
+    dto?: TriggerEnrichmentDto,
+    actor?: AuthenticatedUser,
   ): Promise<TriggerEnrichmentResponseDto> {
-    const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead) {
-      throw new NotFoundException(`Lead with ID '${leadId}' not found`);
-    }
-
-    this.assertLeadAccess(lead, user);
+    const lead = await this.assertLeadAccessById(leadId, actor);
 
     const provider = dto?.provider ?? DEFAULT_ENRICHMENT_PROVIDER;
 
@@ -729,7 +720,7 @@ export class LeadIntelligenceService {
     const workflowRun = this.workflowRunsRepository.create({
       workflowName: 'lead-enrichment',
       leadId: lead.id,
-      triggeredByUserId: user.id,
+      triggeredByUserId: actor?.id ?? null,
       status: WorkflowStatus.PENDING,
       startedAt: new Date(),
       inputPayload: {
@@ -830,6 +821,12 @@ export class LeadIntelligenceService {
       throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
     }
 
+    if (!dto.workflowRunId || !dto.workflowRunId.trim()) {
+      throw new BadRequestException(
+        'workflowRunId is required for enrichment callback correlation',
+      );
+    }
+
     const provider = dto.provider ?? DEFAULT_ENRICHMENT_PROVIDER;
     const companyIndustry = dto.industry ?? dto.companyIndustry ?? null;
     const contactJobTitle = dto.jobTitle ?? dto.contactJobTitle ?? null;
@@ -837,68 +834,101 @@ export class LeadIntelligenceService {
       dto.linkedInUrl ?? dto.contactLinkedinUrl ?? null;
     const companySize = dto.companySize ?? null;
 
-    // ── Idempotency Check ───────────────────────────────────────────────────
-    const existingRun = await this.workflowRunsRepository.findOne({
-      where: {
-        id: dto.workflowRunId,
-        leadId: dto.leadId,
-        workflowName: 'lead-enrichment',
-      },
-    });
-    this.assertCallbackRunScope(existingRun, lead.id, 'lead-enrichment');
-    const existingEnrichment = await this.enrichmentsRepository.findOne({
-      where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
-    });
-
-    if (this.isTerminalWorkflowStatus(existingRun.status)) {
-      if (
-        existingEnrichment &&
-        existingEnrichment.status !== EnrichmentStatus.PENDING
-      ) {
-        this.logger.warn(
-          `Idempotent duplicate callback detected for workflowRunId=${dto.workflowRunId}. Returning existing enrichment result.`,
-        );
-        return {
-          enrichment: existingEnrichment,
-          workflowRunUpdated: false,
-        };
-      }
-      this.assertCallbackRunActive(existingRun);
-    }
-    this.assertCallbackRunActive(existingRun);
-
     // ── Transaction Execution ───────────────────────────────────────────────
     const processEnrichment = async (repos: {
       leadRepo: Repository<Lead>;
       enrichmentRepo: Repository<LeadEnrichment>;
       workflowRunRepo: Repository<WorkflowRun>;
     }) => {
+      // 1. Lock WorkflowRun with pessimistic_write
       const workflowRun = await repos.workflowRunRepo.findOne({
-        where: {
-          id: dto.workflowRunId,
-          leadId: dto.leadId,
-          workflowName: 'lead-enrichment',
-        },
+        where: { id: dto.workflowRunId },
         lock: { mode: 'pessimistic_write' },
       });
-      this.assertCallbackRunScope(workflowRun, lead.id, 'lead-enrichment');
+      if (!workflowRun) {
+        throw new NotFoundException(
+          `WorkflowRun with ID '${dto.workflowRunId}' not found`,
+        );
+      }
+      this.assertCallbackRunScope(workflowRun, dto.leadId, 'lead-enrichment');
 
-      // 1. Find the pending enrichment record
-      const enrichment = await repos.enrichmentRepo.findOne({
+      // 2. Lock Lead with pessimistic_write
+      const lead = await repos.leadRepo.findOne({
+        where: { id: dto.leadId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!lead) {
+        throw new NotFoundException(`Lead with ID '${dto.leadId}' not found`);
+      }
+
+      // 3. Lock LeadEnrichment with pessimistic_write if existing
+      const existingEnrichment = await repos.enrichmentRepo.findOne({
         where: { workflowRunId: dto.workflowRunId, leadId: dto.leadId },
+        lock: { mode: 'pessimistic_write' },
       });
 
-      if (
-        enrichment &&
-        enrichment.status !== EnrichmentStatus.PENDING &&
-        this.isTerminalWorkflowStatus(workflowRun.status)
-      ) {
-        return { enrichment, workflowRunUpdated: false };
+      // Compute target workflow status based on callback status
+      let targetRunStatus: WorkflowStatus;
+      if (dto.status === EnrichmentStatus.FAILED) {
+        targetRunStatus = WorkflowStatus.FAILED;
+      } else if (dto.status === EnrichmentStatus.PARTIAL) {
+        targetRunStatus = WorkflowStatus.PARTIAL;
+      } else {
+        targetRunStatus = WorkflowStatus.SUCCESS;
       }
+
+      // 4. Terminal State & Idempotency Check inside transaction
+      if (this.isTerminalWorkflowStatus(workflowRun.status)) {
+        if (
+          existingEnrichment &&
+          existingEnrichment.status !== EnrichmentStatus.PENDING &&
+          workflowRun.status === targetRunStatus
+        ) {
+          // Idempotent duplicate: check for payload conflict
+          if (targetRunStatus === WorkflowStatus.FAILED) {
+            if (
+              dto.errorMessage &&
+              workflowRun.errorMessage &&
+              dto.errorMessage.trim() !== workflowRun.errorMessage.trim()
+            ) {
+              throw new ConflictException(
+                `Conflict: WorkflowRun '${workflowRun.id}' already failed with a conflicting error message`,
+              );
+            }
+          } else {
+            const recordedPayload = workflowRun.outputPayload as
+              { provider?: string } | null | undefined;
+            const recordedProvider: string | null =
+              typeof recordedPayload?.provider === 'string'
+                ? recordedPayload.provider
+                : (existingEnrichment.provider ?? null);
+            if (recordedProvider && provider && recordedProvider !== provider) {
+              throw new ConflictException(
+                `Conflict: WorkflowRun '${workflowRun.id}' already completed with provider '${recordedProvider}', conflicting with '${provider}'`,
+              );
+            }
+          }
+
+          this.logger.warn(
+            `Idempotent duplicate callback detected for workflowRunId=${dto.workflowRunId}. Returning existing enrichment result.`,
+          );
+          return {
+            enrichment: existingEnrichment,
+            workflowRunUpdated: false,
+          };
+        }
+
+        // Conflicting terminal transition
+        throw new ConflictException(
+          `Conflict: WorkflowRun '${workflowRun.id}' is already in terminal state '${workflowRun.status}' and cannot transition to '${targetRunStatus}'`,
+        );
+      }
+
+      // 5. Active check: must be in PENDING or RUNNING
       this.assertCallbackRunActive(workflowRun);
 
       const target =
-        enrichment ??
+        existingEnrichment ??
         repos.enrichmentRepo.create({
           leadId: dto.leadId,
           workflowRunId: dto.workflowRunId,
@@ -986,21 +1016,42 @@ export class LeadIntelligenceService {
       return { enrichment: savedEnrichment, workflowRunUpdated: true };
     };
 
+    let result: { enrichment: LeadEnrichment; workflowRunUpdated: boolean };
+
     if (this.dataSource) {
-      return await this.dataSource.transaction(async (manager) => {
+      result = await this.dataSource.transaction(async (manager) => {
         return processEnrichment({
           leadRepo: manager.getRepository(Lead),
           enrichmentRepo: manager.getRepository(LeadEnrichment),
           workflowRunRepo: manager.getRepository(WorkflowRun),
         });
       });
+    } else {
+      result = await processEnrichment({
+        leadRepo: this.leadsRepository,
+        enrichmentRepo: this.enrichmentsRepository,
+        workflowRunRepo: this.workflowRunsRepository,
+      });
     }
 
-    return await processEnrichment({
-      leadRepo: this.leadsRepository,
-      enrichmentRepo: this.enrichmentsRepository,
-      workflowRunRepo: this.workflowRunsRepository,
-    });
+    // Auto-trigger Lead Scoring (UC04) after successful enrichment
+    if (
+      dto.status === EnrichmentStatus.SUCCESS ||
+      dto.status === EnrichmentStatus.PARTIAL
+    ) {
+      try {
+        await this.triggerScoring(dto.leadId);
+        this.logger.log(
+          `Auto-triggered AI lead scoring for lead ${dto.leadId} after successful enrichment`,
+        );
+      } catch (scoringErr: unknown) {
+        this.logger.warn(
+          `Failed to auto-trigger scoring for lead ${dto.leadId}: ${scoringErr instanceof Error ? scoringErr.message : String(scoringErr)}`,
+        );
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -1056,19 +1107,170 @@ export class LeadIntelligenceService {
     const capitalizedName =
       namePart.charAt(0).toUpperCase() + namePart.slice(1);
 
+    const knownCompanies: Record<
+      string,
+      {
+        name: string;
+        website: string;
+        industry: string;
+        size: number;
+        jobTitle: string;
+        linkedinUrl: string;
+      }
+    > = {
+      viettel: {
+        name: 'Tập đoàn Công nghiệp - Viễn thông Quân đội (Viettel)',
+        website: 'https://viettel.com.vn',
+        industry: 'Viễn thông & Công nghệ thông tin',
+        size: 50000,
+        jobTitle: 'Trưởng ban Chuyển đổi số',
+        linkedinUrl: 'https://linkedin.com/company/viettel-group',
+      },
+      fpt: {
+        name: 'Tập đoàn FPT (FPT Corporation)',
+        website: 'https://fpt.com.vn',
+        industry: 'Công nghệ thông tin & Dịch vụ số',
+        size: 70000,
+        jobTitle: 'Giám đốc Công nghệ (CTO)',
+        linkedinUrl: 'https://linkedin.com/company/fpt-corporation',
+      },
+      vng: {
+        name: 'Công ty Cổ phần VNG',
+        website: 'https://vng.com.vn',
+        industry: 'Internet & Trò chơi trực tuyến',
+        size: 4000,
+        jobTitle: 'Giám đốc Kỹ thuật (VP of Engineering)',
+        linkedinUrl: 'https://linkedin.com/company/vng-corporation',
+      },
+      vinfast: {
+        name: 'Công ty TNHH Sản xuất và Kinh doanh VinFast',
+        website: 'https://vinfastauto.com',
+        industry: 'Sản xuất ô tô & Xe điện',
+        size: 25000,
+        jobTitle: 'Giám đốc Phát triển Chuỗi cung ứng',
+        linkedinUrl: 'https://linkedin.com/company/vinfast-auto',
+      },
+      vingroup: {
+        name: 'Tập đoàn Vingroup',
+        website: 'https://vingroup.net',
+        industry: 'Tập đoàn Đa ngành & Bất động sản',
+        size: 60000,
+        jobTitle: 'Trưởng ban Đầu tư & Chiến lược',
+        linkedinUrl: 'https://linkedin.com/company/vingroup',
+      },
+      momo: {
+        name: 'Công ty Cổ phần Dịch vụ Di động Trực tuyến (MoMo)',
+        website: 'https://momo.vn',
+        industry: 'Fintech & Thanh toán số',
+        size: 2500,
+        jobTitle: 'Trưởng phòng Phát triển Kinh doanh',
+        linkedinUrl: 'https://linkedin.com/company/momo-wallet',
+      },
+      vnpt: {
+        name: 'Tập đoàn Bưu chính Viễn thông Việt Nam (VNPT)',
+        website: 'https://vnpt.com.vn',
+        industry: 'Viễn thông & Chuyển đổi số',
+        size: 40000,
+        jobTitle: 'Kỹ sư Trưởng Giải pháp Doanh nghiệp',
+        linkedinUrl: 'https://linkedin.com/company/vnpt',
+      },
+      vku: {
+        name: 'Trường Đại học Công nghệ Thông tin và Truyền thông Việt - Hàn (VKU)',
+        website: 'https://vku.udn.vn',
+        industry: 'Giáo dục Đại học & Nghiên cứu CNTT',
+        size: 500,
+        jobTitle: 'Trưởng bộ môn / Giảng viên cao cấp',
+        linkedinUrl: 'https://linkedin.com/school/vku-udn',
+      },
+      techcombank: {
+        name: 'Ngân hàng TMCP Kỹ thương Việt Nam (Techcombank)',
+        website: 'https://techcombank.com',
+        industry: 'Ngân hàng & Dịch vụ Tài chính',
+        size: 13000,
+        jobTitle: 'Trưởng phòng Khách hàng Doanh nghiệp',
+        linkedinUrl: 'https://linkedin.com/company/techcombank',
+      },
+      vietcombank: {
+        name: 'Ngân hàng TMCP Ngoại thương Việt Nam (Vietcombank)',
+        website: 'https://vietcombank.com.vn',
+        industry: 'Ngân hàng & Dịch vụ Tài chính',
+        size: 23000,
+        jobTitle: 'Giám đốc Quan hệ Khách hàng',
+        linkedinUrl: 'https://linkedin.com/company/vietcombank',
+      },
+      shopee: {
+        name: 'Shopee Vietnam',
+        website: 'https://shopee.vn',
+        industry: 'Thương mại Điện tử (E-Commerce)',
+        size: 8000,
+        jobTitle: 'Operations Team Lead',
+        linkedinUrl: 'https://linkedin.com/company/shopee',
+      },
+      samsung: {
+        name: 'Samsung Electronics Vietnam',
+        website: 'https://samsung.com/vn',
+        industry: 'Sản xuất Điện tử & Bán dẫn',
+        size: 100000,
+        jobTitle: 'Senior R&D Manager',
+        linkedinUrl: 'https://linkedin.com/company/samsung-electronics',
+      },
+      google: {
+        name: 'Google LLC',
+        website: 'https://google.com',
+        industry: 'Công nghệ & Điện toán đám mây',
+        size: 180000,
+        jobTitle: 'Senior Software Engineer',
+        linkedinUrl: 'https://linkedin.com/company/google',
+      },
+      microsoft: {
+        name: 'Microsoft Corporation',
+        website: 'https://microsoft.com',
+        industry: 'Phần mềm & Nền tảng Đám mây',
+        size: 220000,
+        jobTitle: 'Cloud Solution Architect',
+        linkedinUrl: 'https://linkedin.com/company/microsoft',
+      },
+    };
+
+    const normalizedKey = (namePart || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+    const matched = knownCompanies[normalizedKey];
+
+    const company = matched
+      ? {
+          name: matched.name,
+          website: matched.website,
+          industry: matched.industry,
+          size: matched.size,
+        }
+      : {
+          name: `${capitalizedName} Solutions`,
+          website: `https://${domain}`,
+          industry:
+            domain.endsWith('.edu') || domain.endsWith('.edu.vn')
+              ? 'Giáo dục & Đào tạo'
+              : domain.endsWith('.gov') || domain.endsWith('.gov.vn')
+                ? 'Cơ quan Nhà nước'
+                : 'Software & Technology',
+          size: 150,
+        };
+
+    const contact = matched
+      ? {
+          jobTitle: matched.jobTitle,
+          linkedinUrl: matched.linkedinUrl,
+        }
+      : {
+          jobTitle: 'Director of Operations',
+          linkedinUrl: `https://linkedin.com/company/${namePart}`,
+        };
+
     return {
       provider: query.provider || 'mock',
       externalRequestId: `ext-${Date.now()}`,
-      company: {
-        name: `${capitalizedName} Solutions`,
-        website: `https://${domain}`,
-        industry: 'Software & Technology',
-        size: 150,
-      },
-      contact: {
-        jobTitle: 'Director of Operations',
-        linkedinUrl: `https://linkedin.com/company/${namePart}`,
-      },
+      company,
+      contact,
       rawResponse: {
         source: 'mock-enrichment-v1',
         query: { domain, email: query.email },
@@ -1844,8 +2046,9 @@ export class LeadIntelligenceService {
     actor?: AuthenticatedUser,
   ): Promise<Lead> {
     const lead = await this.leadsRepository.findOne({ where: { id: leadId } });
-    if (!lead)
+    if (!lead) {
       throw new NotFoundException(`Lead with ID '${leadId}' not found`);
+    }
     if (actor) {
       this.assertLeadAccess(lead, actor);
     }

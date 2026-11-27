@@ -5,6 +5,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module.js';
+import { AddNotificationSeverityColumn1728450000000 } from '../src/database/migrations/1728450000000-AddNotificationSeverityColumn.js';
 import { Quote } from '../src/modules/t12-workflows/entities/quote.entity.js';
 import { QuoteApproval } from '../src/modules/t12-workflows/entities/quote-approval.entity.js';
 import { WF12_NAME } from '../src/modules/t12-workflows/quotes.service.js';
@@ -743,6 +744,57 @@ describe('Critical transaction integrity (PostgreSQL E2E)', () => {
     expect(rejectedRequest.decision_comment).toBe(
       'Discount exceeds the permitted policy',
     );
+  });
+
+  it('upgrades a pre-existing nullable notifications.severity column (PR #52 applied first) to NOT NULL DEFAULT INFO', async () => {
+    const queryRunner = dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      // Simulate PR #52 (1728600000000) having already created a nullable varchar(20) severity column
+      await queryRunner.query(`
+        ALTER TABLE "notifications"
+        ALTER COLUMN "severity" DROP NOT NULL,
+        ALTER COLUMN "severity" DROP DEFAULT,
+        ALTER COLUMN "severity" TYPE varchar(20)
+      `);
+
+      const nullNotifId = randomUUID();
+      await queryRunner.query(
+        `INSERT INTO "notifications" ("id", "user_id", "type", "title", "content", "severity", "is_read")
+         VALUES ($1, $2, 'WORKFLOW_COMPLETED', 'Nullable severity test', 'Created before UC03 migration', NULL, false)`,
+        [nullNotifId, userId],
+      );
+
+      const migration = new AddNotificationSeverityColumn1728450000000();
+      await migration.up(queryRunner);
+
+      const colMeta: Array<{
+        is_nullable: string;
+        character_maximum_length: number;
+        column_default: string | null;
+      }> = await queryRunner.query(
+        `SELECT is_nullable, character_maximum_length, column_default
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'notifications'
+           AND column_name = 'severity'`,
+      );
+      expect(colMeta).toHaveLength(1);
+      expect(colMeta[0].is_nullable).toBe('NO');
+      expect(Number(colMeta[0].character_maximum_length)).toBe(30);
+      expect(colMeta[0].column_default).toContain('INFO');
+
+      const backfilledRows: Array<{ severity: string }> =
+        await queryRunner.query(
+          `SELECT severity FROM "notifications" WHERE id = $1`,
+          [nullNotifId],
+        );
+      expect(backfilledRows).toEqual([{ severity: 'INFO' }]);
+    } finally {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+    }
   });
 
   it('deduplicates concurrent WF09 transcript ingestions under PostgreSQL 23505 and separates distinct meetings when idempotencyKey is omitted', async () => {
