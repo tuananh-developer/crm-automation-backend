@@ -98,7 +98,7 @@ export class SegmentsService {
 
   async findAll(
     query: QuerySegmentDto,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<SegmentResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -136,7 +136,7 @@ export class SegmentsService {
         .select('cs.segmentId', 'segmentId')
         .addSelect('COUNT(*)', 'count')
         .where('cs.segmentId IN (:...segmentIds)', { segmentIds });
-      if (actor.role === UserRole.SALES) {
+      if (actor?.role === UserRole.SALES) {
         countQuery
           .leftJoin('cs.customer', 'countedCustomer')
           .andWhere('countedCustomer.createdBy = :actorId', {
@@ -279,7 +279,7 @@ export class SegmentsService {
   async getCustomers(
     segmentId: string,
     query: QuerySegmentDto,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<CustomerResponseDto>> {
     await this.ensureSegmentExists(segmentId);
 
@@ -300,7 +300,7 @@ export class SegmentsService {
         { search: `%${query.search}%` },
       );
     }
-    if (actor.role === UserRole.SALES) {
+    if (actor?.role === UserRole.SALES) {
       qb.andWhere('customer.createdBy = :actorId', { actorId: actor.id });
     }
 
@@ -411,7 +411,7 @@ export class SegmentsService {
   async evaluateAll(
     segmentId: string,
     dto: EvaluateSegmentBulkDto,
-    actor: AuthenticatedUser,
+    actor?: AuthenticatedUser,
   ): Promise<EvaluateSegmentBulkResponseDto> {
     const segment = await this.getSegmentForEvaluation(segmentId);
 
@@ -431,7 +431,7 @@ export class SegmentsService {
     const customers =
       customerIds === undefined
         ? await this.customersRepository.find({
-            ...(actor.role === UserRole.SALES
+            ...(actor?.role === UserRole.SALES
               ? { where: { createdBy: actor.id } }
               : {}),
             relations,
@@ -440,7 +440,7 @@ export class SegmentsService {
           ? []
           : await this.customersRepository.find({
               where: customerIds.map((id) =>
-                actor.role === UserRole.SALES
+                actor?.role === UserRole.SALES
                   ? { id, createdBy: actor.id }
                   : { id },
               ),
@@ -490,7 +490,7 @@ export class SegmentsService {
           assignment.confidence = evaluation.confidence;
           assignment.assignedReason = evaluation.reason;
           assignment.assignedAt = new Date();
-          assignment.assignedBy = actor.id;
+          assignment.assignedBy = actor?.id ?? segment.createdBy;
 
           toSave.push(assignment);
         } else if (existing) {

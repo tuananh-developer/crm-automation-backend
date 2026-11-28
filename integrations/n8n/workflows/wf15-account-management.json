@@ -124,6 +124,7 @@
       "type": "@n8n/n8n-nodes-langchain.openAi",
       "typeVersion": 1.8,
       "position": [1540, 0],
+      "onError": "continueRegularOutput",
       "parameters": {
         "modelId": {"__rl": true, "value": "gpt-4o-mini", "mode": "list"},
         "messages": {

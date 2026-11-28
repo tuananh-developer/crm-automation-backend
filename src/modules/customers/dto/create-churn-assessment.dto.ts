@@ -27,6 +27,10 @@ export class ChurnEvidenceDto {
 
   @IsOptional()
   @IsString()
+  signal?: string;
+
+  @IsOptional()
+  @IsString()
   field?: string;
 
   @IsOptional()
@@ -34,7 +38,31 @@ export class ChurnEvidenceDto {
 
   @IsOptional()
   @IsString()
+  observedAt?: string;
+
+  @IsOptional()
+  @IsString()
   note?: string;
+
+  @IsOptional()
+  @IsString()
+  customerId?: string;
+
+  @IsOptional()
+  @IsString()
+  leadId?: string;
+
+  @IsOptional()
+  @IsString()
+  interactionId?: string;
+
+  @IsOptional()
+  @IsString()
+  enrollmentId?: string;
+
+  @IsOptional()
+  @IsString()
+  executionId?: string;
 }
 
 export class CreateChurnAssessmentDto {

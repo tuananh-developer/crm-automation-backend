@@ -23,20 +23,20 @@ Use this checklist to judge whether the implementation meets the completed-syste
 
 - [ ] Qualification confidence `0.80` routes to exactly one ReviewTask; repeat callbacks do not duplicate it.
 - [ ] Lead score is 0–100 and labels follow `HOT >=75`, `WARM >=40 and <75`, `COLD <40`.
-- [ ] Churn boundary tests cover 39/40 and 69/70; insufficient evidence returns `INSUFFICIENT_DATA`.
-- [ ] Health weights are 30/25/25/20; normalization requires at least two meaningful components.
+- [x] Churn boundary tests cover 39/40 and 69/70; insufficient evidence returns `INSUFFICIENT_DATA`.
+- [x] Health weights are 30/25/25/20; normalization requires at least two meaningful components.
 - [ ] Strategic status can be set only by authorized Sales/Admin and records who marked it.
-- [ ] ReviewTask and CustomerTask have separate semantics/lifecycle and source/idempotency validation.
+- [x] ReviewTask and CustomerTask have separate semantics/lifecycle and source/idempotency validation.
 - [ ] Lead-to-Customer conversion is transactional, preserves relationships and prevents duplicate conversion.
 - [ ] Data Cleaning rejects unsafe, non-allowlisted, stale, unauthorized or unapproved corrections; all applied changes are audited.
 - [ ] Quote line/pricing/tax/discount/totals are calculated by backend and require configured approval before final offer.
-- [ ] Renewal sends obey consent/policy/approval; renewal attempts are idempotent and auditable.
+- [x] Renewal sends obey consent/policy/approval; renewal attempts are idempotent and auditable.
 
 ## D. APIs and event contracts
 
 - [ ] Enrichment routes use `/api/v1/leads/:leadId/enrichments` and history/latest semantics are tested.
-- [ ] Follow-up endpoints use the `/api/v1/follow-ups/...` family.
-- [ ] `lead.follow_up.triggered` contains required `data.executionId` referencing a persisted FollowUpExecution.
+- [x] Follow-up endpoints use the `/api/v1/follow-ups/...` family.
+- [x] `lead.follow_up.triggered` contains required `data.executionId` referencing a persisted FollowUpExecution.
 - [ ] Each independent RabbitMQ consumer has a dedicated durable queue/exact binding.
 - [ ] Retry intervals are 1/5/15 minutes after initial attempt; max four total attempts; exhausted failures reach DLQ.
 - [ ] Manual replay is authorized, audited and idempotent.
@@ -51,20 +51,20 @@ For each row, verify the named JSON, exact trigger, all 12 nodes, branch connect
 | WF01 | Lead Qualification | Tuấn Anh | [x] | [ ] | [ ] |
 | WF02 | Lead Enrichment | Trường Linh | [ ] | [ ] | [ ] |
 | WF03 | Lead Scoring | Trường Linh | [ ] | [ ] | [ ] |
-| WF04 | Follow-up | Trọng | [ ] | [ ] | [ ] |
+| WF04 | Follow-up | Trọng | [x] | [ ] | [x] |
 | WF05 | Customer 360 | Trường Linh | [ ] | [ ] | [ ] |
-| WF06 | Churn Monitoring | Trọng | [ ] | [ ] | [ ] |
-| WF07 | Customer Segmentation | Trọng | [ ] | [ ] | [ ] |
+| WF06 | Churn Monitoring | Trọng | [x] | [ ] | [x] |
+| WF07 | Customer Segmentation | Trọng | [x] | [ ] | [x] |
 | WF08 | Data Cleaning | Tuấn Anh | [x] | [ ] | [ ] |
 | WF09 | Conversation Summarizer | Trường Linh | [ ] | [ ] | [ ] |
 | WF10 | Next Best Action | Tuấn Anh | [x] | [ ] | [ ] |
 | WF11 | Sales Meeting | Tuấn Anh | [x] | [ ] | [ ] |
 | WF12 | Quote & Proposal | Tuấn Anh | [x] | [ ] | [ ] |
-| WF13 | Renewal Management | Trọng | [ ] | [ ] | [ ] |
+| WF13 | Renewal Management | Trọng | [x] | [ ] | [x] |
 | WF14 | Customer Feedback | Trường Linh | [ ] | [ ] | [ ] |
-| WF15 | Account Management | Trọng | [ ] | [ ] | [ ] |
+| WF15 | Account Management | Trọng | [x] | [ ] | [x] |
 
-The structural Jest regression test at `src/modules/t12-workflows/t12-workflow-structure.spec.ts` verifies exactly 12 functional nodes, one trigger and trigger-to-node reachability for the five workflows owned by Tuấn Anh. This static source check does not substitute for the separate import/runtime and integration-test columns.
+The structural Jest regression test at `src/modules/t12-workflows/t12-workflow-structure.spec.ts` verifies exactly 12 functional nodes, one trigger and trigger-to-node reachability for the five workflows owned by Tuấn Anh. For the five workflows owned by Trọng (WF04, WF06, WF07, WF13, WF15), 12-functional-node structural compliance and backend integration/E2E contracts are verified by `src/modules/follow-up/follow-up-workflow.contract.spec.ts` and `test/crm-automation-e2e.e2e-spec.ts` (WF04), `src/modules/customers/churn-monitoring-workflow.contract.spec.ts` (WF06), `src/modules/customers/segments.service.spec.ts` (WF07), `src/modules/renewal/wf13-workflow-structure.spec.ts` and `test/renewal.e2e-spec.ts` (WF13), and `src/modules/customers/wf15-workflow-contract.spec.ts` and `test/wf15-account-health.e2e-spec.ts` (WF15). This static and integration test coverage does not substitute for the separate live n8n `Import/runtime` column.
 
 Each JSON contains exactly 12 functional nodes including one trigger. IF/Switch counts; Sticky Notes do not; the shared Error Handler is separate. A workflow passes only when the exported JSON node graph and runtime behavior conform, not merely when its Activity Diagram has 12 numbered steps.
 

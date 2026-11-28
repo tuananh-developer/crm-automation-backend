@@ -1,8 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
+import { InternalSegmentsWorkflowController } from './internal-segments-workflow.controller.js';
 import { SegmentsService } from './segments.service.js';
 import { In } from 'typeorm';
 import type { DeepPartial, Repository } from 'typeorm';
@@ -1004,6 +1007,396 @@ describe('SegmentsService', () => {
         service.createWorkflowRun('segment-1', ' '),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(workflowRunRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('WF07 Customer Segmentation Workflow Contract & Multi-Page Discovery', () => {
+    type WorkflowNode = {
+      name: string;
+      type: string;
+      parameters?: {
+        method?: string;
+        url?: string;
+        mode?: string;
+        fieldToSplitOut?: string;
+        jsCode?: string;
+        jsonBody?: string;
+        sendQuery?: boolean;
+        queryParameters?: {
+          parameters?: Array<{ name?: string; value?: string }>;
+        };
+        sendHeaders?: boolean;
+        headerParameters?: {
+          parameters?: Array<{ name?: string; value?: string }>;
+        };
+        options?: {
+          timeout?: number;
+          pagination?: {
+            pagination?: {
+              paginationMode?: string;
+              parameters?: {
+                parameters?: Array<{
+                  type?: string;
+                  name?: string;
+                  value?: string;
+                }>;
+              };
+              paginationCompleteWhen?: string;
+              completeExpression?: string;
+            };
+          };
+        };
+      };
+      retryOnFail?: boolean;
+      maxTries?: number;
+      waitBetweenTries?: number;
+    };
+
+    type WorkflowExport = {
+      name: string;
+      nodes: WorkflowNode[];
+      connections: Record<string, { main?: Array<Array<{ node: string }>> }>;
+    };
+
+    const workflowPath = resolve(
+      process.cwd(),
+      'integrations/n8n/workflows/wf07-customer-segmentation.json',
+    );
+    let workflow: WorkflowExport;
+    let internalController: InternalSegmentsWorkflowController;
+
+    beforeAll(() => {
+      workflow = JSON.parse(
+        readFileSync(workflowPath, 'utf8'),
+      ) as WorkflowExport;
+    });
+
+    beforeEach(() => {
+      internalController = new InternalSegmentsWorkflowController(service);
+    });
+
+    function getNode(name: string): WorkflowNode {
+      const found = workflow.nodes.find((node) => node.name === name);
+      if (!found) {
+        throw new Error(`Missing node: ${name}`);
+      }
+      return found;
+    }
+
+    it('has exactly 12 reachable functional nodes, one schedule trigger, and no HTTP calls inside Code nodes', () => {
+      const functionalNodes = workflow.nodes.filter(
+        (node) => node.type !== 'n8n-nodes-base.stickyNote',
+      );
+      expect(functionalNodes).toHaveLength(12);
+
+      const triggers = functionalNodes.filter((node) =>
+        /^(?:webhook|.*Trigger)$/i.test(node.type.split('.').at(-1) ?? ''),
+      );
+      expect(triggers).toHaveLength(1);
+      expect(triggers[0]?.type).toBe('n8n-nodes-base.scheduleTrigger');
+
+      const names = new Set(functionalNodes.map((node) => node.name));
+      const trigger = triggers[0];
+      if (!trigger) throw new Error('No trigger found');
+      const visited = new Set<string>();
+      const pending: string[] = [trigger.name];
+      while (pending.length > 0) {
+        const current = pending.pop();
+        if (!current || visited.has(current)) continue;
+        visited.add(current);
+        for (const output of workflow.connections[current]?.main ?? []) {
+          for (const edge of output ?? []) {
+            if (names.has(edge.node)) pending.push(edge.node);
+          }
+        }
+      }
+      expect(visited.size).toBe(12);
+
+      for (const node of functionalNodes) {
+        if (node.type === 'n8n-nodes-base.code') {
+          const code = node.parameters?.jsCode ?? '';
+          expect(code).not.toContain('httpRequest');
+          expect(code).not.toMatch(/\bfetch\s*\(/);
+        }
+        if (node.type === 'n8n-nodes-base.httpRequest') {
+          expect(node.parameters?.options?.timeout).toBeGreaterThan(0);
+          expect(node.retryOnFail).toBe(true);
+          expect(node.maxTries).toBeGreaterThanOrEqual(3);
+          expect(node.waitBetweenTries).toBeGreaterThan(0);
+        }
+      }
+    });
+
+    it('configures a dedicated HTTP Request node for idempotent WorkflowRun creation with X-N8N-API-KEY and Idempotency-Key headers', () => {
+      const createRunNode = getNode('4. Create Workflow Run');
+      expect(createRunNode.type).toBe('n8n-nodes-base.httpRequest');
+      expect(createRunNode.parameters?.method).toBe('POST');
+      expect(createRunNode.parameters?.url).toBe(
+        '={{ $env.CRM_API_BASE_URL }}/internal/n8n/segments/{{ $json.id }}/workflow-runs',
+      );
+
+      const headers =
+        createRunNode.parameters?.headerParameters?.parameters ?? [];
+      expect(headers).toEqual(
+        expect.arrayContaining([
+          {
+            name: 'X-N8N-API-KEY',
+            value: '={{ $env.N8N_API_KEY }}',
+          },
+          {
+            name: 'Idempotency-Key',
+            value: "={{ String($execution.id || '') + ':' + $json.id }}",
+          },
+        ]),
+      );
+
+      const splitConnections =
+        workflow.connections['3. Split Segments']?.main?.[0] ?? [];
+      expect(splitConnections).toContainEqual(
+        expect.objectContaining({ node: '4. Create Workflow Run' }),
+      );
+      const runConnections =
+        workflow.connections['4. Create Workflow Run']?.main?.[0] ?? [];
+      expect(runConnections).toContainEqual(
+        expect.objectContaining({ node: '5. Validate Evaluation Request' }),
+      );
+    });
+
+    it('paginates active segments until exhausted and evaluates more than three active segments across multiple pages end-to-end', async () => {
+      const getSegmentsNode = getNode('2. Get Active Segments');
+      const queryParams =
+        getSegmentsNode.parameters?.queryParameters?.parameters ?? [];
+      expect(queryParams).toEqual(
+        expect.arrayContaining([
+          { name: 'isActive', value: 'true' },
+          { name: 'limit', value: '100' },
+          { name: 'page', value: '={{ $pageCount + 1 }}' },
+        ]),
+      );
+
+      const paginationConfig =
+        getSegmentsNode.parameters?.options?.pagination?.pagination;
+      expect(paginationConfig?.paginationMode).toBe(
+        'updateAParameterInEachRequest',
+      );
+      expect(paginationConfig?.parameters?.parameters).toEqual([
+        {
+          type: 'qs',
+          name: 'page',
+          value: '={{ $pageCount + 1 }}',
+        },
+      ]);
+      expect(paginationConfig?.paginationCompleteWhen).toBe('other');
+
+      const completeExpr = (paginationConfig?.completeExpression ?? '')
+        .replace(/^=\{\{\s*/, '')
+        .replace(/\s*\}\}$/, '');
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const isPaginationComplete = new Function(
+        '$response',
+        `return Boolean(${completeExpr});`,
+      ) as ($response: { body: unknown }) => boolean;
+
+      const fiveActiveSegments: Segment[] = Array.from(
+        { length: 5 },
+        (_, idx) => ({
+          ...mockSegment,
+          id: `00000000-0000-4000-8000-00000000000${idx + 1}`,
+          name: `Active Segment ${idx + 1}`,
+        }),
+      );
+
+      const pageLimit = 2;
+      const segmentQb = createQueryBuilder();
+      let currentSkip = 0;
+      let currentTake = pageLimit;
+      segmentQb.skip.mockImplementation((val: number) => {
+        currentSkip = val;
+        return segmentQb;
+      });
+      segmentQb.take.mockImplementation((val: number) => {
+        currentTake = val;
+        return segmentQb;
+      });
+      segmentQb.getManyAndCount.mockImplementation(() =>
+        Promise.resolve([
+          fiveActiveSegments.slice(currentSkip, currentSkip + currentTake),
+          fiveActiveSegments.length,
+        ]),
+      );
+      (segmentsRepository.createQueryBuilder as jest.Mock).mockReturnValue(
+        segmentQb,
+      );
+
+      // Simulate Node 2 HTTP Request pagination loop through InternalSegmentsWorkflowController
+      const discoveredPages: Array<
+        Awaited<ReturnType<typeof internalController.findAll>>
+      > = [];
+      let pageCount = 0;
+      while (true) {
+        const page = pageCount + 1;
+        const response = await internalController.findAll({
+          isActive: true,
+          limit: pageLimit,
+          page,
+        });
+        discoveredPages.push(response);
+        if (isPaginationComplete({ body: response })) {
+          break;
+        }
+        pageCount++;
+      }
+
+      // 5 active segments with page size 2 requires 3 pages (2 + 2 + 1)
+      expect(discoveredPages).toHaveLength(3);
+      // Node 3 Split Out on field "data" across all fetched pages
+      const splitSegments = discoveredPages.flatMap((p) => p.data);
+      expect(splitSegments).toHaveLength(5);
+      expect(splitSegments.map((s) => s.id)).toEqual(
+        fiveActiveSegments.map((s) => s.id),
+      );
+
+      // Execute Nodes 4 -> 5 -> 6 -> 7 -> 8 -> 10 -> 11 for all 5 segments (> 3 active segments)
+      const validateNode = getNode('5. Validate Evaluation Request');
+      const statsNode = getNode('7. Get Evaluation Statistics');
+      const normalizeNode = getNode('8. Normalize Statistics');
+      const validateInsightsNode = getNode('10. Validate Insights');
+
+      /* eslint-disable @typescript-eslint/no-implied-eval */
+      const runItemCode = (
+        node: WorkflowNode,
+        $json: Record<string, unknown>,
+        lookup: Record<string, Record<string, unknown>>,
+        executionId = 'exec-wf07-multi',
+      ) => {
+        const fn = new Function(
+          '$json',
+          '$',
+          '$execution',
+          node.parameters?.jsCode ?? '',
+        ) as (
+          json: Record<string, unknown>,
+          $: (name: string) => { item: { json: Record<string, unknown> } },
+          execution: { id: string },
+        ) => { json: Record<string, unknown> };
+        return fn(
+          $json,
+          (name: string) => ({ item: { json: lookup[name] ?? {} } }),
+          { id: executionId },
+        ).json;
+      };
+      /* eslint-enable @typescript-eslint/no-implied-eval */
+
+      const persistedRuns = new Map<string, WorkflowRun>();
+      (segmentsRepository.findOne as jest.Mock).mockImplementation(
+        ({ where }: { where: { id: string } }) =>
+          Promise.resolve(
+            fiveActiveSegments.find((s) => s.id === where.id) ?? null,
+          ),
+      );
+      (workflowRunRepository.findOne as jest.Mock).mockImplementation(
+        ({ where }: { where: { id?: string; idempotencyKey?: string } }) => {
+          for (const run of persistedRuns.values()) {
+            if (where.id && run.id === where.id) return Promise.resolve(run);
+            if (
+              where.idempotencyKey &&
+              run.idempotencyKey === where.idempotencyKey
+            )
+              return Promise.resolve(run);
+          }
+          return Promise.resolve(null);
+        },
+      );
+      (workflowRunRepository.create as jest.Mock).mockImplementation(
+        (data: Partial<WorkflowRun>) =>
+          Object.assign(new WorkflowRun(), {
+            id: `00000000-0000-4000-8000-00000000010${persistedRuns.size + 1}`,
+            ...data,
+          }),
+      );
+      (workflowRunRepository.save as jest.Mock).mockImplementation(
+        (run: WorkflowRun) => {
+          persistedRuns.set(run.id, run);
+          return Promise.resolve(run);
+        },
+      );
+      (customersRepository.find as jest.Mock).mockResolvedValue([mockCustomer]);
+      (customerSegmentsRepository.find as jest.Mock).mockResolvedValue([]);
+
+      for (const segmentItem of splitSegments) {
+        const segmentJson = segmentItem as unknown as Record<string, unknown>;
+        // Node 4: HTTP POST /internal/n8n/segments/:segmentId/workflow-runs
+        const runResp = await internalController.createWorkflowRun(
+          segmentItem.id,
+          `exec-wf07-multi:${segmentItem.id}`,
+        );
+
+        // Node 5: Code validate only (no HTTP inside Code node)
+        const validated = runItemCode(validateNode, runResp, {
+          '3. Split Segments': segmentJson,
+        });
+        expect(validated.segmentId).toBe(segmentItem.id);
+        expect(validated.workflowRunId).toBe(runResp.workflowRunId);
+
+        // Node 6: HTTP POST /internal/n8n/segments/:segmentId/evaluate-all
+        const evalResp = await internalController.evaluateAll(segmentItem.id, {
+          assignmentType: SegmentAssignmentType.RULE,
+        });
+
+        // Node 7 & Node 8: Statistics validation & normalization
+        const stats = runItemCode(
+          statsNode,
+          evalResp as unknown as Record<string, unknown>,
+          {},
+        );
+        const normalized = runItemCode(normalizeNode, stats, {
+          '5. Validate Evaluation Request': validated,
+        });
+
+        // Node 10: Validate AI insights
+        const validatedInsights = runItemCode(
+          validateInsightsNode,
+          {
+            text: JSON.stringify([
+              {
+                insight: 'All evaluated customers matched segment criteria',
+                evidence: 'matched=1',
+                confidence: 0.95,
+              },
+            ]),
+          },
+          { '8. Normalize Statistics': normalized },
+        );
+
+        // Node 11: Save Workflow Summary
+        const callbackResp = await internalController.callback(segmentItem.id, {
+          workflowRunId: String(validatedInsights.workflowRunId),
+          segmentId: String(validatedInsights.segmentId),
+          segmentName: String(validatedInsights.segmentName),
+          status: 'SUCCESS',
+          statistics: {
+            total: Number(validatedInsights.total),
+            processed: Number(validatedInsights.processed),
+            matched: Number(validatedInsights.matched),
+            unmatched: Number(validatedInsights.unmatched),
+            matchRate: String(validatedInsights.matchRate),
+          },
+          aiInsights: validatedInsights.aiInsights as Array<{
+            insight: string;
+            evidence: string;
+            confidence: number;
+          }>,
+          rejectedInsights: Number(validatedInsights.rejectedInsights),
+          anomalyDetected: Number(validatedInsights.matched) === 0,
+        });
+
+        expect(callbackResp.status).toBe(WorkflowStatus.SUCCESS);
+      }
+
+      expect(persistedRuns.size).toBe(5);
+      for (const run of persistedRuns.values()) {
+        expect(run.status).toBe(WorkflowStatus.SUCCESS);
+      }
     });
   });
 });
